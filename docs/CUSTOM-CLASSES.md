@@ -153,7 +153,7 @@ $ curl localhost:8080/api/v1/accounts/1001
 
 ## 4. The examples in this repository
 
-All five are in `src/main/java/com/mhamzah/gateway/extension/custom/`. [`examples/custom-classes.sql`](examples/custom-classes.sql) wires the first four into one endpoint (4.6 needs a SOAP partner, so it is covered by unit tests only), `GET /api/v3/accounts/{accountNo}`:
+All of them are in `src/main/java/com/mhamzah/gateway/extension/custom/` (4.7 in its `user/` subpackage). [`examples/custom-classes.sql`](examples/custom-classes.sql) wires the first four into one endpoint (4.6 needs a SOAP partner, so it is covered by unit tests only), `GET /api/v3/accounts/{accountNo}`:
 
 ```bash
 make run    # with the new code
@@ -298,6 +298,62 @@ Other shapes:
 Errors: throw `IllegalArgumentException` from `encode` for JSON that can't be encoded (`MAPPING_ERROR`) and from `decode` for a response that isn't in the expected format (`DOWNSTREAM_INVALID_RESPONSE` on 2xx; on an error status the raw text is kept). A codec is shared by all requests, so it must be **thread-safe**: no per-request fields.
 
 Only the JSON form goes into the audit tables, so the SOAP header (and its password) is never stored there.
+
+### 4.7 `MsUserHandlers`: a CRUD API over your own table (`tbl_ms_user`)
+
+Not every endpoint calls a downstream system. When the gateway itself owns the data, a **flow without steps** whose flow `request_handler` answers directly (short-circuit, like `ChannelGuard`) gives you a database-backed API. You still get routing, JSON-schema validation, correlation IDs, request logs, audit and Gateway Studio tests for free.
+
+The example is in `src/main/java/com/mhamzah/gateway/extension/custom/user/`:
+
+| File | Role |
+|---|---|
+| `MsUser.java` | One row of `tbl_ms_user`, and the JSON the API returns for it |
+| `MsUserRepository.java` | Plain JDBC (`JdbcClient`): insert, find by id, page with filters, update, delete. Standard SQL, so it runs on PostgreSQL and Oracle 12c+ (`OFFSET ... ROWS FETCH NEXT ... ROWS ONLY`) |
+| `MsUserHandlers.java` | Five `MessageHandler` beans, one per operation |
+
+The table and the five flows are in [`102-dev-demo-ms-user.xml`](../src/main/resources/db/changelog/changes/102-dev-demo-ms-user.xml) (context `dev`, so `make run` has them). One flow per method and path, each naming its handler:
+
+| Method | Path (after `/api`) | `request_handler` | `request_schema_code` | Answer |
+|---|---|---|---|---|
+| POST (Create) | `/v1/users` | `msUserCreate` | `MS_USER_CREATE_REQUEST` | 201 + the user, `Location` header; 409 `USERNAME_TAKEN` |
+| GET (Retrieve, list) | `/v1/users` | `msUserList` | - | 200 page of users |
+| GET (Retrieve, detail) | `/v1/users/{id}` | `msUserDetail` | - | 200 the user; 404 `USER_NOT_FOUND` |
+| PUT (Update) | `/v1/users/{id}` | `msUserUpdate` | `MS_USER_UPDATE_REQUEST` | 200 the updated user; 404 |
+| DELETE (Delete) | `/v1/users/{id}` | `msUserDelete` | - | 204, no body; 404 |
+
+**List with pagination.** Query parameters: `page` (from 1, default 1), `size` (1-100, default 10), `status` (`ACTIVE` / `INACTIVE`) and `search` (in username, full name and email). Ordered by `id`:
+
+```json
+GET /api/v1/users?page=1&size=2&status=ACTIVE
+{
+  "content": [
+    {"id": 1, "username": "budi.santoso", "fullName": "Budi Santoso", "email": "budi.santoso@example.com",
+     "phone": "081200000001", "status": "ACTIVE", "createdAt": "2026-10-09T02:15:04Z", "updatedAt": "2026-10-09T02:15:04Z"},
+    {"id": 2, "username": "siti.aminah", "fullName": "Siti Aminah", "...": "..."}
+  ],
+  "page": 1, "size": 2, "totalElements": 2, "totalPages": 1
+}
+```
+
+**How a handler reads the request.** Path variables and query parameters come from the context, the body from the message:
+
+```java
+@Bean
+MessageHandler msUserDetail() {
+    return (message, ctx) -> {
+        JsonNode id = ctx.read("$.request.path.id");          // /v1/users/{id}
+        return users.findById(Long.parseLong(id.asString()))
+                .map(u -> GatewayResponse.of(200, u.toJson()))
+                .orElseGet(() -> notFound(id, ctx));          // {"errorCode":"USER_NOT_FOUND",...}, 404
+    };
+}
+```
+
+`ctx.read("$.request.query.page")` gives a query parameter and `message.body()` the parsed JSON body (already checked against the flow's `request_schema_code`). Return `new GatewayResponse(status, headers, body)` to answer; a `null` body (as in DELETE's 204) sends none.
+
+**Using the pattern for your own table.** Copy the three classes, rename them, adjust the columns, and create the table through your own Liquibase changeset (without `context="dev"`) or have the DBAs create it. Then add one flow per operation with `request_handler` set to your beans, in Gateway Studio or with SQL. Keep the handlers stateless; the repository is a normal Spring bean. Errors use the gateway's default shape (`errorCode`, `errorMessage`, `correlationId`, `details`).
+
+Try it with the *tbl_ms_user CRUD* requests in [`http/gateway.http`](../http/gateway.http); `MsUserCrudIntegrationTest` covers every endpoint.
 
 ---
 

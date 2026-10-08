@@ -90,7 +90,7 @@ Only comparisons, `and`/`or`/`not`, arithmetic, `?:` and `matches` are allowed. 
 
 ## Custom classes
 
-Implement one of these as a Spring bean in `com.mhamzah.gateway.extension.custom` (or in any jar on the classpath), then put the **bean name** in the config column.
+Implement one of these as a Spring bean in `com.mhamzah.gateway.extension.custom` (or in any jar on the classpath), then put the **bean name** in the config column. For an API over your own table (no downstream call), see the `tbl_ms_user` CRUD example: flows without steps whose `request_handler` answers directly ([`docs/CUSTOM-CLASSES.md`](docs/CUSTOM-CLASSES.md#47-msuserhandlers-a-crud-api-over-your-own-table-tbl_ms_user)).
 
 | Interface | Column | Use for |
 |---|---|---|

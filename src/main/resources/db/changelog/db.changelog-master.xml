@@ -26,4 +26,5 @@
     <include file="changes/004-body-codec.xml" relativeToChangelogFile="true"/>
     <include file="changes/100-dev-demo-flows.xml" relativeToChangelogFile="true"/>
     <include file="changes/101-dev-demo-target-systems.xml" relativeToChangelogFile="true"/>
+    <include file="changes/102-dev-demo-ms-user.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

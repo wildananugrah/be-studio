@@ -25,7 +25,7 @@ GET {{baseUrl}}/actuator/health
 ### Hikari pool metrics - expect 200, tag pool=gateway-pool
 GET {{baseUrl}}/actuator/metrics/hikaricp.connections.active
 
-### Reload configuration from the DB - expect 200 {"flows":3,"loadedAt":"..."} (4 once the tutorial flow is loaded)
+### Reload configuration from the DB - expect 200 {"flows":8,"loadedAt":"..."} (3 demo flows + 5 tbl_ms_user CRUD flows; 9 once the tutorial flow is loaded)
 POST {{baseUrl}}/admin/config/reload
 X-Admin-Token: {{adminToken}}
 
@@ -204,3 +204,55 @@ X-Channel: ATM
 ### partnerErrorHandler: timeout - expect HTTP 200 {"responseCode":"68","responseMessage":"Response received too late",...} after ~5 s
 GET {{baseUrl}}/api/v3/accounts/7777
 X-Channel: WEB
+
+###############################################################################
+# tbl_ms_user CRUD (custom table, MsUserHandlers; flows in 102-dev-demo-ms-user.xml)
+###############################################################################
+
+### Create (POST) - expect 201 + Location: /api/v1/users/{id}
+POST {{baseUrl}}/api/v1/users
+Content-Type: application/json
+
+{"username":"rina.k","fullName":"Rina Kartika","email":"rina@example.com","phone":"+6281234567","status":"ACTIVE"}
+
+### Create with a taken username - expect 409 USERNAME_TAKEN
+POST {{baseUrl}}/api/v1/users
+Content-Type: application/json
+
+{"username":"budi.santoso","fullName":"Another Budi"}
+
+### Create without fullName - expect 400 GW-400-SCHEMA
+POST {{baseUrl}}/api/v1/users
+Content-Type: application/json
+
+{"username":"no.name"}
+
+### List (GET) - expect 200 {"content":[...],"page":1,"size":10,"totalElements":...,"totalPages":...}
+GET {{baseUrl}}/api/v1/users
+
+### List page 2 of 2 per page, active only, searching "a" - expect 200
+GET {{baseUrl}}/api/v1/users?page=2&size=2&status=ACTIVE&search=a
+
+### List with bad paging - expect 400 INVALID_QUERY
+GET {{baseUrl}}/api/v1/users?page=0&size=500
+
+### Detail (GET) - expect 200
+GET {{baseUrl}}/api/v1/users/1
+
+### Detail of a missing user - expect 404 USER_NOT_FOUND
+GET {{baseUrl}}/api/v1/users/999999
+
+### Update (PUT) - expect 200 with the new values
+PUT {{baseUrl}}/api/v1/users/1
+Content-Type: application/json
+
+{"fullName":"Budi Santoso, S.E.","phone":"081299999999"}
+
+### Update the username - expect 400 (not allowed by MS_USER_UPDATE_REQUEST)
+PUT {{baseUrl}}/api/v1/users/1
+Content-Type: application/json
+
+{"username":"budi"}
+
+### Delete (DELETE) - expect 204 (run "Create" first and use its id)
+DELETE {{baseUrl}}/api/v1/users/4

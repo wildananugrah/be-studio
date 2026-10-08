@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Example: CRUD API over a custom table, served by the custom MessageHandler beans in
+    com.mhamzah.gateway.extension.custom.user.MsUserHandlers. Loaded only with Liquibase context "dev".
+    To use it for real, drop context="dev" from the table changeset (or have the DBAs create the table).
+
+      POST   /api/v1/users          msUserCreate   create        201
+      GET    /api/v1/users          msUserList     list + paging 200  ?page=1&size=10&status=ACTIVE&search=budi
+      GET    /api/v1/users/{id}     msUserDetail   detail        200 | 404
+      PUT    /api/v1/users/{id}     msUserUpdate   update        200 | 404
+      DELETE /api/v1/users/{id}     msUserDelete   delete        204 | 404
+
+    The flows have no steps: the flow request_handler answers directly, so no downstream system is called.
+-->
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="102-demo-tbl-ms-user" author="json-gateway" context="dev">
+        <createTable tableName="tbl_ms_user">
+            <column name="id" type="bigint" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="tbl_ms_user_PK" nullable="false"/>
+            </column>
+            <column name="username" type="varchar(50)">
+                <constraints nullable="false" unique="true" uniqueConstraintName="tbl_ms_user_UK1"/>
+            </column>
+            <column name="full_name" type="varchar(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="email" type="varchar(100)"/>
+            <column name="phone" type="varchar(20)"/>
+            <column name="status" type="varchar(10)" defaultValue="ACTIVE">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="timestamp">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="timestamp">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <insert tableName="tbl_ms_user">
+            <column name="username" value="budi.santoso"/>
+            <column name="full_name" value="Budi Santoso"/>
+            <column name="email" value="budi.santoso@example.com"/>
+            <column name="phone" value="081200000001"/>
+            <column name="status" value="ACTIVE"/>
+            <column name="created_at" valueComputed="CURRENT_TIMESTAMP"/>
+            <column name="updated_at" valueComputed="CURRENT_TIMESTAMP"/>
+        </insert>
+        <insert tableName="tbl_ms_user">
+            <column name="username" value="siti.aminah"/>
+            <column name="full_name" value="Siti Aminah"/>
+            <column name="email" value="siti.aminah@example.com"/>
+            <column name="status" value="ACTIVE"/>
+            <column name="created_at" valueComputed="CURRENT_TIMESTAMP"/>
+            <column name="updated_at" valueComputed="CURRENT_TIMESTAMP"/>
+        </insert>
+        <insert tableName="tbl_ms_user">
+            <column name="username" value="andi.wijaya"/>
+            <column name="full_name" value="Andi Wijaya"/>
+            <column name="phone" value="081200000003"/>
+            <column name="status" value="INACTIVE"/>
+            <column name="created_at" valueComputed="CURRENT_TIMESTAMP"/>
+            <column name="updated_at" valueComputed="CURRENT_TIMESTAMP"/>
+        </insert>
+    </changeSet>
+
+    <changeSet id="102-demo-ms-user-flows" author="json-gateway" context="dev">
+        <insert tableName="${tbl.json_schema}">
+            <column name="code" value="MS_USER_CREATE_REQUEST"/>
+            <column name="description" value="POST /v1/users body"/>
+            <column name="schema_text" value='{"type":"object","required":["username","fullName"],"additionalProperties":false,"properties":{"username":{"type":"string","pattern":"^[A-Za-z0-9._-]{3,50}$"},"fullName":{"type":"string","minLength":1,"maxLength":100},"email":{"type":"string","maxLength":100},"phone":{"type":"string","pattern":"^\\+?[0-9]{6,20}$"},"status":{"type":"string","enum":["ACTIVE","INACTIVE"]}}}'/>
+        </insert>
+        <insert tableName="${tbl.json_schema}">
+            <column name="code" value="MS_USER_UPDATE_REQUEST"/>
+            <column name="description" value="PUT /v1/users/{id} body; username cannot change"/>
+            <column name="schema_text" value='{"type":"object","minProperties":1,"additionalProperties":false,"properties":{"fullName":{"type":"string","minLength":1,"maxLength":100},"email":{"type":"string","maxLength":100},"phone":{"type":"string","pattern":"^\\+?[0-9]{6,20}$"},"status":{"type":"string","enum":["ACTIVE","INACTIVE"]}}}'/>
+        </insert>
+
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="MS_USER_CREATE"/>
+            <column name="name" value="Create user"/>
+            <column name="http_method" value="POST"/>
+            <column name="path_pattern" value="/v1/users"/>
+            <column name="request_schema_code" value="MS_USER_CREATE_REQUEST"/>
+            <column name="request_handler" value="msUserCreate"/>
+            <column name="success_status" valueNumeric="201"/>
+        </insert>
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="MS_USER_LIST"/>
+            <column name="name" value="List users (paged)"/>
+            <column name="http_method" value="GET"/>
+            <column name="path_pattern" value="/v1/users"/>
+            <column name="request_handler" value="msUserList"/>
+        </insert>
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="MS_USER_DETAIL"/>
+            <column name="name" value="User detail"/>
+            <column name="http_method" value="GET"/>
+            <column name="path_pattern" value="/v1/users/{id}"/>
+            <column name="request_handler" value="msUserDetail"/>
+        </insert>
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="MS_USER_UPDATE"/>
+            <column name="name" value="Update user"/>
+            <column name="http_method" value="PUT"/>
+            <column name="path_pattern" value="/v1/users/{id}"/>
+            <column name="request_schema_code" value="MS_USER_UPDATE_REQUEST"/>
+            <column name="request_handler" value="msUserUpdate"/>
+        </insert>
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="MS_USER_DELETE"/>
+            <column name="name" value="Delete user"/>
+            <column name="http_method" value="DELETE"/>
+            <column name="path_pattern" value="/v1/users/{id}"/>
+            <column name="request_handler" value="msUserDelete"/>
+            <column name="success_status" valueNumeric="204"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>
