@@ -1,0 +1,40 @@
+# Local development infrastructure.
+#   postgres  - gateway database (matches the defaults in application-dev.yml)
+#   wiremock  - stubs for the demo downstream systems CORE_BANKING and NOTIFICATION
+#
+# Usage: make up / make down (see docs/MAKEFILE.md), or docker compose up -d
+
+name: json-gateway
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: json-gateway-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-gateway}
+      POSTGRES_USER: ${DB_USERNAME:-gateway}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-gateway}
+      TZ: UTC
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  wiremock:
+    image: wiremock/wiremock:3.13.2
+    container_name: json-gateway-wiremock
+    command: ["--port", "8080", "--global-response-templating"]
+    ports:
+      - "${WIREMOCK_PORT:-8089}:8080"
+    volumes:
+      - ./src/test/resources/wiremock/mappings:/home/wiremock/mappings:ro
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

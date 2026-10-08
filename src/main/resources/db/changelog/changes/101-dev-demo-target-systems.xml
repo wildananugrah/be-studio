@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Demo downstream systems, loaded only with Liquibase context "dev" (profile dev).
+    base_url keeps a placeholder so CORE_BANKING_URL / NOTIFICATION_URL (e.g. `make run CORE_BANKING_URL=...`)
+    still work; it defaults to WireMock on localhost:8089. Real environments would store a literal URL instead.
+    The placeholder text is built with '$' || '{...}' so Liquibase does not treat it as a changelog property.
+-->
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="101-demo-target-systems" author="json-gateway" context="dev">
+        <insert tableName="${tbl.target_system}">
+            <column name="code" value="CORE_BANKING"/>
+            <column name="base_url" valueComputed="'$' || '{CORE_BANKING_URL:http://localhost:8089}'"/>
+            <column name="connect_timeout_ms" valueNumeric="2000"/>
+            <column name="read_timeout_ms" valueNumeric="5000"/>
+        </insert>
+        <insert tableName="${tbl.target_system_header}">
+            <column name="target_code" value="CORE_BANKING"/>
+            <column name="header_name" value="X-Channel-Id"/>
+            <column name="header_value" value="GATEWAY"/>
+        </insert>
+        <insert tableName="${tbl.target_system}">
+            <column name="code" value="NOTIFICATION"/>
+            <column name="base_url" valueComputed="'$' || '{NOTIFICATION_URL:http://localhost:8089}'"/>
+            <column name="read_timeout_ms" valueNumeric="3000"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

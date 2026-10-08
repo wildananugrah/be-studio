@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Wire format of a downstream call: the bean name of a BodyCodec (xmlCodec, soapCodec, soap12Codec, jsonCodec
+        or a custom one). NULL = JSON. A step's value wins over its target system's.
+    -->
+    <changeSet id="004-gw-target-system-body-codec" author="json-gateway">
+        <addColumn tableName="${tbl.target_system}">
+            <column name="body_codec" type="varchar(100)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="004-gw-flow-step-body-codec" author="json-gateway">
+        <addColumn tableName="${tbl.flow_step}">
+            <column name="body_codec" type="varchar(100)"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

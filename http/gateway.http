@@ -1,0 +1,206 @@
+# JSON Gateway - manual test requests
+#
+# Works with the IntelliJ HTTP Client (click ▶ next to a request) and the VS Code
+# "REST Client" extension (click "Send Request").
+#
+# Start the app first:   make run        (PostgreSQL + WireMock via docker compose, demo flows)
+#                   or:  make run-test   (throwaway DB, no compose)
+#
+# Each request says what to expect. The demo downstream data comes from
+# src/test/resources/wiremock/mappings/core-banking.json:
+#   1001 BUDI SANTOSO  active, has history     2002 SITI AMINAH  active, no history
+#   3003 ANDI WIJAYA   blocked                 9999 not found (core code 14)
+#   7777 slow (8 s)                            amount 999999999 -> core code 51 (insufficient funds)
+
+@baseUrl = http://localhost:8080
+@adminToken = dev-admin-token
+
+###############################################################################
+# Operations
+###############################################################################
+
+### Health - expect 200 {"status":"UP"}
+GET {{baseUrl}}/actuator/health
+
+### Hikari pool metrics - expect 200, tag pool=gateway-pool
+GET {{baseUrl}}/actuator/metrics/hikaricp.connections.active
+
+### Reload configuration from the DB - expect 200 {"flows":3,"loadedAt":"..."} (4 once the tutorial flow is loaded)
+POST {{baseUrl}}/admin/config/reload
+X-Admin-Token: {{adminToken}}
+
+### Reload with a wrong token - expect 401
+POST {{baseUrl}}/admin/config/reload
+X-Admin-Token: wrong-token
+
+###############################################################################
+# Flow ACCOUNT_INQUIRY: GET /v1/accounts/{accountNo}
+# single step, lookup (statusCd A -> ACTIVE), converter TO_NUMBER, default currency
+###############################################################################
+
+### Account inquiry - expect 200
+# {"accountNo":"1001","accountName":"BUDI SANTOSO","balance":1500000.00,"currency":"IDR","status":"ACTIVE"}
+GET {{baseUrl}}/api/v1/accounts/1001
+
+### Account without currency from core - expect 200, "currency":"IDR" (default_value)
+GET {{baseUrl}}/api/v1/accounts/2002
+
+### Blocked account - expect 200, "status":"BLOCKED"
+GET {{baseUrl}}/api/v1/accounts/3003
+
+### Channel header forwarded to core - expect 200 (core receives X-Channel: ATM instead of default MOBILE)
+GET {{baseUrl}}/api/v1/accounts/1001
+X-Channel: ATM
+
+### Own correlation ID - expect 200 and response header X-Correlation-Id: my-trace-001
+GET {{baseUrl}}/api/v1/accounts/1001
+X-Correlation-Id: my-trace-001
+
+### Unknown account - expect 404 {"errorCode":"ACCOUNT_NOT_FOUND",...} (core 404 + code 14, mapped by coreBankingErrorHandler)
+GET {{baseUrl}}/api/v1/accounts/9999
+
+### Slow downstream - expect 504 {"errorCode":"GW-504-DOWNSTREAM",...} after ~5 s (dev read timeout)
+GET {{baseUrl}}/api/v1/accounts/7777
+
+###############################################################################
+# Flow ACCOUNT_HISTORY: GET /v1/accounts/{accountNo}/transactions
+# array mapping items[*] -> transactions[*], DATE_FORMAT, lookup D/C -> DEBIT/CREDIT, query default
+###############################################################################
+
+### History with default limit (core called with ?limit=10) - expect 200
+# {"accountNo":"1001","transactions":[{"date":"2026-10-01","amount":150000.00,"type":"CREDIT"},
+#                                     {"date":"2026-10-03","amount":25000.50,"type":"DEBIT"}]}
+GET {{baseUrl}}/api/v1/accounts/1001/transactions
+
+### History with explicit limit (core called with ?limit=5) - expect 200
+GET {{baseUrl}}/api/v1/accounts/1001/transactions?limit=5
+
+###############################################################################
+# Flow TRANSFER: POST /v1/transfers
+# request schema, parallel lookups (source + beneficiary), conditional debit,
+# success_expr on responseCode, CONTINUE notification, error mapping
+###############################################################################
+
+### Successful transfer - expect 200
+# {"transactionId":"TRX20261008001","status":"SUCCESS","beneficiaryName":"SITI AMINAH","notification":"SUCCESS"}
+POST {{baseUrl}}/api/v1/transfers
+Content-Type: application/json
+
+{
+  "fromAccount": "1001",
+  "toAccount": "2002",
+  "amount": 1000,
+  "note": "Lunch"
+}
+
+### Insufficient funds - expect 422 {"errorCode":"INSUFFICIENT_FUNDS","errorMessage":"Insufficient balance",...}
+# core answers HTTP 200 with responseCode 51 -> success_expr false -> lookup CORE_BANKING_ERRORS
+POST {{baseUrl}}/api/v1/transfers
+Content-Type: application/json
+
+{
+  "fromAccount": "1001",
+  "toAccount": "2002",
+  "amount": 999999999
+}
+
+### Blocked beneficiary - expect 200, debit skipped by condition_expr
+# {"status":"SKIPPED","beneficiaryName":"ANDI WIJAYA","notification":"SUCCESS"}
+POST {{baseUrl}}/api/v1/transfers
+Content-Type: application/json
+
+{
+  "fromAccount": "1001",
+  "toAccount": "3003",
+  "amount": 1000
+}
+
+### Unknown beneficiary - expect 404 {"errorCode":"ACCOUNT_NOT_FOUND",...} (lookup step fails, STOP)
+POST {{baseUrl}}/api/v1/transfers
+Content-Type: application/json
+
+{
+  "fromAccount": "1001",
+  "toAccount": "9999",
+  "amount": 1000
+}
+
+### Schema violation - expect 400 {"errorCode":"GW-400-SCHEMA","details":["$: required property 'toAccount' not found", ...]}
+POST {{baseUrl}}/api/v1/transfers
+Content-Type: application/json
+
+{
+  "fromAccount": "1001",
+  "amount": -5
+}
+
+### Sensitive field - expect 200; in the audit table the pin is stored as "****" (make audit / gw_audit_transaction)
+POST {{baseUrl}}/api/v1/transfers
+Content-Type: application/json
+X-Correlation-Id: masking-check-001
+
+{
+  "fromAccount": "1001",
+  "toAccount": "2002",
+  "amount": 1000,
+  "pin": "123456"
+}
+
+### Body is not JSON - expect 400 {"errorCode":"GW-400-JSON",...}
+POST {{baseUrl}}/api/v1/transfers
+Content-Type: application/json
+
+{ this is not json
+
+###############################################################################
+# Routing
+###############################################################################
+
+### No flow for this method + path - expect 404 {"errorCode":"GW-404-ROUTE",...}
+DELETE {{baseUrl}}/api/v1/accounts/1001
+
+### Unknown path - expect 404 {"errorCode":"GW-404-ROUTE",...}
+GET {{baseUrl}}/api/v1/does-not-exist
+
+###############################################################################
+# Tutorial flow ACCOUNT_OVERVIEW (docs/CONFIGURATION-GUIDE.md)
+# Only exists after loading docs/examples/account-overview.sql and reloading:
+#   docker compose exec -T postgres psql -U gateway -d gateway < docs/examples/account-overview.sql
+#   make reload
+###############################################################################
+
+### Account overview - expect 200 and response header X-Data-Source: CORE_BANKING
+# {"account":{"number":"1001","holder":"BUDI SANTOSO","status":"ACTIVE","balance":1500000.00},
+#  "recent":[{"date":"01/10/2026",...},...],"historyStatus":"SUCCESS","requestedBy":"teller-07"}
+GET {{baseUrl}}/api/v2/accounts/1001/overview
+X-User-Id: teller-07
+
+### Account overview, history unavailable - expect 200 with "historyStatus":"FAILED" and no "recent" (CONTINUE step)
+GET {{baseUrl}}/api/v2/accounts/2002/overview
+
+###############################################################################
+# Custom class examples, flow PARTNER_ACCOUNT_INQUIRY (docs/CUSTOM-CLASSES.md)
+# Only exists after loading docs/examples/custom-classes.sql and reloading:
+#   docker compose exec -T postgres psql -U gateway -d gateway < docs/examples/custom-classes.sql
+#   make reload
+###############################################################################
+
+### channelGuard: no X-Channel - expect 403 {"errorCode":"CHANNEL_NOT_ALLOWED","errorMessage":"X-Channel header is required",...}
+GET {{baseUrl}}/api/v3/accounts/1001
+
+### channelGuard: unknown channel - expect 403 "Channel 'TELLER' is not allowed"
+GET {{baseUrl}}/api/v3/accounts/1001
+X-Channel: TELLER
+
+### Allowed channel - expect 200, balance via idrAmountFormatter; core receives X-Timestamp + X-Signature (requestSigner)
+# {"responseCode":"00","responseMessage":"Approved","accountNo":"1001","accountName":"BUDI SANTOSO","balance":"Rp1.500.000,00"}
+GET {{baseUrl}}/api/v3/accounts/1001
+X-Channel: MOBILE
+
+### partnerErrorHandler: unknown account - expect HTTP 200 {"responseCode":"14","responseMessage":"Account not found",...}
+GET {{baseUrl}}/api/v3/accounts/9999
+X-Channel: ATM
+
+### partnerErrorHandler: timeout - expect HTTP 200 {"responseCode":"68","responseMessage":"Response received too late",...} after ~5 s
+GET {{baseUrl}}/api/v3/accounts/7777
+X-Channel: WEB

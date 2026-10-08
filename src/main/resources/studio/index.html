@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gateway Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect width=%2224%22 height=%2224%22 rx=%226%22 fill=%22%23e0622a%22/%3E%3Ctext x=%2212%22 y=%2216%22 font-size=%2211%22 text-anchor=%22middle%22 font-family=%22monospace%22 fill=%22%2317181C%22%3E%7B%7D%3C/text%3E%3C/svg%3E">
+<!-- Geist when the network allows it; system fonts otherwise -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--acc:oklch(0.62 0.17 42);--mono:'Geist Mono',ui-monospace,SFMono-Regular,Menlo,monospace}
+html,body{margin:0;height:100%;background:#F4F3EF}
+*{box-sizing:border-box}
+body{font-family:'Geist',system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px;color:#17181C}
+a{color:oklch(0.55 0.16 42)}a:hover{color:oklch(0.45 0.16 42)}
+input,select,textarea,button{font:inherit;color:inherit}
+.inp:focus{outline:none;border-color:var(--acc)!important;background:#fff!important}
+.inp-ghost:hover{border-color:#E4E1D8!important}
+.x:hover{color:#17181C!important}
+.del:hover{color:oklch(0.5 0.17 25)!important}
+.pal:hover{border-color:#BDB9AE!important;background:#fff!important}
+.row:hover{background:#FAF9F6}
+.ctx:hover{background:oklch(0.96 0.02 255)}
+.btn-acc:hover{background:oklch(0.68 0.16 45)!important}
+.btn-dark:hover{background:#2B2D33!important}
+.btn-line:hover{border-color:#BDB9AE!important}
+.btn-del:hover{border-color:oklch(0.75 0.1 25)!important}
+button:disabled{opacity:.55;cursor:default!important}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script type="module" src="studio.js"></script>
+</body>
+</html>

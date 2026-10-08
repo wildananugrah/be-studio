@@ -1,0 +1,88 @@
+{
+  "mappings": [
+    {
+      "request": { "method": "GET", "url": "/core/accounts/1001" },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": { "acctNo": "1001", "acctName": "BUDI SANTOSO", "availBal": "1500000.00", "ccy": "IDR", "statusCd": "A" }
+      }
+    },
+    {
+      "request": { "method": "GET", "url": "/core/accounts/2002" },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": { "acctNo": "2002", "acctName": "SITI AMINAH", "availBal": "250000.00", "statusCd": "A" }
+      }
+    },
+    {
+      "request": { "method": "GET", "url": "/core/accounts/3003" },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": { "acctNo": "3003", "acctName": "ANDI WIJAYA", "availBal": "0.00", "statusCd": "B" }
+      }
+    },
+    {
+      "request": { "method": "GET", "url": "/core/accounts/9999" },
+      "response": {
+        "status": 404,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": { "responseCode": "14", "responseMessage": "Account not found" }
+      }
+    },
+    {
+      "request": { "method": "GET", "url": "/core/accounts/7777" },
+      "response": {
+        "status": 200,
+        "fixedDelayMilliseconds": 8000,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": { "acctNo": "7777", "acctName": "SLOW", "availBal": "1.00", "statusCd": "A" }
+      }
+    },
+    {
+      "request": { "method": "GET", "urlPath": "/core/accounts/1001/history" },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "items": [
+            { "trxDt": "20261001", "amt": "150000.00", "dc": "C" },
+            { "trxDt": "20261003", "amt": "25000.50", "dc": "D" }
+          ]
+        }
+      }
+    },
+    {
+      "priority": 1,
+      "request": {
+        "method": "POST",
+        "url": "/core/transfers",
+        "bodyPatterns": [ { "matchesJsonPath": { "expression": "$.amount", "equalTo": "000000999999999" } } ]
+      },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": { "responseCode": "51", "responseMessage": "Insufficient funds" }
+      }
+    },
+    {
+      "priority": 5,
+      "request": { "method": "POST", "url": "/core/transfers" },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": { "responseCode": "00", "refNo": "TRX20261008001" }
+      }
+    },
+    {
+      "request": { "method": "POST", "url": "/notifications" },
+      "response": {
+        "status": 202,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": { "queued": true }
+      }
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="002-gw-audit-transaction" author="json-gateway">
+        <createTable tableName="${tbl.audit_transaction}">
+            <column name="id" type="bigint" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="${tbl.audit_transaction}_PK" nullable="false"/>
+            </column>
+            <column name="correlation_id" type="varchar(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="flow_code" type="varchar(100)"/>
+            <column name="http_method" type="varchar(10)"/>
+            <column name="path" type="varchar(1000)"/>
+            <column name="client_status" type="int"/>
+            <column name="error_type" type="varchar(50)"/>
+            <column name="error_code" type="varchar(100)"/>
+            <column name="request_payload" type="clob"/>
+            <column name="response_payload" type="clob"/>
+            <column name="started_at" type="timestamp">
+                <constraints nullable="false"/>
+            </column>
+            <column name="duration_ms" type="bigint"/>
+        </createTable>
+        <createIndex tableName="${tbl.audit_transaction}" indexName="${tbl.audit_transaction}_IX1">
+            <column name="correlation_id"/>
+        </createIndex>
+        <createIndex tableName="${tbl.audit_transaction}" indexName="${tbl.audit_transaction}_IX2">
+            <column name="started_at"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="002-gw-audit-step" author="json-gateway">
+        <createTable tableName="${tbl.audit_step}">
+            <column name="id" type="bigint" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="${tbl.audit_step}_PK" nullable="false"/>
+            </column>
+            <column name="transaction_id" type="bigint">
+                <constraints nullable="false" foreignKeyName="${tbl.audit_step}_FK1"
+                             referencedTableName="${tbl.audit_transaction}" referencedColumnNames="id"
+                             deleteCascade="true"/>
+            </column>
+            <column name="step_name" type="varchar(100)"/>
+            <column name="target_system" type="varchar(100)"/>
+            <column name="http_method" type="varchar(10)"/>
+            <column name="url" type="varchar(2000)"/>
+            <column name="http_status" type="int"/>
+            <column name="outcome" type="varchar(10)"/>
+            <column name="request_payload" type="clob"/>
+            <column name="response_payload" type="clob"/>
+            <column name="started_at" type="timestamp"/>
+            <column name="duration_ms" type="bigint"/>
+        </createTable>
+        <createIndex tableName="${tbl.audit_step}" indexName="${tbl.audit_step}_IX1">
+            <column name="transaction_id"/>
+        </createIndex>
+    </changeSet>
+</databaseChangeLog>

@@ -1,0 +1,296 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Demo configuration, loaded only with Liquibase context "dev" (profile dev).
+    Downstream systems CORE_BANKING and NOTIFICATION are stubbed by WireMock in the dev launcher
+    (src/test/java/.../TestJsonGatewayApplication).
+
+      GET  /api/v1/accounts/{accountNo}               single step + lookup + converter
+      GET  /api/v1/accounts/{accountNo}/transactions  array mapping + date conversion + query parameter
+      POST /api/v1/transfers                          schema, parallel group, condition, success_expr,
+                                                      CONTINUE step, error mapping (coreBankingErrorHandler)
+-->
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="100-demo-lookups-and-schemas" author="json-gateway" context="dev">
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="ACCOUNT_STATUS"/><column name="source_value" value="A"/><column name="target_value" value="ACTIVE"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="ACCOUNT_STATUS"/><column name="source_value" value="B"/><column name="target_value" value="BLOCKED"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="ACCOUNT_STATUS"/><column name="source_value" value="C"/><column name="target_value" value="CLOSED"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="ACCOUNT_STATUS"/><column name="source_value" value="*"/><column name="target_value" value="UNKNOWN"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="DEBIT_CREDIT"/><column name="source_value" value="D"/><column name="target_value" value="DEBIT"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="DEBIT_CREDIT"/><column name="source_value" value="C"/><column name="target_value" value="CREDIT"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="CORE_BANKING_ERRORS"/><column name="source_value" value="51"/>
+            <column name="target_value" value='{"status":422,"errorCode":"INSUFFICIENT_FUNDS","errorMessage":"Insufficient balance"}'/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="CORE_BANKING_ERRORS"/><column name="source_value" value="14"/>
+            <column name="target_value" value='{"status":404,"errorCode":"ACCOUNT_NOT_FOUND","errorMessage":"Account not found"}'/>
+        </insert>
+
+        <insert tableName="${tbl.json_schema}">
+            <column name="code" value="TRANSFER_REQUEST"/>
+            <column name="description" value="Inbound transfer request"/>
+            <column name="schema_text" value='{"type":"object","required":["fromAccount","toAccount","amount"],"properties":{"fromAccount":{"type":"string","minLength":1},"toAccount":{"type":"string","minLength":1},"amount":{"type":"number","exclusiveMinimum":0},"note":{"type":"string","maxLength":100}}}'/>
+        </insert>
+    </changeSet>
+
+    <!-- ===== ACCOUNT_INQUIRY: GET /v1/accounts/{accountNo} ===== -->
+    <changeSet id="100-demo-account-inquiry" author="json-gateway" context="dev">
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="ACCOUNT_INQUIRY"/>
+            <column name="name" value="Account inquiry"/>
+            <column name="http_method" value="GET"/>
+            <column name="path_pattern" value="/v1/accounts/{accountNo}"/>
+            <column name="error_handler" value="coreBankingErrorHandler"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_INQUIRY')"/>
+            <column name="name" value="inquiry"/>
+            <column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="CORE_BANKING"/>
+            <column name="http_method" value="GET"/>
+            <column name="path_template" value="/core/accounts/{acc}"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_INQUIRY')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'ACCOUNT_INQUIRY' AND s.name = 'inquiry')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="PATH"/><column name="target_path" value="acc"/>
+            <column name="source_path" value="$.request.path.accountNo"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_INQUIRY')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'ACCOUNT_INQUIRY' AND s.name = 'inquiry')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="2"/>
+            <column name="target_type" value="HEADER"/><column name="target_path" value="X-Channel"/>
+            <column name="source_path" value="$.request.headers.x-channel"/><column name="default_value" value="MOBILE"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_INQUIRY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_path" value="$.accountNo"/><column name="source_path" value="$.steps.inquiry.body.acctNo"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_INQUIRY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_path" value="$.accountName"/><column name="source_path" value="$.steps.inquiry.body.acctName"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_INQUIRY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="3"/>
+            <column name="target_path" value="$.balance"/><column name="source_path" value="$.steps.inquiry.body.availBal"/>
+            <column name="converter" value="TO_NUMBER"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_INQUIRY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="4"/>
+            <column name="target_path" value="$.currency"/><column name="source_path" value="$.steps.inquiry.body.ccy"/>
+            <column name="default_value" value="IDR"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_INQUIRY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="5"/>
+            <column name="target_path" value="$.status"/><column name="source_path" value="$.steps.inquiry.body.statusCd"/>
+            <column name="lookup_code" value="ACCOUNT_STATUS"/>
+        </insert>
+    </changeSet>
+
+    <!-- ===== ACCOUNT_HISTORY: GET /v1/accounts/{accountNo}/transactions ===== -->
+    <changeSet id="100-demo-account-history" author="json-gateway" context="dev">
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="ACCOUNT_HISTORY"/>
+            <column name="name" value="Account transaction history"/>
+            <column name="http_method" value="GET"/>
+            <column name="path_pattern" value="/v1/accounts/{accountNo}/transactions"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_HISTORY')"/>
+            <column name="name" value="history"/>
+            <column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="CORE_BANKING"/>
+            <column name="http_method" value="GET"/>
+            <column name="path_template" value="/core/accounts/{acc}/history"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_HISTORY')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'ACCOUNT_HISTORY' AND s.name = 'history')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="PATH"/><column name="target_path" value="acc"/>
+            <column name="source_path" value="$.request.path.accountNo"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_HISTORY')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'ACCOUNT_HISTORY' AND s.name = 'history')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="2"/>
+            <column name="target_type" value="QUERY"/><column name="target_path" value="limit"/>
+            <column name="source_path" value="$.request.query.limit"/><column name="default_value" value="10"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_HISTORY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_path" value="$.accountNo"/><column name="source_path" value="$.request.path.accountNo"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_HISTORY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_path" value="$.transactions[*].date"/><column name="source_path" value="$.steps.history.body.items[*].trxDt"/>
+            <column name="converter" value="DATE_FORMAT:yyyyMMdd:yyyy-MM-dd"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_HISTORY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="3"/>
+            <column name="target_path" value="$.transactions[*].amount"/><column name="source_path" value="$.steps.history.body.items[*].amt"/>
+            <column name="converter" value="TO_NUMBER"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_HISTORY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="4"/>
+            <column name="target_path" value="$.transactions[*].type"/><column name="source_path" value="$.steps.history.body.items[*].dc"/>
+            <column name="lookup_code" value="DEBIT_CREDIT"/>
+        </insert>
+    </changeSet>
+
+    <!-- ===== TRANSFER: POST /v1/transfers ===== -->
+    <changeSet id="100-demo-transfer" author="json-gateway" context="dev">
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="TRANSFER"/>
+            <column name="name" value="Intrabank transfer"/>
+            <column name="http_method" value="POST"/>
+            <column name="path_pattern" value="/v1/transfers"/>
+            <column name="request_schema_code" value="TRANSFER_REQUEST"/>
+            <column name="error_handler" value="coreBankingErrorHandler"/>
+        </insert>
+        <!-- group 1 (parallel): look up both accounts -->
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="name" value="source"/><column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="CORE_BANKING"/><column name="http_method" value="GET"/>
+            <column name="path_template" value="/core/accounts/{acc}"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="name" value="beneficiary"/><column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="CORE_BANKING"/><column name="http_method" value="GET"/>
+            <column name="path_template" value="/core/accounts/{acc}"/>
+        </insert>
+        <!-- group 2: debit only when the beneficiary is active; core signals business errors with responseCode -->
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="name" value="debit"/><column name="step_order" valueNumeric="2"/>
+            <column name="target_system" value="CORE_BANKING"/><column name="http_method" value="POST"/>
+            <column name="path_template" value="/core/transfers"/>
+            <column name="condition_expr" value="${steps.beneficiary.body.statusCd} == 'A'"/>
+            <column name="success_expr" value="${steps.debit.body.responseCode} == '00'"/>
+        </insert>
+        <!-- group 3: best-effort notification -->
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="name" value="notify"/><column name="step_order" valueNumeric="3"/>
+            <column name="target_system" value="NOTIFICATION"/><column name="http_method" value="POST"/>
+            <column name="path_template" value="/notifications"/>
+            <column name="on_failure" value="CONTINUE"/>
+        </insert>
+
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER' AND s.name = 'source')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="PATH"/><column name="target_path" value="acc"/>
+            <column name="source_path" value="$.request.body.fromAccount"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER' AND s.name = 'beneficiary')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="PATH"/><column name="target_path" value="acc"/>
+            <column name="source_path" value="$.request.body.toAccount"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER' AND s.name = 'debit')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_path" value="$.fromAcct"/><column name="source_path" value="$.request.body.fromAccount"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER' AND s.name = 'debit')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="2"/>
+            <column name="target_path" value="$.toAcct"/><column name="source_path" value="$.request.body.toAccount"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER' AND s.name = 'debit')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="3"/>
+            <column name="target_path" value="$.amount"/><column name="source_path" value="$.request.body.amount"/>
+            <column name="converter" value="PAD_LEFT:15:0"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER' AND s.name = 'debit')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="4"/>
+            <column name="target_path" value="$.remark"/><column name="source_path" value="$.request.body.note"/>
+            <column name="default_value" value="TRANSFER"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER' AND s.name = 'debit')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="5"/>
+            <column name="target_path" value="$.beneficiaryName"/><column name="source_path" value="$.steps.beneficiary.body.acctName"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER' AND s.name = 'notify')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_path" value="$.account"/><column name="source_path" value="$.request.body.fromAccount"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER' AND s.name = 'notify')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="2"/>
+            <column name="target_path" value="$.message"/><column name="constant_value" value="Transfer processed"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER' AND s.name = 'notify')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="3"/>
+            <column name="target_path" value="$.reference"/><column name="source_path" value="$.steps.debit.body.refNo"/>
+        </insert>
+
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_path" value="$.transactionId"/><column name="source_path" value="$.steps.debit.body.refNo"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_path" value="$.status"/><column name="source_path" value="$.steps.debit.outcome"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="3"/>
+            <column name="target_path" value="$.beneficiaryName"/><column name="source_path" value="$.steps.beneficiary.body.acctName"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="4"/>
+            <column name="target_path" value="$.notification"/><column name="source_path" value="$.steps.notify.outcome"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

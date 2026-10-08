@@ -1,0 +1,20 @@
+# Local development against PostgreSQL. Demo flows are seeded (Liquibase context "dev").
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/gateway}
+    username: ${DB_USERNAME:gateway}
+    password: ${DB_PASSWORD:gateway}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      leak-detection-threshold: 20000
+  liquibase:
+    contexts: default,dev
+
+gateway:
+  admin:
+    token: ${GATEWAY_ADMIN_TOKEN:dev-admin-token}
+  studio:
+    enabled: ${GATEWAY_STUDIO_ENABLED:true}
+  # The demo downstream systems CORE_BANKING and NOTIFICATION are rows in gw_target_system
+  # (db/changelog/changes/101-dev-demo-target-systems.xml). Their base_url is
+  # ${CORE_BANKING_URL:http://localhost:8089} / ${NOTIFICATION_URL:http://localhost:8089}.

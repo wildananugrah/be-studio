@@ -1,0 +1,102 @@
+spring:
+  application:
+    name: json-gateway
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    # HikariCP is the only pool on the classpath and is pinned here (spec Section 4.1)
+    type: com.zaxxer.hikari.HikariDataSource
+    url: ${DB_URL:}
+    username: ${DB_USERNAME:}
+    password: ${DB_PASSWORD:}
+    hikari:
+      pool-name: gateway-pool
+      maximum-pool-size: ${DB_POOL_MAX:10}
+      minimum-idle: ${DB_POOL_MIN_IDLE:2}
+      connection-timeout: ${DB_POOL_CONNECTION_TIMEOUT_MS:30000}
+      validation-timeout: 5000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      keepalive-time: 300000
+      leak-detection-threshold: ${DB_POOL_LEAK_DETECTION_MS:0}
+      register-mbeans: true
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.xml
+    # "dev" adds the demo flows; set LIQUIBASE_ENABLED=false when DBAs apply DDL themselves
+    contexts: ${LIQUIBASE_CONTEXTS:default}
+    enabled: ${LIQUIBASE_ENABLED:true}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+  endpoint:
+    health:
+      show-details: never
+
+gateway:
+  api-base-path: /api
+  default-flow-timeout-ms: 30000
+  default-step-timeout-ms: 10000
+  admin:
+    token: ${GATEWAY_ADMIN_TOKEN:}
+  # API documentation generated from the flow configuration: Swagger UI at /docs, OpenAPI at /docs/openapi.json.
+  # Off unless enabled; it lists every endpoint, so think twice before enabling it in production.
+  docs:
+    enabled: ${GATEWAY_DOCS_ENABLED:false}
+    title: ${GATEWAY_DOCS_TITLE:JSON Gateway API}
+  # Gateway Studio: browser UI at /studio for editing flows, target systems and lookups. Its API needs the admin
+  # token and writes straight to the config tables, then reloads. Keep it off in production.
+  studio:
+    enabled: ${GATEWAY_STUDIO_ENABLED:false}
+  audit:
+    enabled: ${GATEWAY_AUDIT_ENABLED:true}
+    store-payloads: true
+    queue-capacity: 10000
+    batch-size: 100
+  masking:
+    # comma-separated; GATEWAY_MASKING_FIELDS replaces the whole list, so repeat the defaults you still want
+    fields: ${GATEWAY_MASKING_FIELDS:pin,password,cardNo,cvv,authorization,x-admin-token}
+    mask: "****"
+  db:
+    schema: ${DB_SCHEMA:}
+    tables:
+      flow: gw_flow
+      flow-step: gw_flow_step
+      mapping-rule: gw_mapping_rule
+      lookup-entry: gw_lookup_entry
+      json-schema: gw_json_schema
+      audit-transaction: gw_audit_transaction
+      audit-step: gw_audit_step
+    liquibase-tables:
+      changelog: gw_db_changelog
+      changelog-lock: gw_db_changelog_lock
+  # Downstream systems, per environment. Example:
+  # target-systems:
+  #   CORE_BANKING:
+  #     base-url: https://core.internal/api
+  #     connect-timeout-ms: 3000
+  #     read-timeout-ms: 10000
+  #     static-headers:
+  #       X-Channel-Id: GATEWAY
+  #     body-codec: soapCodec   # wire format: jsonCodec (default), xmlCodec, soapCodec, soap12Codec or a custom BodyCodec bean
+
+# Settings of the example custom classes (com.mhamzah.gateway.extension.custom, docs/CUSTOM-CLASSES.md)
+custom:
+  channel-guard:
+    allowed: ${GATEWAY_CHANNEL_GUARD_ALLOWED:MOBILE,ATM,WEB}
+  request-signer:
+    secret: ${REQUEST_SIGNER_SECRET:dev-signing-secret}   # set REQUEST_SIGNER_SECRET outside dev
+  partner-soap:
+    username: ${PARTNER_SOAP_USERNAME:dev-user}
+    password: ${PARTNER_SOAP_PASSWORD:dev-password}   # set PARTNER_SOAP_PASSWORD outside dev
+
+logging:
+  pattern:
+    correlation: "[%X{correlationId:-}] "

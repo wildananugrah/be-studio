@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="001-gw-flow" author="json-gateway">
+        <createTable tableName="${tbl.flow}">
+            <column name="id" type="bigint" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="${tbl.flow}_PK" nullable="false"/>
+            </column>
+            <column name="code" type="varchar(100)">
+                <constraints nullable="false" unique="true" uniqueConstraintName="${tbl.flow}_UK1"/>
+            </column>
+            <column name="name" type="varchar(200)"/>
+            <column name="http_method" type="varchar(10)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="path_pattern" type="varchar(500)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="request_schema_code" type="varchar(100)"/>
+            <column name="response_schema_code" type="varchar(100)"/>
+            <column name="request_handler" type="varchar(100)"/>
+            <column name="response_handler" type="varchar(100)"/>
+            <column name="error_handler" type="varchar(100)"/>
+            <column name="success_status" type="int" defaultValueNumeric="200">
+                <constraints nullable="false"/>
+            </column>
+            <column name="timeout_ms" type="int"/>
+            <column name="audit_mode" type="varchar(10)" defaultValue="INHERIT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="enabled" type="boolean" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+    <changeSet id="001-gw-flow-step" author="json-gateway">
+        <createTable tableName="${tbl.flow_step}">
+            <column name="id" type="bigint" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="${tbl.flow_step}_PK" nullable="false"/>
+            </column>
+            <column name="flow_id" type="bigint">
+                <constraints nullable="false" foreignKeyName="${tbl.flow_step}_FK1"
+                             referencedTableName="${tbl.flow}" referencedColumnNames="id" deleteCascade="true"/>
+            </column>
+            <column name="name" type="varchar(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="step_order" type="int">
+                <constraints nullable="false"/>
+            </column>
+            <column name="target_system" type="varchar(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="http_method" type="varchar(10)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="path_template" type="varchar(500)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="condition_expr" type="varchar(1000)"/>
+            <column name="success_expr" type="varchar(1000)"/>
+            <column name="on_failure" type="varchar(10)" defaultValue="STOP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="timeout_ms" type="int"/>
+            <column name="response_schema_code" type="varchar(100)"/>
+            <column name="request_handler" type="varchar(100)"/>
+            <column name="response_handler" type="varchar(100)"/>
+            <column name="enabled" type="boolean" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addUniqueConstraint tableName="${tbl.flow_step}" columnNames="flow_id, name"
+                             constraintName="${tbl.flow_step}_UK1"/>
+    </changeSet>
+
+    <changeSet id="001-gw-mapping-rule" author="json-gateway">
+        <createTable tableName="${tbl.mapping_rule}">
+            <column name="id" type="bigint" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="${tbl.mapping_rule}_PK" nullable="false"/>
+            </column>
+            <column name="flow_id" type="bigint">
+                <constraints nullable="false" foreignKeyName="${tbl.mapping_rule}_FK1"
+                             referencedTableName="${tbl.flow}" referencedColumnNames="id" deleteCascade="true"/>
+            </column>
+            <column name="step_id" type="bigint">
+                <constraints foreignKeyName="${tbl.mapping_rule}_FK2"
+                             referencedTableName="${tbl.flow_step}" referencedColumnNames="id" deleteCascade="true"/>
+            </column>
+            <column name="phase" type="varchar(20)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="seq" type="int">
+                <constraints nullable="false"/>
+            </column>
+            <column name="target_type" type="varchar(10)" defaultValue="BODY">
+                <constraints nullable="false"/>
+            </column>
+            <column name="target_path" type="varchar(500)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="source_path" type="varchar(500)"/>
+            <column name="constant_value" type="varchar(4000)"/>
+            <column name="default_value" type="varchar(4000)"/>
+            <column name="converter" type="varchar(200)"/>
+            <column name="lookup_code" type="varchar(100)"/>
+            <column name="field_handler" type="varchar(100)"/>
+            <column name="required" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="${tbl.mapping_rule}" indexName="${tbl.mapping_rule}_IX1">
+            <column name="flow_id"/>
+        </createIndex>
+        <createIndex tableName="${tbl.mapping_rule}" indexName="${tbl.mapping_rule}_IX2">
+            <column name="step_id"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="001-gw-lookup-entry" author="json-gateway">
+        <createTable tableName="${tbl.lookup_entry}">
+            <column name="id" type="bigint" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="${tbl.lookup_entry}_PK" nullable="false"/>
+            </column>
+            <column name="lookup_code" type="varchar(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="source_value" type="varchar(500)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="target_value" type="varchar(4000)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addUniqueConstraint tableName="${tbl.lookup_entry}" columnNames="lookup_code, source_value"
+                             constraintName="${tbl.lookup_entry}_UK1"/>
+    </changeSet>
+
+    <changeSet id="001-gw-json-schema" author="json-gateway">
+        <createTable tableName="${tbl.json_schema}">
+            <column name="id" type="bigint" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="${tbl.json_schema}_PK" nullable="false"/>
+            </column>
+            <column name="code" type="varchar(100)">
+                <constraints nullable="false" unique="true" uniqueConstraintName="${tbl.json_schema}_UK1"/>
+            </column>
+            <column name="schema_text" type="clob">
+                <constraints nullable="false"/>
+            </column>
+            <column name="description" type="varchar(500)"/>
+        </createTable>
+    </changeSet>
+</databaseChangeLog>

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Default table names. The application overrides them from gateway.db.tables.* (Liquibase keeps the
+        first value set for a property, and externally supplied parameters are set before this file is read).
+        For the Maven plugin, override with -Dtbl.flow=MW_ROUTE etc.
+    -->
+    <property name="tbl.flow" value="gw_flow"/>
+    <property name="tbl.flow_step" value="gw_flow_step"/>
+    <property name="tbl.mapping_rule" value="gw_mapping_rule"/>
+    <property name="tbl.lookup_entry" value="gw_lookup_entry"/>
+    <property name="tbl.json_schema" value="gw_json_schema"/>
+    <property name="tbl.audit_transaction" value="gw_audit_transaction"/>
+    <property name="tbl.audit_step" value="gw_audit_step"/>
+    <property name="tbl.target_system" value="gw_target_system"/>
+    <property name="tbl.target_system_header" value="gw_target_system_header"/>
+
+    <include file="changes/001-config-tables.xml" relativeToChangelogFile="true"/>
+    <include file="changes/002-audit-tables.xml" relativeToChangelogFile="true"/>
+    <include file="changes/003-target-system-tables.xml" relativeToChangelogFile="true"/>
+    <include file="changes/004-body-codec.xml" relativeToChangelogFile="true"/>
+    <include file="changes/100-dev-demo-flows.xml" relativeToChangelogFile="true"/>
+    <include file="changes/101-dev-demo-target-systems.xml" relativeToChangelogFile="true"/>
+</databaseChangeLog>

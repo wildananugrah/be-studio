@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>4.1.1</version>
+		<relativePath/> <!-- lookup parent from repository -->
+	</parent>
+	<groupId>com.mhamzah</groupId>
+	<artifactId>json-gateway</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<name>json-gateway</name>
+	<description>Database-configured JSON transformation and orchestration gateway</description>
+
+	<properties>
+		<java.version>21</java.version>
+		<json-schema-validator.version>3.0.8</json-schema-validator.version>
+		<wiremock.version>3.13.2</wiremock.version>
+		<swagger-ui.version>5.29.5</swagger-ui.version>
+		<poi.version>5.5.1</poi.version>
+		<pdfbox.version>3.0.7</pdfbox.version>
+		<!-- Integration tests run against PostgreSQL by default; the oracle-it profile switches to Oracle Free -->
+		<it.db>postgres</it.db>
+	</properties>
+
+	<dependencies>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-jpa</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-liquibase</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-validation</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+		<!-- Swagger UI for /docs (gateway.docs.enabled), served from the jar so it works without internet access;
+		     the locator lets pages use /webjars/swagger-ui/... without the version -->
+		<dependency>
+			<groupId>org.webjars</groupId>
+			<artifactId>swagger-ui</artifactId>
+			<version>${swagger-ui.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.webjars</groupId>
+			<artifactId>webjars-locator-lite</artifactId>
+		</dependency>
+		<!-- Declared explicitly so the pool implementation cannot change through a transitive dependency -->
+		<dependency>
+			<groupId>com.zaxxer</groupId>
+			<artifactId>HikariCP</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>com.networknt</groupId>
+			<artifactId>json-schema-validator</artifactId>
+			<version>${json-schema-validator.version}</version>
+		</dependency>
+
+		<!-- Gateway Studio test reports: Word (.docx) and PDF. Both Apache-2.0. -->
+		<dependency>
+			<groupId>org.apache.poi</groupId>
+			<artifactId>poi-ooxml</artifactId>
+			<version>${poi.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.pdfbox</groupId>
+			<artifactId>pdfbox</artifactId>
+			<version>${pdfbox.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>com.oracle.database.jdbc</groupId>
+			<artifactId>ojdbc17</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.postgresql</groupId>
+			<artifactId>postgresql</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-jpa-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-liquibase-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-testcontainers</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-postgresql</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-oracle-free</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.wiremock</groupId>
+			<artifactId>wiremock-standalone</artifactId>
+			<version>${wiremock.version}</version>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<parameters>true</parameters>
+					<annotationProcessorPaths>
+						<path>
+							<groupId>org.springframework.boot</groupId>
+							<artifactId>spring-boot-configuration-processor</artifactId>
+						</path>
+					</annotationProcessorPaths>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<systemPropertyVariables>
+						<it.db>${it.db}</it.db>
+					</systemPropertyVariables>
+				</configuration>
+			</plugin>
+			<!--
+				Lets DBAs generate DDL for DBA-managed schemas, e.g.
+				./mvnw liquibase:updateSQL -Dliquibase.url=... -Dliquibase.username=... -Dliquibase.password=...
+				Table names and schema can be overridden with -Dtbl.flow=MW_ROUTE etc. and -Dliquibase.defaultSchemaName=...
+			-->
+			<plugin>
+				<groupId>org.liquibase</groupId>
+				<artifactId>liquibase-maven-plugin</artifactId>
+				<version>${liquibase.version}</version>
+				<configuration>
+					<changeLogFile>db/changelog/db.changelog-master.xml</changeLogFile>
+					<changeLogDirectory>${project.basedir}/src/main/resources</changeLogDirectory>
+					<contexts>default</contexts>
+					<databaseChangeLogTableName>gw_db_changelog</databaseChangeLogTableName>
+					<databaseChangeLogLockTableName>gw_db_changelog_lock</databaseChangeLogLockTableName>
+					<migrationSqlOutputFile>${project.build.directory}/liquibase/update.sql</migrationSqlOutputFile>
+				</configuration>
+				<dependencies>
+					<dependency>
+						<groupId>org.postgresql</groupId>
+						<artifactId>postgresql</artifactId>
+						<version>${postgresql.version}</version>
+					</dependency>
+					<dependency>
+						<groupId>com.oracle.database.jdbc</groupId>
+						<artifactId>ojdbc17</artifactId>
+						<version>${oracle-database.version}</version>
+					</dependency>
+				</dependencies>
+			</plugin>
+		</plugins>
+	</build>
+
+	<profiles>
+		<profile>
+			<!-- Runs the full integration suite against Testcontainers Oracle Free: ./mvnw verify -Poracle-it -->
+			<id>oracle-it</id>
+			<properties>
+				<it.db>oracle</it.db>
+			</properties>
+		</profile>
+	</profiles>
+
+</project>

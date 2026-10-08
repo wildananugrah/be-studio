@@ -1,0 +1,123 @@
+package com.mhamzah.gateway.studio;
+
+import java.util.List;
+
+/**
+ * The editable configuration as Gateway Studio sees it: every flow with its steps and mapping rules nested, the
+ * database target systems with their headers, the lookup tables and the JSON schemas.
+ *
+ * <p>Omitted flags default to {@code enabled = true} and {@code required = false}. {@code version} identifies the
+ * database state the document was read from, so a save can refuse to overwrite changes made by someone else in the
+ * meantime. It is ignored on input.
+ */
+public record StudioConfig(
+        String version, List<Flow> flows, List<Target> targets, List<Lookup> lookups, List<Schema> schemas) {
+
+    public StudioConfig {
+        flows = flows == null ? List.of() : List.copyOf(flows);
+        targets = targets == null ? List.of() : List.copyOf(targets);
+        lookups = lookups == null ? List.of() : List.copyOf(lookups);
+        schemas = schemas == null ? List.of() : List.copyOf(schemas);
+    }
+
+    public StudioConfig withVersion(String value) {
+        return new StudioConfig(value, flows, targets, lookups, schemas);
+    }
+
+    /** {@code gw_flow} plus its steps and its {@code FLOW_RESPONSE} rules. */
+    public record Flow(
+            String code,
+            String name,
+            String method,
+            String path,
+            String requestSchema,
+            String responseSchema,
+            String requestHandler,
+            String responseHandler,
+            String errorHandler,
+            Integer successStatus,
+            Integer timeoutMs,
+            String auditMode,
+            Boolean enabled,
+            List<Step> steps,
+            List<Rule> response) {
+
+        public Flow {
+            enabled = enabled == null || enabled;
+            steps = steps == null ? List.of() : List.copyOf(steps);
+            response = response == null ? List.of() : List.copyOf(response);
+        }
+    }
+
+    /** {@code gw_flow_step} plus its {@code STEP_REQUEST} rules. */
+    public record Step(
+            String name,
+            int order,
+            String targetSystem,
+            String method,
+            String path,
+            String condition,
+            String success,
+            String onFailure,
+            Integer timeoutMs,
+            String responseSchema,
+            String requestHandler,
+            String responseHandler,
+            String bodyCodec,
+            Boolean enabled,
+            List<Rule> rules) {
+
+        public Step {
+            enabled = enabled == null || enabled;
+            rules = rules == null ? List.of() : List.copyOf(rules);
+        }
+    }
+
+    /** {@code gw_mapping_rule}; {@code seq} is the position in its list. */
+    public record Rule(
+            String type,
+            String target,
+            String source,
+            String constant,
+            String defaultValue,
+            String lookup,
+            String converter,
+            String fieldHandler,
+            Boolean required) {
+
+        public Rule {
+            required = required != null && required;
+        }
+    }
+
+    /** {@code gw_target_system} plus its {@code gw_target_system_header} rows. */
+    public record Target(
+            String code,
+            String baseUrl,
+            Integer connectTimeoutMs,
+            Integer readTimeoutMs,
+            String bodyCodec,
+            Boolean enabled,
+            List<Header> headers) {
+
+        public Target {
+            enabled = enabled == null || enabled;
+            headers = headers == null ? List.of() : List.copyOf(headers);
+        }
+    }
+
+    public record Header(String name, String value) {}
+
+    /** The {@code gw_lookup_entry} rows of one {@code lookup_code}. */
+    public record Lookup(String code, List<Entry> entries) {
+
+        public Lookup {
+            entries = entries == null ? List.of() : List.copyOf(entries);
+        }
+    }
+
+    public record Entry(String source, String target) {}
+
+    /** {@code gw_json_schema}: a JSON Schema (draft 2020-12) referenced by its code. */
+    public record Schema(String code, String description, String text) {}
+}
