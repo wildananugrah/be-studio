@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        The request body of an HTTP step written out as text (XML, a whole SOAP envelope, JSON, ...) with ${...}
+        placeholders: ${request.path.id}, ${steps.x.body.code}, ${body.amount} (the step's BODY rules), ${a.b:default}.
+        When set, it is sent as written instead of the body built from the BODY rules; body_codec still decodes the
+        response.
+    -->
+    <changeSet id="008-gw-flow-step-body-template" author="json-gateway">
+        <addColumn tableName="${tbl.flow_step}">
+            <column name="body_template" type="clob"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

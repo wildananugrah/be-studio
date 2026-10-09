@@ -64,6 +64,20 @@ class OpenApiGeneratorTest {
     }
 
     @Test
+    void bodyTemplatePlaceholdersDocumentTheRequest() {
+        var flow = rows.flow("SOAP", "POST", "/soap");
+        rows.step(flow, "s", 1, s -> s.withBodyTemplate("{\"from\":\"${request.body.fromAccount}\","
+                + "\"to\":\"${request.body.to.account}\",\"ch\":\"${request.headers.x-channel:MOBILE}\"}"));
+
+        JsonNode op = generate().get("paths").get("/api/soap").get("post");
+
+        JsonNode props = op.get("requestBody").get("content").get("application/json").get("schema").get("properties");
+        assertThat(props.has("fromAccount")).isTrue();
+        assertThat(props.get("to").get("properties").has("account")).isTrue();
+        assertThat(op.get("parameters").toString()).contains("\"name\":\"x-channel\"", "\"in\":\"header\"");
+    }
+
+    @Test
     void patternSyntaxIsConvertedToOpenApiTemplates() {
         rows.flow("A", "GET", "/a/{id:[0-9]+}");
         rows.flow("B", "GET", "/b/{*rest}");

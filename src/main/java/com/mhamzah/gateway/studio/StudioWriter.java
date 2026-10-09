@@ -106,12 +106,12 @@ class StudioWriter {
             stepIds.put(r.id(), insert("INSERT INTO " + db.qualify(t.flowStep())
                             + " (flow_id, name, step_order, target_system, http_method, path_template, condition_expr,"
                             + " success_expr, on_failure, timeout_ms, response_schema_code, request_handler,"
-                            + " response_handler, body_codec, enabled, sql_text)"
-                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            + " response_handler, body_codec, enabled, sql_text, body_template)"
+                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     flowIds.get(r.flowId()), r.name(), r.stepOrder(), r.targetSystem(), r.httpMethod(),
                     r.pathTemplate(), r.conditionExpr(), r.successExpr(), r.onFailure(), r.timeoutMs(),
                     r.responseSchemaCode(), r.requestHandler(), r.responseHandler(), r.bodyCodec(), r.enabled(),
-                    r.sqlText()));
+                    r.sqlText(), r.bodyTemplate()));
         }
         for (RuleRow r : rows.rules()) {
             jdbc.sql("INSERT INTO " + db.qualify(t.mappingRule())

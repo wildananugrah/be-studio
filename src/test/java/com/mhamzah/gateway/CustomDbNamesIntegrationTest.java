@@ -105,9 +105,11 @@ class CustomDbNamesIntegrationTest {
     }
 
     @Test
-    void apiDocsAreOffByDefault() throws Exception {
+    void studioAndApiDocsAreOffByDefault() throws Exception {
+        // without the dev profile the build serves the API only: no Studio, no docs, no Swagger UI files
         HttpClient http = HttpClient.newHttpClient();
-        for (String path : new String[] {"/docs", "/docs/openapi.json"}) {
+        for (String path : new String[] {"/docs", "/docs/openapi.json", "/webjars/swagger-ui/swagger-ui.css",
+                "/studio/", "/studio/studio.js", "/studio/api/config"}) {
             HttpResponse<String> r = http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + path)).build(),
                     HttpResponse.BodyHandlers.ofString());
             assertThat(r.statusCode()).as(path).isEqualTo(404);

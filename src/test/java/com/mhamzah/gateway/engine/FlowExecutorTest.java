@@ -1,11 +1,13 @@
 package com.mhamzah.gateway.engine;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.mhamzah.gateway.codec.SoapCodec;
 import com.mhamzah.gateway.codec.XmlCodec;
 import com.mhamzah.gateway.config.ConfigCompiler;
 import com.mhamzah.gateway.config.ConfigRows.RuleRow;
+import com.mhamzah.gateway.config.ConfigValidationException;
 import com.mhamzah.gateway.config.FlowRegistry;
 import com.mhamzah.gateway.config.GatewayProperties;
 import com.mhamzah.gateway.config.Rows;
@@ -423,10 +425,11 @@ class FlowExecutorTest {
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?><InquiryRequest><accountNo>123</accountNo></InquiryRequest>");
         assertThat(sent.headers()).containsEntry("Content-Type", "application/xml; charset=UTF-8")
                 .containsEntry("Accept", "application/xml, text/xml");
-        // the audit trail keeps the JSON form, so field masking still applies
+        // the audit trail keeps the XML as it was on the wire (masked as text when written)
         assertThat(result.audit().steps()).singleElement().satisfies(s -> {
-            assertThat(s.requestPayload().toString()).isEqualTo("{\"InquiryRequest\":{\"accountNo\":\"123\"}}");
-            assertThat(s.responsePayload().toString()).isEqualTo("{\"InquiryResponse\":{\"name\":\"BUDI\"}}");
+            assertThat(s.requestPayload().asString()).isEqualTo(
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?><InquiryRequest><accountNo>123</accountNo></InquiryRequest>");
+            assertThat(s.responsePayload().asString()).contains("<InquiryResponse>", "BUDI");
         });
     }
 
@@ -448,8 +451,80 @@ class FlowExecutorTest {
                 .containsEntry("Content-Type", "text/xml; charset=UTF-8");
         assertThat(downstream.last("/s").body()).contains("<soapenv:Body><Inquiry><no>1</no></Inquiry></soapenv:Body>");
         assertThat(result.audit().errorType()).isEqualTo("DOWNSTREAM_HTTP_ERROR");
-        assertThat(result.audit().steps().getFirst().responsePayload().get("Fault").get("faultstring").asString())
-                .isEqualTo("Account not found");
+        assertThat(result.audit().steps().getFirst().responsePayload().asString())
+                .contains("<soap:Fault>", "<faultstring>Account not found</faultstring>");
+    }
+
+    private static final String ENVELOPE = """
+            <soapenv:Envelope
+            	xmlns:q0="http://service.example.com/core"
+            	xmlns:bo="http://service.example.com/core/bo"
+            	xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+            	xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+            	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                <soapenv:Body>
+                    <q0:transaction>
+                        <request>
+                            <systemId>API</systemId>
+                            <content xsi:type="bo:AccountShortInquiryReq">
+                                <accountNum>${request.path.accountNo}</accountNum>
+                                <options>${request.query.option:01}</options>
+                                <padded>${body.padded}</padded>
+                            </content>
+                        </request>
+                    </q0:transaction>
+                </soapenv:Body>
+            </soapenv:Envelope>""";
+
+    @Test
+    void bodyTemplateIsSentAsWrittenWithEscapedValuesAndTheSoapResponseDecoded() {
+        beans.put("soapCodec", SoapCodec.soap11());
+        var flow = rows.flow("F", "POST", "/f/{accountNo}");
+        var step = rows.step(flow, "s", 1, s -> s.withBodyTemplate(ENVELOPE));
+        // a BODY rule still works for ${body.x}: here with a converter
+        rows.rule(new RuleRow(900, flow.id(), step.id(), "STEP_REQUEST", 1, "BODY", "$.padded",
+                "$.request.path.accountNo", null, null, "PAD_LEFT:12:0", null, null, false));
+        rows.responseRule(flow, "$.name", "$.steps.s.body.transactionResponse.response.content.accountName");
+        downstream.ok("/s", """
+                <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"><soapenv:Body>
+                <q0:transactionResponse xmlns:q0="http://service.example.com/core"><response><content>
+                <accountName>BUDI</accountName></content></response></q0:transactionResponse>
+                </soapenv:Body></soapenv:Envelope>""");
+
+        var result = run("POST", "/f/78<&1", "{}");
+
+        String sent = downstream.last("/s").body();
+        assertThat(sent).startsWith("<soapenv:Envelope\n\txmlns:q0=\"http://service.example.com/core\"")
+                .contains("xmlns:bo=\"http://service.example.com/core/bo\"", "<content xsi:type=\"bo:AccountShortInquiryReq\">",
+                        "<accountNum>78&lt;&amp;1</accountNum>", "<options>01</options>", "<padded>000000078<&1</padded>".replace("<&", "&lt;&amp;"));
+        assertThat(downstream.last("/s").headers()).containsEntry("Content-Type", "text/xml; charset=UTF-8");
+        assertThat(result.response().status()).as(String.valueOf(result.response().body())).isEqualTo(200);
+        assertThat(text(result.response(), "name")).isEqualTo("BUDI");
+        // the audit trail shows exactly what was sent
+        assertThat(result.audit().steps().getFirst().requestPayload().asString()).isEqualTo(sent);
+    }
+
+    @Test
+    void badPlaceholdersAndStepsThatHaveNotRunAreReportedOnReload() {
+        var flow = rows.flow("F", "POST", "/f");
+        rows.step(flow, "s", 1, s -> s.withBodyTemplate("<a>${request.body.x</a>"));
+        rows.step(flow, "t", 2, s -> s.withBodyTemplate("{\"v\": \"${steps.later.body.v}\", \"w\": ${nope.x}}"));
+        rows.step(flow, "later", 3);
+        assertThatThrownBy(this::registry).isInstanceOfSatisfying(ConfigValidationException.class, e -> assertThat(e.errors())
+                .anySatisfy(m -> assertThat(m).contains("step 's': body_template: unclosed ${"))
+                .anySatisfy(m -> assertThat(m).contains("step 't': body_template: placeholder ${nope.x} must start with")));
+    }
+
+    @Test
+    void jsonTemplateEscapesInsideStrings() {
+        var flow = rows.flow("F", "POST", "/f");
+        rows.step(flow, "s", 1, s -> s.withBodyTemplate("{\"note\": \"${request.body.note}\", \"amount\": ${request.body.amount}}"));
+        downstream.ok("/s", "{}");
+
+        run("POST", "/f", "{\"note\":\"say \\\"hi\\\"\\n\",\"amount\":150.5}");
+
+        assertThat(downstream.last("/s").body()).isEqualTo("{\"note\": \"say \\\"hi\\\"\\n\", \"amount\": 150.5}");
+        assertThat(downstream.last("/s").headers()).containsEntry("Content-Type", "application/json");
     }
 
     @Test

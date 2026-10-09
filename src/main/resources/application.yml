@@ -4,6 +4,11 @@ spring:
   threads:
     virtual:
       enabled: true
+  web:
+    resources:
+      # no default static files (/**, /webjars/**): Studio serves /studio/** and the API docs /webjars/swagger-ui/**
+      # only when they are enabled, so a production build with both off serves the API and nothing else
+      add-mappings: false
   datasource:
     # HikariCP is the only pool on the classpath and is pinned here (spec Section 4.1)
     type: com.zaxxer.hikari.HikariDataSource
@@ -54,7 +59,7 @@ gateway:
   # API documentation generated from the flow configuration: Swagger UI at /docs, OpenAPI at /docs/openapi.json.
   # Off unless enabled; it lists every endpoint, so think twice before enabling it in production.
   docs:
-    enabled: ${GATEWAY_DOCS_ENABLED:true}
+    enabled: ${GATEWAY_DOCS_ENABLED:false}
     title: ${GATEWAY_DOCS_TITLE:JSON Gateway API}
   # Gateway Studio: browser UI at /studio for editing flows, target systems and lookups. Its API needs the admin
   # token and writes straight to the config tables, then reloads. Keep it off in production.
@@ -64,7 +69,7 @@ gateway:
   #   log-buffer      - log lines kept in memory per correlation ID for the Audit trail screen (this instance only,
   #                     lost on restart; the log output stays the record)
   studio:
-    enabled: ${GATEWAY_STUDIO_ENABLED:true}
+    enabled: ${GATEWAY_STUDIO_ENABLED:false}
     mode: ${GATEWAY_STUDIO_MODE:edit}
     log-buffer:
       max-transactions: 2000

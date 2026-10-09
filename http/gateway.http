@@ -298,3 +298,26 @@ hello from a raw upload
 
 ### Delete: the fileId of an upload, e.g. 2026/10/<uuid>-invoice.txt
 DELETE {{baseUrl}}/api/v1/files/2026/10/replace-with-uuid-invoice.txt
+
+### ---------------------------------------------------------------------------
+### Body templates (105-dev-demo-body-templates.xml): the downstream body written out as XML / SOAP / JSON
+### with ${...} placeholders. Open them in Studio: Pipeline -> select the step -> Body template.
+### ---------------------------------------------------------------------------
+
+### 1. SOAP inquiry: <accountNum>${request.path.accountNo}</accountNum>, <options>${request.query.option:8}</options>
+###    1001 and 2002 exist (2002 is BLOCKED); any other account -> 422 (the service answers responseCode 14)
+GET {{baseUrl}}/api/v1/soap/accounts/1001?option=8
+
+### 2. SOAP transfer: JSON in, SOAP envelope out. ${body.amount} goes through DECIMAL_SCALE:2 (150000.00),
+###    the remark is XML-escaped, ${correlationId} becomes externalId, the X-Channel header the SOAP header
+POST {{baseUrl}}/api/v1/soap/transfers
+Content-Type: application/json
+X-Channel: MOBILE
+
+{"fromAccount": "1001", "toAccount": "2002", "amount": 150000, "remark": "Rent & utilities <October>"}
+
+### 3. JSON template: nested document, a default channel, the recipients array inserted as JSON
+POST {{baseUrl}}/api/v1/template/notify
+Content-Type: application/json
+
+{"account": "1001", "amount": 150000, "message": "Say \"hi\"", "recipients": ["0812000001", "0812000002"]}

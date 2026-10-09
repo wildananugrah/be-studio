@@ -33,7 +33,7 @@ function fromApi(c) {
       timeout: str(f.timeoutMs), audit: f.auditMode || 'INHERIT', enabled: f.enabled,
       steps: f.steps.map(s => ({ id: uid('s'), name: str(s.name), order: s.order, target: str(s.targetSystem), method: s.method || 'GET', path: str(s.path), onFailure: s.onFailure || 'STOP',
         timeout: str(s.timeoutMs), condition: str(s.condition), success: str(s.success), reqHandler: str(s.requestHandler), respHandler: str(s.responseHandler),
-        respSchema: str(s.responseSchema), bodyCodec: str(s.bodyCodec), enabled: s.enabled, rules: s.rules.map(ruleIn), sql: s.sql == null ? null : String(s.sql) })),
+        respSchema: str(s.responseSchema), bodyCodec: str(s.bodyCodec), enabled: s.enabled, rules: s.rules.map(ruleIn), sql: s.sql == null ? null : String(s.sql), bodyTemplate: str(s.bodyTemplate) })),
       response: f.response.map(ruleIn)
     })),
     targets: c.targets.map(t => ({ code: str(t.code), base: str(t.baseUrl), connect: str(t.connectTimeoutMs), read: str(t.readTimeoutMs), bodyCodec: str(t.bodyCodec), enabled: t.enabled, headers: t.headers.map(h => ({ n: str(h.name), v: str(h.value) })),
@@ -157,12 +157,30 @@ function convLabel(spec) {
   return spec;
 }
 
+/** A body template's format, as the server decides it: XML (starts with <), JSON ({ or [), or text. */
+const templateKind = t => { const s = String(t || '').trimStart(); return s.startsWith('<') ? 'xml' : s.startsWith('{') || s.startsWith('[') ? 'json' : 'text'; };
+/** Reads $.a.b[0] style paths from an object; undefined when missing. */
+function readPath(root, path) { let o = root; for (const k of toks('$.' + path)) { if (o == null) return undefined; o = o[k === '*' ? 0 : k]; } return o; }
+/** The body template filled from a sample context, like the server does (for the live preview). */
+function renderTemplate(text, ctx, body) {
+  const kind = templateKind(text);
+  const esc = v => kind === 'xml' ? v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;') : kind === 'json' ? JSON.stringify(v).slice(1, -1) : v;
+  return String(text || '').replace(/\$\{([^}]*)\}/g, (m, expr) => {
+    const i = expr.indexOf(':'); const path = (i < 0 ? expr : expr.slice(0, i)).trim(); const def = i < 0 ? '' : expr.slice(i + 1);
+    const v = path.startsWith('body') ? readPath({ body }, path) : readPath(ctx, path);
+    if (kind === 'json' && v != null && typeof v === 'object') return JSON.stringify(v);
+    return esc(v == null ? def : typeof v === 'object' ? JSON.stringify(v) : String(v));
+  });
+}
+/** The ${...} placeholders of a template, in order, distinct. */
+const templateSlots = t => [...new Set((String(t || '').match(/\$\{[^}]*\}/g) || []).map(x => x.slice(2, -1).trim()))];
+
 function toApi(cfg) {
   return {
     flows: cfg.flows.map(f => ({
       code: f.code, name: nn(f.name), method: f.method, path: f.path, requestSchema: nn(f.reqSchema), responseSchema: nn(f.respSchema), requestHandler: nn(f.reqHandler),
       responseHandler: nn(f.respHandler), errorHandler: nn(f.errorHandler), successStatus: int(f.successStatus) || 200, timeoutMs: int(f.timeout), auditMode: f.audit, enabled: f.enabled,
-      steps: [...f.steps].sort((a, b) => a.order - b.order).map(s => ({ name: s.name, order: s.order, targetSystem: s.target, method: isSql(s) ? null : s.method, path: isSql(s) ? null : s.path, sql: isSql(s) ? s.sql : null, condition: nn(s.condition), success: nn(s.success),
+      steps: [...f.steps].sort((a, b) => a.order - b.order).map(s => ({ name: s.name, order: s.order, targetSystem: s.target, method: isSql(s) ? null : s.method, path: isSql(s) ? null : s.path, sql: isSql(s) ? s.sql : null, bodyTemplate: isSql(s) || isStore(s) ? null : nn(s.bodyTemplate), condition: nn(s.condition), success: nn(s.success),
         onFailure: s.onFailure, timeoutMs: int(s.timeout), responseSchema: nn(s.respSchema), requestHandler: nn(s.reqHandler), responseHandler: nn(s.respHandler), bodyCodec: nn(s.bodyCodec),
         enabled: s.enabled, rules: s.rules.map(ruleOut) })),
       response: f.response.map(ruleOut)
@@ -240,12 +258,34 @@ function synthSample(f, lookups) {
   // an uploaded file is an object (filename, contentType, size, sha256), not a leaf value
   const files = () => all.forEach(r => { const m = /^\$\.request\.files\.([A-Za-z0-9_-]+)/.exec(r.source || ''); if (m) { ctx.request.files = ctx.request.files || {}; ctx.request.files[m[1]] = fileSample(m[1]); } });
   all.forEach(r => { if (r.source) { const t = toks(r.source).filter(x => typeof x === 'string' && x !== '*'); place(ctx, r.source, guess(t[t.length - 1] || 'value', r, lookups)); } });
+  // what body templates read is part of the request too
+  f.steps.forEach(s => templateSlots(s.bodyTemplate).forEach(x => { const p = x.split(':')[0].trim(); if (/^(request|steps)\./.test(p)) { const tk = toks('$.' + p); place(ctx, '$.' + p, guess(String(tk[tk.length - 1]), null, lookups)); } }));
   f.steps.forEach(s => [s.condition, s.success].forEach(e => (String(e || '').match(/\$\{([^}]+)\}/g) || []).forEach(x => { const p = '$.' + x.slice(2, -1); const t = toks(p); place(ctx, p, guess(String(t[t.length - 1]), null, lookups)); })));
   files();
   return ctx;
 }
 const resolveEnv = b => String(b).replace(/\$\{([^}:]+)(?::([^}]*))?\}/g, (m, k, d) => (d !== undefined ? d : '<' + k + '>'));
 const pretty = v => JSON.stringify(v, null, 2);
+// XML on one line (as most servers send it) put one element per line; XML already on several lines is left as written
+const prettyXml = t => {
+  const s = String(t).trim();
+  if (!s.startsWith('<') || (s.replace(/^<\?xml[^>]*\?>\s*/, '').match(/\n\s*</g) || []).length > 1) return t;
+  const parts = s.replace(/>\s*</g, '><').split(/(?=<)|(?<=>)/).filter(p => p !== '');
+  let depth = 0, out = [];
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (p.startsWith('</')) { depth = Math.max(0, depth - 1); out.push('  '.repeat(depth) + p); continue; }
+    if (p.startsWith('<')) {
+      const leaf = !/^<[?!]/.test(p) && !p.endsWith('/>') && i + 2 < parts.length && !parts[i + 1].startsWith('<') && parts[i + 2].startsWith('</');
+      if (leaf) { out.push('  '.repeat(depth) + p + parts[i + 1] + parts[i + 2]); i += 2; continue; }
+      out.push('  '.repeat(depth) + p);
+      if (!/^<[?!]/.test(p) && !p.endsWith('/>')) depth++;
+      continue;
+    }
+    if (p.trim()) out.push('  '.repeat(depth) + p.trim());
+  }
+  return out.join('\n');
+};
 
 // ---------- syntax highlighting (spans, never innerHTML, so payload text stays text) ----------
 const HL = {
@@ -260,6 +300,8 @@ const HL = {
   // HTTP message: start line and headers, then a JSON (or other) body after the blank line
   http: [[/^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \S+|^HTTP \d+/m, 'kw'], [/^[A-Za-z0-9-]+(?=: )/m, 'key']]
 };
+HL.xml = [[/<!--[\s\S]*?-->/, 'com'], [/\$\{[^}\n]*\}/, 'par'], [/"[^"\n]*"|'[^'\n]*'/, 'str'], [/<\/?[A-Za-z_][\w:.-]*|\/?>|<\?xml|\?>/, 'kw'], [/[A-Za-z_][\w:.-]*(?==)/, 'key']];
+HL.template = HL.xml;
 const hlRegex = {};
 function tokens(text, lang) {
   const rules = HL[lang]; if (!rules) return [text];
@@ -281,7 +323,7 @@ const hl = (text, lang) => {
   const t = String(text);
   if (t.length > 200000) return t; // too big to be worth it
   if (lang === 'http') { const i = t.indexOf('\n\n'); return i < 0 ? tokens(t, 'http') : [...tokens(t.slice(0, i + 2), 'http'), ...tokens(t.slice(i + 2), 'json')]; }
-  if (lang === 'auto') { const s = t.trimStart(); return tokens(t, s.startsWith('{') || s.startsWith('[') ? 'json' : 'plain'); }
+  if (lang === 'auto') { const s = t.trimStart(); return tokens(t, s.startsWith('{') || s.startsWith('[') ? 'json' : s.startsWith('<') ? 'xml' : 'plain'); }
   return tokens(t, lang);
 };
 
@@ -320,7 +362,7 @@ function flowSql(f, lookupsUsed) {
     const c = isSql(st) ? ['flow_id', 'name', 'step_order', 'target_system', 'sql_text'] : ['flow_id', 'name', 'step_order', 'target_system', 'http_method', 'path_template'];
     const v = isSql(st) ? ['id', q(st.name), st.order, q(st.target), q(st.sql)] : ['id', q(st.name), st.order, q(st.target), q(st.method), q(st.path)];
     opt('condition_expr', st.condition, 0, c, v); opt('success_expr', st.success, 0, c, v); if (st.onFailure !== 'STOP') opt('on_failure', st.onFailure, 0, c, v); opt('timeout_ms', st.timeout, 1, c, v);
-    opt('response_schema_code', st.respSchema, 0, c, v); opt('request_handler', st.reqHandler, 0, c, v); opt('response_handler', st.respHandler, 0, c, v); if (!isSql(st)) opt('body_codec', st.bodyCodec, 0, c, v); if (!st.enabled) opt('enabled', 'false', 1, c, v);
+    opt('response_schema_code', st.respSchema, 0, c, v); opt('request_handler', st.reqHandler, 0, c, v); opt('response_handler', st.respHandler, 0, c, v); if (!isSql(st)) opt('body_codec', st.bodyCodec, 0, c, v); if (!isSql(st)) opt('body_template', st.bodyTemplate, 0, c, v); if (!st.enabled) opt('enabled', 'false', 1, c, v);
     out.push('INSERT INTO gw_flow_step (' + c.join(', ') + ')\nSELECT ' + v.join(', ') + '\nFROM gw_flow WHERE code = ' + q(f.code) + ';');
   });
   const ruleSql = (r, i, st) => {
@@ -347,8 +389,11 @@ const zoneOverlay = (z, color, label) => html`
   ${z.over && html`<div style=${`position:absolute;inset:-5px;border-radius:12px;background:color-mix(in oklch, ${color} 12%, transparent);pointer-events:none;display:grid;place-items:end center;padding-bottom:6px;font:600 11px ${MONO};color:${color}`}>${label || ''}</div>`}`;
 const zoneProps = z => ({ onDragOver: z.onDragOver, onDragLeave: z.onDragLeave, onDrop: z.onDrop });
 const connector = html`<div style="width:26px;height:1px;background:#ADA99E;margin-top:38px;flex:none"></div>`;
-const toggle = (on, onClick, w = 38, h = 22) => html`
-  <button class="tgl" onClick=${onClick} title=${on ? 'enabled' : 'disabled'} style=${`width:${w}px;height:${h}px;flex:none;border:0;border-radius:${h / 2}px;background:${on ? 'oklch(0.62 0.13 155)' : '#D3D0C7'};position:relative;cursor:pointer;padding:0`}>
+// per-browser conveniences (a remembered layout); storage can be blocked, so never rely on it
+const readPref = k => { try { return localStorage.getItem('gw-studio.' + k); } catch (e) { return null; } };
+const writePref = (k, v) => { try { localStorage.setItem('gw-studio.' + k, v); } catch (e) { /* blocked: not remembered */ } };
+const toggle = (on, onClick, w = 38, h = 22, cls = '', title = '') => html`
+  <button class=${'tgl ' + cls} onClick=${onClick} title=${title || (on ? 'enabled' : 'disabled')} style=${`width:${w}px;height:${h}px;flex:none;border:0;border-radius:${h / 2}px;background:${on ? 'oklch(0.62 0.13 155)' : '#D3D0C7'};position:relative;cursor:pointer;padding:0`}>
     <span style=${`position:absolute;top:3px;left:${on ? w - h + 3 : 3}px;width:${h - 6}px;height:${h - 6}px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2)`}></span>
   </button>`;
 const errList = errs => errs.length > 0 && html`<div style="display:flex;flex-direction:column;gap:3px">${errs.map(e => html`<div style=${`font:11px/1.45 ${MONO};color:oklch(0.5 0.18 25)`}>${e}</div>`)}</div>`;
@@ -769,6 +814,10 @@ class App extends Component {
       <div style="flex:1;min-height:0;overflow:auto;padding:28px 32px 60px">
         <div style="max-width:1080px;margin:0 auto">
           ${pageHead('Flows', html`One flow per inbound endpoint under ${mono(base)}. Rows in ${mono('gw_flow')}.`, '+ New flow', newFlow)}
+          <div style="margin-top:12px;display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;font-size:12px;color:#6A6D75">
+            <span title="One document for every live endpoint, built from the API description (Swagger)">API specification of all endpoints</span>
+            ${['docx:Word', 'pdf:PDF', 'md:Markdown'].map(x => { const [fmt, label] = x.split(':'); return html`<button class="btn-line" disabled=${this.dirty()} title=${this.dirty() ? 'Save & reload first: the spec comes from the live configuration' : ''} onClick=${() => this.downloadSpec(null, fmt)} style="border:1px solid #E4E1D8;background:#fff;color:#17181C;border-radius:7px;padding:6px 11px;cursor:pointer;font-weight:500;font-size:12px">${label}</button>`; })}
+          </div>
           <div style="margin-top:20px;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:auto">
             <div style=${`${grid};min-width:760px;padding:10px 16px;font:600 10px ${MONO};letter-spacing:.06em;color:#9A9CA2;border-bottom:1px solid #EFEDE6`}>
               <span>ENDPOINT</span><span>CODE</span><span>STEPS</span><span>ERROR HANDLER</span><span>AUDIT</span><span>ENABLED</span>
@@ -956,7 +1005,9 @@ class App extends Component {
   }
 
   // ---------- audit trail ----------
-  auditState() { return this.state.audit || { filters: { flow: '', status: '', q: '', from: '', to: '' }, page: 1, data: null, sel: null, detail: null, auto: false }; }
+  auditState() { return this.state.audit || { filters: { flow: '', status: '', q: '', from: '', to: '' }, page: 1, data: null, sel: null, detail: null, auto: false, wide: readPref('audit.wide') === '1' }; }
+  /** Collapses the call list so the selected call's detail gets the whole width (remembered in this browser). */
+  setAuditWide(on) { writePref('audit.wide', on ? '1' : '0'); this.setAudit(x => { x.wide = on; }); }
   setAudit(fn, then) { this.setState(s => { const a = clone(this.auditState()); fn(a); return { audit: a }; }, then); }
   openAudit(filters) {
     this.setState(st => ({ screen: 'audit', audit: { ...this.auditState(), filters: { flow: '', status: '', q: '', from: '', to: '', ...filters }, page: 1, sel: null, detail: null } }), () => this.loadAudit());
@@ -996,7 +1047,8 @@ class App extends Component {
       const c = o === 'SUCCESS' ? ['oklch(0.4 0.12 155)', 'oklch(0.94 0.05 155)'] : o === 'SKIPPED' ? ['#6A6D75', '#EFEDE6'] : ['oklch(0.45 0.17 25)', 'oklch(0.94 0.04 25)'];
       return html`<span style=${`font:600 10px ${MONO};color:${c[0]};background:${c[1]};padding:2px 6px;border-radius:4px`}>${o || '—'}</span>`;
     };
-    const prettyText = v => { if (v == null || v === '') return null; try { return pretty(JSON.parse(v)); } catch (e) { return String(v); } };
+    // a text body (XML / SOAP sent or received) is stored as a JSON string: show the text itself, XML indented
+    const prettyText = v => { if (v == null || v === '') return null; try { const j = JSON.parse(v); return typeof j === 'string' ? prettyXml(j) : pretty(j); } catch (e) { return String(v); } };
     const block = (title, text, hint) => html`
       <div style="min-width:0;display:flex;flex-direction:column;gap:4px">
         <div style=${`font:600 10px ${MONO};letter-spacing:.06em;color:#6A6D75;text-transform:uppercase`}>${title}</div>
@@ -1027,13 +1079,19 @@ class App extends Component {
           <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#6A6D75">to<input type="datetime-local" class="ro-ok" value=${a.filters.to} onChange=${e => F('to', e.currentTarget.value)} style=${sel}/></label>
           <button class="btn-line" onClick=${() => this.loadAudit()} style="height:32px;border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:0 12px;cursor:pointer;font-size:12.5px;font-weight:500">${a.loading ? 'Loading…' : 'Refresh'}</button>
           <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#6A6D75"><input type="checkbox" class="ro-ok" checked=${a.auto} onChange=${e => { const v = e.currentTarget.checked; this.setAudit(x => { x.auto = v; }, () => this.loadAudit()); }}/>auto-refresh 5s</label>
+          <span style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6A6D75">${toggle(!!a.wide, () => this.setAuditWide(!a.wide), 30, 18, 'ro-ok', a.wide ? 'Show the call list' : 'Hide the call list: the detail gets the whole width')}<span onClick=${() => this.setAuditWide(!a.wide)} style="cursor:pointer">wide detail</span></span>
           <span style="flex:1"></span>
           ${a.data && html`<span style=${`font:11.5px ${MONO};color:#9A9CA2`}>${a.data.totalElements} call${a.data.totalElements === 1 ? '' : 's'}${st.zone ? ' · times in ' + st.zone : ''}</span>`}
         </div>
         ${a.error && html`<div style="font-size:12px;color:oklch(0.5 0.18 25)">${a.error}</div>`}
 
-        <div style="flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:14px;padding-bottom:16px">
-          <div style="min-height:0;display:flex;flex-direction:column;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:hidden">
+        <div style=${`flex:1;min-height:0;display:grid;grid-template-columns:${a.wide ? '40px minmax(0,1fr)' : 'minmax(0,1fr) minmax(0,1.15fr)'};gap:14px;padding-bottom:16px`}>
+          ${a.wide && html`
+          <button class="btn-line" onClick=${() => this.setAuditWide(false)} title="Show the call list" style="min-height:0;display:flex;flex-direction:column;align-items:center;gap:10px;padding:10px 0;background:#fff;border:1px solid #E4E1D8;border-radius:10px;cursor:pointer;color:#3E4047">
+            <span style="font-size:14px;line-height:1">»</span>
+            <span style=${`writing-mode:vertical-rl;font:600 11px ${MONO};letter-spacing:.06em;color:#6A6D75`}>CALLS${a.data ? ' · ' + a.data.totalElements : ''}</span>
+          </button>`}
+          <div style=${`min-height:0;display:${a.wide ? 'none' : 'flex'};flex-direction:column;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:hidden`}>
             <div style="flex:1;min-height:0;overflow:auto">
               ${a.data && rows.length === 0 && html`<div style="padding:24px;text-align:center;color:#6A6D75;font-size:12.5px">No calls match. Call an endpoint (e.g. ${mono('make demo')} or the Tests tab of a flow), then Refresh.</div>`}
               ${rows.map(r => { const on = a.sel === r.correlation_id; return html`
@@ -1070,6 +1128,7 @@ class App extends Component {
                   <span style=${`font:600 10px ${MONO};color:#fff;background:${MC[tx.http_method] || '#555'};padding:2px 5px;border-radius:4px`}>${tx.http_method}</span>
                   <span style=${`font:600 13px ${MONO}`}>${s.catalog.apiBasePath}${tx.path}</span>
                   <span style="flex:1"></span>
+                  <button class="btn-line" onClick=${() => this.setAuditWide(!a.wide)} title=${a.wide ? 'Show the call list again' : 'Hide the call list: this detail gets the whole width'} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px">${a.wide ? '« Show list' : 'Expand »'}</button>
                   ${tx.flow_code && s.cfg.flows.some(f => f.code === tx.flow_code) && html`<button class="btn-line" onClick=${() => { const i = s.cfg.flows.findIndex(f => f.code === tx.flow_code); this.setState({ screen: 'flow', cur: i, tab: 'pipeline', sel: { kind: 'flow' }, scope: 'resp', preview: null }, () => this.changed()); }} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px">Open flow ${tx.flow_code} →</button>`}
                 </div>
                 <div style=${`display:grid;grid-template-columns:auto 1fr;gap:3px 14px;font:11.5px ${MONO}`}>
@@ -1429,7 +1488,7 @@ class App extends Component {
                           <div style=${`margin-top:6px;font:11px/1.4 ${MONO};color:#6A6D75;word-break:break-all`}><span style="color:#17181C">${x.st.target}</span> ${isSql(x.st) ? html`<span class="code-light" style="display:block;margin-top:3px;max-height:44px;overflow:hidden;word-break:normal;overflow-wrap:anywhere">${hl(x.st.sql.replace(/\s+/g, ' ').slice(0, 140), 'sql')}</span>` : x.st.path}</div>
                           ${x.chips.length > 0 && html`<div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">${x.chips.map(chipView)}</div>`}
                           <div style=${`margin-top:9px;padding-top:8px;border-top:1px solid #EFEDE6;display:flex;justify-content:space-between;font:10.5px ${MONO};color:#9A9CA2`}>
-                            <span>${isStore(x.st) && fileField(x.st) ? 'file ← ' + fileField(x.st) + ' · ' : ''}${x.st.rules.length} ${isSql(x.st) ? 'parameter' : 'request'} rule${x.st.rules.length === 1 ? '' : 's'}</span><span style=${`color:${x.st.onFailure === 'CONTINUE' ? C.out : '#9A9CA2'}`}>${x.st.onFailure}</span>
+                            <span>${x.st.bodyTemplate ? templateKind(x.st.bodyTemplate).toUpperCase() + ' template · ' : ''}${isStore(x.st) && fileField(x.st) ? 'file ← ' + fileField(x.st) + ' · ' : ''}${x.st.rules.length} ${isSql(x.st) ? 'parameter' : 'request'} rule${x.st.rules.length === 1 ? '' : 's'}</span><span style=${`color:${x.st.onFailure === 'CONTINUE' ? C.out : '#9A9CA2'}`}>${x.st.onFailure}</span>
                           </div>
                           ${zoneOverlay(x.zone, C.step, 'attach to ' + x.st.name)}
                         </div>`)}
@@ -1581,11 +1640,11 @@ class App extends Component {
    * SQL editor with syntax highlighting: a transparent-text textarea under a highlighted <pre> of the same text and
    * metrics (the pre ignores the mouse, so typing, selection and the caret are the textarea's). Grows with its text.
    */
-  sqlEditor(value, onChange) {
+  sqlEditor(value, onChange, lang = 'sql', placeholder = '', opts = {}) {
     const v = value || '';
     const lines = v.split('\n').length;
     const keys = e => {
-      if (e.key !== 'Tab' || e.shiftKey || this.ro) return;
+      if (e.key !== 'Tab' || e.shiftKey || (this.ro && !opts.roOk)) return;
       e.preventDefault();
       const ta = e.currentTarget; const a = ta.selectionStart; const b = ta.selectionEnd;
       const next = ta.value.slice(0, a) + '  ' + ta.value.slice(b);
@@ -1596,10 +1655,28 @@ class App extends Component {
     const fit = el => { if (el) requestAnimationFrame(() => { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }); };
     const box = `margin:0;padding:9px 10px;font:12px/1.6 ${MONO};white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;tab-size:2`;
     return html`
-      <div class="sqled" style="position:relative;border:1px solid #E4E1D8;border-radius:6px;background:#FAF9F6">
-        <textarea ref=${fit} class="inp" spellcheck="false" autocapitalize="off" autocomplete="off" value=${v} rows=${Math.max(5, lines + 1)} onInput=${e => onChange(e.currentTarget.value)} onKeyDown=${keys}
+      <div class="sqled" style=${`position:relative;border:1px solid ${opts.invalid ? 'oklch(0.75 0.12 25)' : '#E4E1D8'};border-radius:6px;background:#FAF9F6`}>
+        <textarea ref=${fit} class=${opts.roOk ? 'inp ro-ok' : 'inp'} placeholder=${placeholder} spellcheck="false" autocapitalize="off" autocomplete="off" value=${v} rows=${Math.max(opts.minRows || 5, lines + 1)} onInput=${e => onChange(e.currentTarget.value)} onKeyDown=${keys}
           style=${`${box};display:block;width:100%;border:0;border-radius:6px;background:transparent;color:transparent;caret-color:#17181C;resize:none;overflow:hidden`}></textarea>
-        <pre aria-hidden="true" class="code-light" style=${`${box};position:absolute;inset:0;pointer-events:none;color:#2B2D33;overflow:hidden`}>${hl(v, 'sql')}${'\n'}</pre>
+        <pre aria-hidden="true" class="code-light" style=${`${box};position:absolute;inset:0;pointer-events:none;color:#2B2D33;overflow:hidden`}>${hl(v, lang)}${'\n'}</pre>
+      </div>`;
+  }
+
+  /** The ${...} of a step's body template with the value each gets from the sample context. */
+  renderTemplateSlots(st, f) {
+    const slots = templateSlots(st.bodyTemplate);
+    if (!slots.length) return null;
+    const sample = this.sampleOf(f);
+    return html`
+      <div style="display:flex;flex-direction:column;gap:5px">
+        <span style="display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:500">Placeholders<span style=${`font:10.5px ${MONO};color:#9A9CA2;font-weight:400`}>sample value</span></span>
+        ${slots.map(x => { const i = x.indexOf(':'); const path = (i < 0 ? x : x.slice(0, i)).trim(); const ok = /^(request|steps|correlationId|body)\b/.test(path);
+          const v = path.startsWith('body') ? undefined : readPath(sample, path); return html`
+          <div style=${`display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;background:${ok ? '#F4F3EF' : 'oklch(0.96 0.03 25)'};font:11.5px ${MONO}`}>
+            <span class="hscroll" style=${`color:${C.sql};font-weight:600;max-width:60%`}>\${${x}}</span><span style="color:#ADA99E">→</span>
+            <span class="hscroll" style=${`flex:1;min-width:0;color:${ok ? '#3E4047' : 'oklch(0.5 0.17 25)'}`}>${!ok ? 'must start with request, steps, correlationId or body' : path.startsWith('body') ? 'from this step\'s BODY rules' : v === undefined ? (i < 0 ? '(empty)' : 'default ' + x.slice(i + 1)) : JSON.stringify(v)}</span>
+          </div>`; })}
+        <span style="font-size:11px;color:#9A9CA2">Sample values come from the sample context (Mapping tab); the live preview there shows the whole body.</span>
       </div>`;
   }
 
@@ -1735,7 +1812,8 @@ class App extends Component {
         fld('Response schema', 'response_schema_code', st.respSchema, 'select', (fl, v) => { S2(fl).respSchema = v; }, { options: withCurrent(none(this.schemaCodes()), st.respSchema), actions: this.schemaActions(st.respSchema, () => this.sampleOf(f).steps?.[st.name]?.body, f.code + '_' + st.name.toUpperCase().replace(/[^A-Z0-9_]/g, '_') + '_RESPONSE', (fl, c) => { S2(fl).respSchema = c; }) }),
         fld('Request handler', 'request_handler', st.reqHandler, 'select', (fl, v) => { S2(fl).reqHandler = v; }, { options: withCurrent(none(cat.messageHandlers), st.reqHandler) }),
         fld('Response handler', 'response_handler', st.respHandler, 'select', (fl, v) => { S2(fl).respHandler = v; }, { options: withCurrent(none(cat.messageHandlers), st.respHandler) }),
-        fld('Wire format', 'body_codec', st.bodyCodec, 'select', (fl, v) => { S2(fl).bodyCodec = v; }, { options: withCurrent(none(cat.bodyCodecs, '— target system default'), st.bodyCodec) }),
+        fld('Wire format', 'body_codec', st.bodyCodec, 'select', (fl, v) => { S2(fl).bodyCodec = v; }, { options: withCurrent(none(cat.bodyCodecs, st.bodyTemplate && templateKind(st.bodyTemplate) === 'xml' ? '— default: ' + (/:?Envelope/.test(st.bodyTemplate) ? 'soapCodec' : 'xmlCodec') + ' (XML template)' : '— target system default'), st.bodyCodec), hint: st.bodyTemplate ? 'Decodes the response; the request is the template.' : '' }),
+        ...(st.method !== 'GET' ? [fld('Body template', 'body_template', st.bodyTemplate, 'template', (fl, v) => { S2(fl).bodyTemplate = v; }, { hint: 'Optional. Paste the exact request (a SOAP envelope, XML, JSON): it is sent as written, namespaces and all. ${request.path.id}, ${request.body.x}, ${request.headers.x}, ${steps.a.body.y}, ${body.z} (this step\'s BODY rules, with converters) and ${x:default}. Values are XML/JSON-escaped. Empty = the body is built from the BODY rules.' }), { kind: 'slots', st, f }] : []),
         fld('Enabled', 'enabled', String(st.enabled), 'select', (fl, v) => { S2(fl).enabled = v === 'true'; }, { options: [{ v: 'true', l: 'true' }, { v: 'false', l: 'false · skipped with its rules' }] })
       ], mapping: { label: 'Edit request mapping · ' + st.rules.length + ' rules', go: toMap(st.id) },
         del: { label: 'Delete step', body: `Step ${st.name} and its ${st.rules.length} request mapping rule(s) are removed; later steps keep their order. Nothing changes in the database until Save & reload.`, go: () => this.mut(fl => { fl.steps = fl.steps.filter(x => x.id !== st.id); this.norm(fl); return { sel: { kind: 'flow' } }; }) } };
@@ -1776,12 +1854,13 @@ class App extends Component {
           <div style=${`margin-top:3px;font:11px ${MONO};color:#9A9CA2`}>${insp.table}</div>
         </div>
         <div style="padding:14px 16px 28px;display:flex;flex-direction:column;gap:13px">
-          ${insp.fields.map(fd => fd.kind === 'params' ? this.renderSqlParams(fd.st, fd.f, toMap) : fd.kind === 'keyvars' ? this.renderKeyVars(fd.st, fd.f, toMap) : html`
+          ${insp.fields.map(fd => fd.kind === 'params' ? this.renderSqlParams(fd.st, fd.f, toMap) : fd.kind === 'keyvars' ? this.renderKeyVars(fd.st, fd.f, toMap) : fd.kind === 'slots' ? this.renderTemplateSlots(fd.st, fd.f) : html`
             <label style="display:flex;flex-direction:column;gap:5px">
               <span style="display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:500">${fd.label}<span style=${`font:10.5px ${MONO};color:#9A9CA2;font-weight:400`}>${fd.col}</span></span>
               ${fd.kind === 'text' && html`<input class="inp" value=${fd.value} onInput=${onSet(fd)} style=${inputStyle()}/>`}
               ${fd.kind === 'select' && html`<select class="inp" value=${fd.value} onChange=${onSet(fd)} style=${inputStyle() + ';padding:0 6px'}>${fd.options.map(o => html`<option value=${o.v}>${o.l}</option>`)}</select>`}
               ${fd.kind === 'sql' && this.sqlEditor(fd.value, v => this.mut(fl => fd.onSet(fl, v)))}
+              ${fd.kind === 'template' && this.sqlEditor(fd.value, v => this.mut(fl => fd.onSet(fl, v)), templateKind(fd.value) === 'json' ? 'json' : 'xml', '<soapenv:Envelope xmlns:soapenv="…">\n  …<accountNum>${request.path.accountNo}</accountNum>…\n</soapenv:Envelope>')}
               ${fd.kind === 'area' && html`<textarea class="inp" value=${fd.value} onInput=${onSet(fd)} rows="3" placeholder=${fd.placeholder || ''} style=${`border:1px solid #E4E1D8;border-radius:6px;padding:7px 9px;font:11.5px/1.45 ${MONO};background:#FAF9F6;resize:vertical;width:100%`}></textarea>`}
               ${fd.hint && html`<span style="font-size:11px;color:#9A9CA2;line-height:1.4">${fd.hint}</span>`}
               ${fd.actions && html`<span style="display:flex;gap:6px;flex-wrap:wrap">${fd.actions.map(a => html`<button type="button" class=${'btn-line' + (a.label.startsWith('+') ? ' ro-hide' : '')} onClick=${e => { e.preventDefault(); a.go(); }} title=${a.title || ''} style="border:1px solid #E4E1D8;background:#FAF9F6;border-radius:5px;padding:3px 8px;cursor:pointer;font-size:11.5px;color:#3E4047">${a.label}</button>`)}</span>`}
@@ -1897,8 +1976,10 @@ class App extends Component {
       line = scopeStep.method + ' ' + baseUrl.replace(/\/$/, '') + path + (qs ? '?' + qs : '');
       headers = [...(t ? t.headers.map(h => ({ n: h.n, v: resolveEnv(h.v) })) : []), ...(out ? Object.keys(out.headers).map(k => ({ n: k, v: out.headers[k] })) : []), { n: 'X-Correlation-Id', v: 'preview-correlation-id' }];
       if (scopeStep.reqHandler) headers.push({ n: '…', v: 'plus whatever ' + scopeStep.reqHandler + ' adds' });
-      body = scopeStep.method === 'GET' ? '(no body is sent for GET)' : out ? pretty(out.body) : '';
+      body = scopeStep.method === 'GET' ? '(no body is sent for GET)' : scopeStep.bodyTemplate ? renderTemplate(scopeStep.bodyTemplate, sample || {}, out && out.body) : out ? pretty(out.body) : '';
+      if (scopeStep.bodyTemplate && scopeStep.method !== 'GET') bodyLang = templateKind(scopeStep.bodyTemplate) === 'json' ? 'json' : 'xml';
       note = 'Built by the server from STEP_REQUEST rules with the real converters, lookups and field handlers. This step can read ' + (sorted.filter(x => x.order < scopeStep.order).map(x => x.name).join(', ') || 'only the inbound request') + '.';
+      if (scopeStep.bodyTemplate && scopeStep.method !== 'GET') note = 'The body is the step\'s body template, filled from the sample context (and ${body.…} from the BODY rules) and escaped for ' + templateKind(scopeStep.bodyTemplate).toUpperCase() + '; it is sent exactly like this. Headers, query and path come from the rules.';
     } else {
       line = 'HTTP/1.1 ' + f.successStatus;
       headers = [{ n: 'X-Correlation-Id', v: 'preview-correlation-id' }, ...(out ? Object.keys(out.headers).map(k => ({ n: k, v: out.headers[k] })) : [])];
@@ -1945,7 +2026,7 @@ class App extends Component {
             <div style="font-size:18px;font-weight:600;letter-spacing:-0.01em">${scopeStep ? (isSql(scopeStep) ? 'Parameters of ' + scopeStep.name : isStore(scopeStep) ? 'What ' + scopeStep.name + (scopeStep.method === 'DELETE' ? ' deletes' : ' stores') : 'What ' + scopeStep.name + ' sends') : 'What the client gets'}</div>
             <div style=${`font:11.5px ${MONO};color:#9A9CA2`}>${scopeStep ? (isSql(scopeStep) ? 'STEP_REQUEST · SQL · ' + scopeStep.target + ' · ' + (sqlParams(scopeStep.sql).map(p => ':' + p).join(' ') || 'no parameters') : 'STEP_REQUEST · ' + scopeStep.method + ' ' + scopeStep.target + scopeStep.path) : 'FLOW_RESPONSE'}</div>
           </div>
-          <div style="margin-top:4px;font-size:12px;color:#6A6D75;max-width:640px;line-height:1.45">${scopeStep && isSql(scopeStep) ? html`Each rule sets one SQL parameter: target ${mono('$.id')} is bound to ${mono(':id')}. ` : ''}${scopeStep && isStore(scopeStep) ? html`BODY ${mono('$.file')} ← the upload (${mono('$.request.files.<field>')}), optional BODY ${mono('$.contentType')}; a PATH rule fills a key variable ${mono('{name}')} (built-ins need none: ${(cat.storageKeyVariables || []).join(', ')}). ` : ''}Rules run top to bottom: value → default → lookup → converter → field handler → required check → write. Drop a field on a rule to replace its source, or a converter / lookup / handler to add it.</div>
+          <div style="margin-top:4px;font-size:12px;color:#6A6D75;max-width:640px;line-height:1.45">${scopeStep && isSql(scopeStep) ? html`Each rule sets one SQL parameter: target ${mono('$.id')} is bound to ${mono(':id')}. ` : ''}${scopeStep && scopeStep.bodyTemplate && !isSql(scopeStep) && !isStore(scopeStep) ? html`This step sends its <b>body template</b> (Pipeline → step); BODY rules here only feed its ${mono('${body.<field>}')} placeholders, HEADER / QUERY / PATH rules apply as usual. ` : ''}${scopeStep && isStore(scopeStep) ? html`BODY ${mono('$.file')} ← the upload (${mono('$.request.files.<field>')}), optional BODY ${mono('$.contentType')}; a PATH rule fills a key variable ${mono('{name}')} (built-ins need none: ${(cat.storageKeyVariables || []).join(', ')}). ` : ''}Rules run top to bottom: value → default → lookup → converter → field handler → required check → write. Drop a field on a rule to replace its source, or a converter / lookup / handler to add it.</div>
 
           <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;max-width:880px">
             ${rules.map((r, i) => {
@@ -2163,15 +2244,28 @@ class App extends Component {
     } catch (e) { this.setTests(f, x => { x.running = false; }); }
   }
 
+  /** Saves the file a Studio API answers with; returns the error message, or null. */
+  async download(path, fallbackName) {
+    const r = await fetch(path, { headers: { 'X-Admin-Token': this.state.token } });
+    if (!r.ok) { let m = 'HTTP ' + r.status; try { m = (await r.json()).errors.join('; '); } catch (e) { /* not JSON */ } return m; }
+    const cd = r.headers.get('Content-Disposition') || ''; const m = /filename="?([^";]+)"?/.exec(cd);
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement('a'); a.href = url; a.download = m ? m[1] : fallbackName; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    return null;
+  }
+
   async downloadReport(f, format) {
     const t = this.testsOf(f);
     const qs = 'format=' + format + '&audit=' + t.opts.audit + '&logs=' + t.opts.logs;
-    const r = await fetch('api/tests/runs/' + t.run.runId + '/report?' + qs, { headers: { 'X-Admin-Token': this.state.token } });
-    if (!r.ok) { let m = 'HTTP ' + r.status; try { m = (await r.json()).errors.join('; '); } catch (e) { /* not JSON */ } this.setTests(f, x => { x.error = m; }); return; }
-    const cd = r.headers.get('Content-Disposition') || ''; const m = /filename="?([^";]+)"?/.exec(cd);
-    const url = URL.createObjectURL(await r.blob());
-    const a = document.createElement('a'); a.href = url; a.download = m ? m[1] : 'unit-test.' + format; document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    const err = await this.download('api/tests/runs/' + t.run.runId + '/report?' + qs, 'unit-test.' + format);
+    if (err) this.setTests(f, x => { x.error = err; });
+  }
+
+  /** The API specification (from the live API description) of one flow, or of all flows when code is null. */
+  async downloadSpec(code, format) {
+    const err = await this.download('api/tests/spec?format=' + format + (code ? '&flow=' + encodeURIComponent(code) : ''), 'api-spec.' + format);
+    if (err) this.setState({ toast: { status: 'API spec', color: 'oklch(0.72 0.15 25)', body: err, note: 'The specification is built from the live (saved) configuration.' } });
   }
 
   renderTests(f) {
@@ -2204,7 +2298,7 @@ class App extends Component {
       const err = jsonErr(c[key], emptyOk);
       return html`<label style="display:flex;flex-direction:column;gap:4px;min-width:0">
         <span style=${`font:10px ${MONO};letter-spacing:.06em;color:#9A9CA2`}>${label}</span>
-        <textarea class="inp ro-ok" spellcheck="false" value=${c[key]} onInput=${e => { const v = e.currentTarget.value; upd(c.id, x => { x[key] = v; }); }} rows=${Math.min(14, Math.max(3, c[key].split('\n').length))} style=${`border:1px solid ${err ? 'oklch(0.75 0.12 25)' : '#E4E1D8'};border-radius:6px;padding:7px 9px;font:11.5px/1.45 ${MONO};background:#FAF9F6;resize:vertical;width:100%`}></textarea>
+        ${this.sqlEditor(c[key], v => upd(c.id, x => { x[key] = v; }), 'json', '', { roOk: true, invalid: !!err, minRows: 2 })}
         ${err && html`<span style=${`font:10.5px ${MONO};color:oklch(0.5 0.18 25)`}>${err}</span>`}
       </label>`;
     };
@@ -2228,6 +2322,13 @@ class App extends Component {
           </div>
           ${t.error && html`<div style="padding:9px 12px;border:1px solid oklch(0.85 0.06 25);background:oklch(0.97 0.02 25);border-radius:8px;font-size:12px;color:oklch(0.45 0.17 25)">${t.error}</div>`}
 
+          ${html`<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 16px;background:#fff;border:1px solid #E4E1D8;border-radius:10px">
+            <span style="font-weight:600">API specification</span>
+            <span style="flex:1;min-width:200px;font-size:12px;color:#6A6D75">This endpoint's spec document from the same API description (Swagger): URL, parameters, request and response fields with type and mandatory, examples and errors.</span>
+            ${btn('Word', () => this.downloadSpec(f.code, 'docx'), true, dirty, dirty ? 'Save & reload first: the spec comes from the live configuration' : '')}
+            ${btn('PDF', () => this.downloadSpec(f.code, 'pdf'), true, dirty, dirty ? 'Save & reload first: the spec comes from the live configuration' : '')}
+            ${btn('Markdown', () => this.downloadSpec(f.code, 'md'), false, dirty, dirty ? 'Save & reload first: the spec comes from the live configuration' : '')}
+          </div>`}
           ${t.run && html`
             <div style="background:#fff;border:1px solid #E4E1D8;border-radius:10px;padding:14px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
               <span style="font-weight:600">Last run</span>

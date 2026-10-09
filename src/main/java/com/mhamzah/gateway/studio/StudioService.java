@@ -224,7 +224,7 @@ public class StudioService {
     private static Step enabled(Step s) {
         return new Step(s.name(), s.order(), s.targetSystem(), s.method(), s.path(), s.condition(), s.success(),
                 s.onFailure(), s.timeoutMs(), s.responseSchema(), s.requestHandler(), s.responseHandler(),
-                s.bodyCodec(), true, s.rules(), s.sql());
+                s.bodyCodec(), true, s.rules(), s.sql(), s.bodyTemplate());
     }
 
     private static ExecutionContext context(String flowCode, FlowRegistry registry, JsonNode sample) {

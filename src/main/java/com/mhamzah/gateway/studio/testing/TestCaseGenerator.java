@@ -42,6 +42,20 @@ public final class TestCaseGenerator {
         return new TestCaseGenerator(openApi).cases(flow, apiBasePath);
     }
 
+    /** A plausible value for a schema of the document (as the happy path uses), for the API specification. */
+    static JsonNode example(JsonNode openApi, JsonNode schema, String name) {
+        return new TestCaseGenerator(openApi).example(schema, name, false, 0);
+    }
+
+    /** The schema with local {@code $ref}s followed and {@code allOf} merged. */
+    static JsonNode resolve(JsonNode openApi, JsonNode schema) {
+        return new TestCaseGenerator(openApi).resolve(schema);
+    }
+
+    static String typeOf(JsonNode schema) {
+        return type(schema);
+    }
+
     private List<TestCase> cases(FlowDefinition flow, String apiBasePath) {
         String method = flow.method().name();
         JsonNode op = null;
@@ -276,7 +290,9 @@ public final class TestCaseGenerator {
         if (s.has("maximum")) {
             v = Math.min(v, s.get("maximum").asDouble());
         }
-        return integer ? java.math.BigDecimal.valueOf((long) v) : java.math.BigDecimal.valueOf(v).stripTrailingZeros();
+        // plain digits (150000, not 1.5E+5) in the test cases and the API specification examples
+        return integer ? java.math.BigDecimal.valueOf((long) v)
+                : new java.math.BigDecimal(java.math.BigDecimal.valueOf(v).stripTrailingZeros().toPlainString());
     }
 
     static String guessText(String name, JsonNode s) {

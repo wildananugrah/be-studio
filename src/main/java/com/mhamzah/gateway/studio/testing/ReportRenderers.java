@@ -101,7 +101,8 @@ public final class ReportRenderers {
                 }
                 case Code c -> {
                     String fence = c.text().contains("```") ? "~~~~" : "```";
-                    b.append(fence).append('\n').append(c.text()).append('\n').append(fence).append("\n\n");
+                    b.append(fence).append(CodeHighlighter.language(c.text())).append('\n').append(c.text()).append('\n')
+                            .append(fence).append("\n\n");
                 }
                 case PageBreak p -> b.append("---\n\n");
             }
@@ -183,15 +184,22 @@ public final class ReportRenderers {
                         XWPFParagraph p = doc.createParagraph();
                         shade(p, "F4F3EF");
                         p.setSpacingAfter(120);
-                        XWPFRun r = p.createRun();
-                        r.setFontFamily(DOCX_MONO);
-                        r.setFontSize(8);
-                        String[] lines = c.text().split("\n", -1);
-                        for (int i = 0; i < lines.length; i++) {
-                            if (i > 0) {
-                                r.addBreak();
+                        // one run per highlighted piece and line, in its colour
+                        for (CodeHighlighter.Piece piece : CodeHighlighter.highlight(c.text())) {
+                            String[] lines = piece.text().split("\n", -1);
+                            for (int i = 0; i < lines.length; i++) {
+                                XWPFRun r = p.createRun();
+                                r.setFontFamily(DOCX_MONO);
+                                r.setFontSize(8);
+                                r.setColor(piece.kind().hex);
+                                if (piece.kind() == CodeHighlighter.Kind.HTTP_LINE) {
+                                    r.setBold(true);
+                                }
+                                if (i > 0) {
+                                    r.addBreak();
+                                }
+                                r.setText(lines[i]);
                             }
-                            r.setText(lines[i], i);
                         }
                     }
                     case PageBreak p -> breakBefore = true;
@@ -303,6 +311,7 @@ public final class ReportRenderers {
         private final PDType1Font regular = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
         private final PDType1Font bold = new PDType1Font(Standard14Fonts.FontName.HELVETICA_BOLD);
         private final PDType1Font mono = new PDType1Font(Standard14Fonts.FontName.COURIER);
+        private final PDType1Font monoBold = new PDType1Font(Standard14Fonts.FontName.COURIER_BOLD);
         private final Map<String, Boolean> encodable = new HashMap<>();
         private PDDocument doc;
         private PDPage page;
@@ -398,14 +407,11 @@ public final class ReportRenderers {
             float size = 7.5f;
             float leading = 9.5f;
             float pad = 6;
-            List<String> lines = new ArrayList<>();
-            for (String raw : text.split("\n", -1)) {
-                lines.addAll(wrap(raw.replace("\t", "  "), mono, size, WIDTH - 2 * pad));
-            }
+            List<List<CodeHighlighter.Piece>> lines = codeLines(text, size, WIDTH - 2 * pad);
             ensure(leading + pad);
             y -= 2;
             boolean first = true;
-            for (String line : lines) {
+            for (List<CodeHighlighter.Piece> line : lines) {
                 float top = first ? pad : 0;
                 if (y - leading - top < MARGIN) {
                     newPage();
@@ -414,7 +420,12 @@ public final class ReportRenderers {
                 cs.setNonStrokingColor(SHADE);
                 cs.addRect(MARGIN, y - leading - top, WIDTH, leading + top);
                 cs.fill();
-                write(line, mono, size, INK, MARGIN + pad, y - top - size);
+                float x = MARGIN + pad;
+                for (CodeHighlighter.Piece piece : line) {
+                    PDType1Font font = piece.kind() == CodeHighlighter.Kind.HTTP_LINE ? monoBold : mono;
+                    write(piece.text(), font, size, Color.decode("#" + piece.kind().hex), x, y - top - size);
+                    x += width(piece.text(), font, size);
+                }
                 y -= leading + top;
                 first = false;
             }
@@ -422,6 +433,41 @@ public final class ReportRenderers {
             cs.addRect(MARGIN, y - pad, WIDTH, pad);
             cs.fill();
             y -= pad + 8;
+        }
+
+        /**
+         * The highlighted pieces of a code block as printed lines: split at newlines, then broken at the width (the
+         * font is monospaced, so by character count).
+         */
+        private List<List<CodeHighlighter.Piece>> codeLines(String text, float size, float max) throws IOException {
+            int perLine = Math.max(10, (int) (max / width("M", mono, size)));
+            List<List<CodeHighlighter.Piece>> out = new ArrayList<>();
+            List<CodeHighlighter.Piece> line = new ArrayList<>();
+            int used = 0;
+            for (CodeHighlighter.Piece piece : CodeHighlighter.highlight(text)) {
+                String[] parts = clean(piece.text(), mono).split("\n", -1);
+                for (int i = 0; i < parts.length; i++) {
+                    if (i > 0) {
+                        out.add(line);
+                        line = new ArrayList<>();
+                        used = 0;
+                    }
+                    String rest = parts[i];
+                    while (!rest.isEmpty()) {
+                        if (used == perLine) {
+                            out.add(line);
+                            line = new ArrayList<>();
+                            used = 0;
+                        }
+                        int take = Math.min(rest.length(), perLine - used);
+                        line.add(new CodeHighlighter.Piece(rest.substring(0, take), piece.kind()));
+                        used += take;
+                        rest = rest.substring(take);
+                    }
+                }
+            }
+            out.add(line);
+            return out;
         }
 
         private void table(List<String> header, List<List<String>> rows, float[] fractions, boolean labelColumn) throws IOException {

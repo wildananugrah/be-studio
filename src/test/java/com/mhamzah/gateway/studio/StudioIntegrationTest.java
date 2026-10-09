@@ -302,6 +302,25 @@ class StudioIntegrationTest {
     }
 
     @Test
+    void apiSpecificationOfOneFlowOrAll() throws Exception {
+        Response md = call("GET", "/studio/api/tests/spec?format=md&flow=SOAP_TRANSFER", "studio-token", null);
+        assertThat(md.status()).as(md.text()).isEqualTo(200);
+        // the fields the SOAP body template reads, an example request and the business error of its success check
+        assertThat(md.text()).contains("# API Specification", "POST", "/api/v1/soap/transfers", "fromAccount", "toAccount",
+                "remark", "| amount |", "Example request", "\"fromAccount\" : \"1001\"", "GW-422-BUSINESS",
+                "GW-400-MAPPING", "Error response format");
+
+        Response all = call("GET", "/studio/api/tests/spec?format=md", "studio-token", null);
+        assertThat(all.text()).contains("## Endpoints", "/api/v1/accounts/{accountNo}",
+                "/api/v1/soap/transfers");
+        assertThat(call("GET", "/studio/api/tests/spec?format=docx", "studio-token", null).text()).startsWith("PK");
+        assertThat(call("GET", "/studio/api/tests/spec?format=pdf&flow=SOAP_TRANSFER", "studio-token", null).text())
+                .startsWith("%PDF");
+        assertThat(call("GET", "/studio/api/tests/spec?format=md&flow=NOPE", "studio-token", null).status()).isEqualTo(409);
+        assertThat(call("GET", "/studio/api/tests/spec?format=md", null, null).status()).isEqualTo(401);
+    }
+
+    @Test
     void auditTrailShowsEachCallWithStepsPayloadsAndLogs() throws Exception {
         String id = "AUDIT-TRAIL-" + System.nanoTime();
         HttpResponse<String> ok = HTTP.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v1/accounts/1001"))

@@ -85,7 +85,17 @@ public record ConfigRows(
             String responseHandler,
             String bodyCodec,
             boolean enabled,
-            String sqlText) {
+            String sqlText,
+            String bodyTemplate) {
+
+        public StepRow(long id, long flowId, String name, int stepOrder, String targetSystem, String httpMethod,
+                String pathTemplate, String conditionExpr, String successExpr, String onFailure, Integer timeoutMs,
+                String responseSchemaCode, String requestHandler, String responseHandler, String bodyCodec,
+                boolean enabled, String sqlText) {
+            this(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr, successExpr,
+                    onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler, bodyCodec, enabled,
+                    sqlText, null);
+        }
 
         /** An HTTP step (no {@code sql_text}). */
         public StepRow(long id, long flowId, String name, int stepOrder, String targetSystem, String httpMethod,
@@ -104,49 +114,55 @@ public record ConfigRows(
         public StepRow withSql(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled, value);
+                    bodyCodec, enabled, value, bodyTemplate);
+        }
+
+        public StepRow withBodyTemplate(String value) {
+            return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
+                    successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
+                    bodyCodec, enabled, sqlText, value);
         }
 
         public StepRow withTarget(String value) {
             return new StepRow(id, flowId, name, stepOrder, value, httpMethod, pathTemplate, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled, sqlText);
+                    bodyCodec, enabled, sqlText, bodyTemplate);
         }
 
         public StepRow withMethod(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, value, pathTemplate, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled, sqlText);
+                    bodyCodec, enabled, sqlText, bodyTemplate);
         }
 
         public StepRow withPathTemplate(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, value, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled, sqlText);
+                    bodyCodec, enabled, sqlText, bodyTemplate);
         }
 
         public StepRow withCondition(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, value,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled, sqlText);
+                    bodyCodec, enabled, sqlText, bodyTemplate);
         }
 
         public StepRow withSuccess(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                     value, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled, sqlText);
+                    bodyCodec, enabled, sqlText, bodyTemplate);
         }
 
         public StepRow withBodyCodec(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    value, enabled, sqlText);
+                    value, enabled, sqlText, bodyTemplate);
         }
 
         public StepRow withEnabled(boolean value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, value, sqlText);
+                    bodyCodec, value, sqlText, bodyTemplate);
         }
     }
 

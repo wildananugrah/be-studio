@@ -712,7 +712,7 @@ On Oracle, booleans are numbers: `enabled = 0` / `1`, `required = 1`.
 
 ### 4.15 XML or SOAP downstream
 
-Everything inside the gateway stays JSON: mapping rules, expressions, schemas, handlers and the audit trail. Only the HTTP call to the downstream is converted. Pick the format with `body_codec`:
+Everything inside the gateway stays JSON: mapping rules, expressions, schemas and handlers. Only the HTTP call to the downstream is converted. Pick the format with `body_codec`:
 
 | `body_codec` | Downstream speaks | Content-Type sent |
 |---|---|---|
@@ -781,7 +781,57 @@ SOAPAction: urn:bank/Inquiry
 
 and turns `<S:Body><ns2:InquiryResponse><ns2:name>BUDI</ns2:name><ns2:balance>100.10</ns2:balance>…` into `{"name":"BUDI","balance":"100.10"}` for the client. For SOAP 1.2 (`soap12Codec`) the `SOAPAction` header is moved into the Content-Type `action` parameter automatically. The integration test `soapTargetSystemIsCalledInXmlAndAnsweredInJson` runs exactly this flow.
 
-**Audit and masking.** The audit tables store the JSON form of the request and response, so `gateway.masking.fields` works for XML and SOAP calls too.
+**Audit and masking.** For an XML or SOAP step the audit stores the request and response exactly as they were on the wire, the XML text, so the audit trail shows what the downstream really received and sent back (Studio indents a one-line reply). `gateway.masking.fields` still applies: in XML text an element or attribute whose local name is listed (`<q0:pin>`, `pin="..."`) has its value replaced. Response rules still read the decoded JSON (`$.steps.<name>.body...`).
+
+#### Body template: paste the exact XML (SOAP envelopes with their namespaces)
+
+When a downstream needs an exact document (namespaces and prefixes such as `q0:` / `bo:`, `xsi:type`, attributes), write it out instead of building it from rules: set the step's `body_template` (Studio: select the step → **Body template**) and use `${...}` placeholders for the values:
+
+```xml
+<soapenv:Envelope
+	xmlns:q0="http://service.example.com/core"
+	xmlns:bo="http://service.example.com/core/bo"
+	xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <soapenv:Body>
+        <q0:transaction>
+            <request>
+                <systemId>API</systemId>
+                <content xsi:type="bo:AccountShortInquiryReq">
+                    <accountNum>${request.path.accountNo}</accountNum>
+                    <options>${request.body.option:8}</options>
+                    <amount>${body.amount}</amount>
+                </content>
+            </request>
+        </q0:transaction>
+    </soapenv:Body>
+</soapenv:Envelope>
+```
+
+| Placeholder | Value |
+|---|---|
+| `${request.path.x}`, `${request.query.x}`, `${request.headers.x}`, `${request.body.a.b}` | from the client's request |
+| `${steps.<step>.body.x}` | from an earlier step's result |
+| `${correlationId}` | the request's correlation ID |
+| `${body.x}` | from this step's own BODY rules, so converters, lookups, defaults and field handlers still apply (e.g. BODY `$.amount` ← `$.request.body.amount` with `DECIMAL_SCALE:2`) |
+| `${path:default}` | the default when the value is missing or null (else empty) |
+
+The template is sent exactly as written, with every placeholder filled. Values are escaped for the format: in XML `& < > " '` become entities, so client data can never break the document; in a JSON template (starts with `{` or `[`) values are escaped as inside a JSON string, so write `"${request.body.note}"` for text and `${request.body.amount}` for a number. A placeholder that is not closed, does not start with `request`, `steps`, `correlationId` or `body`, or reads a step that has not run yet is reported on reload. `[*]` is not allowed in a placeholder; use an index (`[0]`).
+
+With a template the BODY rules no longer build the body (they only feed `${body.x}`); HEADER, QUERY and PATH rules apply as usual (e.g. a `SOAPAction` header). The **response** is still decoded by `body_codec` into JSON for the response mapping; an XML template without a `body_codec` defaults to `soapCodec` when it contains an `Envelope`, otherwise `xmlCodec`. The request goes out as `text/xml; charset=UTF-8` (SOAP 1.2: `application/soap+xml`), JSON as `application/json`, anything else as `text/plain`, unless a HEADER rule sets `Content-Type`. The audit trail shows the exact text that was sent and the raw reply; Studio's live preview (Mapping tab) shows it filled from the sample context.
+
+**Examples** (dev profile, `105-dev-demo-body-templates.xml`, stubbed in WireMock; requests in `http/gateway.http`):
+
+| Flow | Shows |
+|---|---|
+| `GET /api/v1/soap/accounts/{accountNo}?option=8` (`SOAP_ACCOUNT_INQUIRY`) | the envelope above with `${request.path.accountNo}` and `${request.query.option:8}`, a `SOAPAction` HEADER rule, the SOAP response mapped back (`DECIMAL_SCALE:2`, lookup `ACCOUNT_STATUS`), `success_expr` on the `responseCode` (unknown account → 422) |
+| `POST /api/v1/soap/transfers` (`SOAP_TRANSFER`) | a JSON request turned into a SOAP envelope with a SOAP Header; `${body.amount}` through `DECIMAL_SCALE:2`, `${correlationId}`, `${request.headers.x-channel:MOBILE}`, a remark with `&` and `<` escaped. The WireMock stub accepts any transfer between two different accounts (`responseCode` 00); the same account on both sides is rejected (51, the flow answers 422) |
+| `POST /api/v1/template/notify` (`TEMPLATE_NOTIFY`) | a JSON template: nested objects, a number `${request.body.amount:0}`, an array `${request.body.recipients:[]}` inserted as JSON |
+
+```bash
+curl -s 'localhost:8080/api/v1/soap/accounts/1001?option=8'
+{"accountNo":"1001","name":"BUDI SANTOSO","currency":"IDR","balance":1500000.50,"status":"ACTIVE"}
+```
 
 ### 4.16 HTTPS downstream: certificates and keys
 

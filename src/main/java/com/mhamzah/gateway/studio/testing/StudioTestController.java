@@ -32,6 +32,7 @@ import org.springframework.web.bind.annotation.RestController;
  * GET  /studio/api/tests/{flow}/cases          cases generated from the flow's operation in the API description
  * POST /studio/api/tests/{flow}/runs  {cases}  runs them against this gateway and returns the evidence (403 view-only)
  * GET  /studio/api/tests/runs/{id}/report?format=md|docx|pdf&amp;audit=true&amp;logs=true   the unit test document
+ * GET  /studio/api/tests/spec?format=md|docx|pdf[&amp;flow=CODE]   the API specification of one flow or of all flows
  * </pre>
  */
 @RestController
@@ -114,6 +115,40 @@ public class StudioTestController {
                 .header(HttpHeaders.CONTENT_TYPE, f.contentType)
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(name).build().toString())
                 .body(bytes);
+    }
+
+    @GetMapping("/spec")
+    public ResponseEntity<Object> spec(@RequestHeader(name = "X-Admin-Token", required = false) String supplied,
+            @RequestParam(required = false) String flow, @RequestParam(defaultValue = "md") String format,
+            jakarta.servlet.http.HttpServletRequest request) {
+        if (!authorized(supplied)) {
+            return UNAUTHORIZED;
+        }
+        ReportRenderers.Format f;
+        try {
+            f = ReportRenderers.Format.valueOf(format.toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("errors", List.of("format must be md, docx or pdf")));
+        }
+        String code = flow == null || flow.isBlank() ? null : flow;
+        List<TestReport.Block> blocks;
+        try {
+            blocks = runner.spec(code, baseUrl(request));
+        } catch (TestRunner.NotLiveException e) {
+            return ResponseEntity.status(409).body(Map.of("errors", List.of(e.getMessage())));
+        }
+        String name = "API_SPEC_" + (code == null ? "ALL" : code) + "_"
+                + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmm")) + "." + f.extension;
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_TYPE, f.contentType)
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(name).build().toString())
+                .body(ReportRenderers.render(blocks, f));
+    }
+
+    /** The address clients use: this request's scheme, host and port (a proxy's when it forwards them). */
+    private static String baseUrl(jakarta.servlet.http.HttpServletRequest request) {
+        return org.springframework.web.servlet.support.ServletUriComponentsBuilder.fromContextPath(request)
+                .replaceQuery(null).build().toUriString();
     }
 
     private boolean authorized(String supplied) {

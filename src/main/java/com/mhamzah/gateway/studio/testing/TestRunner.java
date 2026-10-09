@@ -103,6 +103,24 @@ public class TestRunner {
         return TestCaseGenerator.generate(openApi, flow, properties.apiBasePath());
     }
 
+    /**
+     * The API specification document of one live flow, or of every live flow when {@code flowCode} is null.
+     *
+     * @param baseUrl what clients call, e.g. {@code https://gateway.example.com}
+     */
+    public List<TestReport.Block> spec(String flowCode, String baseUrl) {
+        FlowRegistry registry = holder.current();
+        List<FlowDefinition> flows = flowCode == null
+                ? registry.flows().stream().sorted(java.util.Comparator.comparing(
+                        (FlowDefinition f) -> f.pathPattern().getPatternString()).thenComparing(f -> f.method().name())).toList()
+                : List.of(live(registry, flowCode));
+        JsonNode openApi = OpenApiGenerator.generate(registry, properties.apiBasePath(), properties.docs().title());
+        Map<String, String> names = new java.util.HashMap<>();
+        flows.forEach(f -> names.put(f.code(), flowName(f.code())));
+        return ApiSpec.build(openApi, ApiSpec.endpoints(openApi, flows, names), properties.docs().title(), baseUrl,
+                java.time.ZonedDateTime.now());
+    }
+
     public synchronized TestRun run(String flowCode, List<TestCase> cases) {
         FlowRegistry registry = holder.current();
         FlowDefinition flow = live(registry, flowCode);

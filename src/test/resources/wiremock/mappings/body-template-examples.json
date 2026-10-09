@@ -1,0 +1,143 @@
+{
+  "mappings": [
+    {
+      "priority": 1,
+      "request": {
+        "method": "POST",
+        "url": "/core/soap/account-inquiry",
+        "headers": {
+          "SOAPAction": {
+            "equalTo": "urn:AccountShortInquiry"
+          }
+        },
+        "bodyPatterns": [
+          {
+            "matchesXPath": "//content/accountNum[text()='1001']"
+          },
+          {
+            "matchesXPath": "//systemId[text()='API']"
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "text/xml; charset=UTF-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:q0=\"http://service.example.com/core\"><soapenv:Body><q0:transactionResponse><response><responseCode>00</responseCode><responseMessage>OK</responseMessage><content><accountNum>1001</accountNum><accountName>BUDI SANTOSO</accountName><currency>IDR</currency><availableBalance>1500000.5</availableBalance><accountStatus>A</accountStatus></content></response></q0:transactionResponse></soapenv:Body></soapenv:Envelope>"
+      }
+    },
+    {
+      "priority": 1,
+      "request": {
+        "method": "POST",
+        "url": "/core/soap/account-inquiry",
+        "headers": {
+          "SOAPAction": {
+            "equalTo": "urn:AccountShortInquiry"
+          }
+        },
+        "bodyPatterns": [
+          {
+            "matchesXPath": "//content/accountNum[text()='2002']"
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "text/xml; charset=UTF-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:q0=\"http://service.example.com/core\"><soapenv:Body><q0:transactionResponse><response><responseCode>00</responseCode><responseMessage>OK</responseMessage><content><accountNum>2002</accountNum><accountName>SITI AMINAH</accountName><currency>IDR</currency><availableBalance>250000</availableBalance><accountStatus>B</accountStatus></content></response></q0:transactionResponse></soapenv:Body></soapenv:Envelope>"
+      }
+    },
+    {
+      "priority": 5,
+      "request": {
+        "method": "POST",
+        "url": "/core/soap/account-inquiry"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "text/xml; charset=UTF-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:q0=\"http://service.example.com/core\"><soapenv:Body><q0:transactionResponse><response><responseCode>14</responseCode><responseMessage>Account not found</responseMessage></response></q0:transactionResponse></soapenv:Body></soapenv:Envelope>"
+      }
+    },
+    {
+      "priority": 1,
+      "request": {
+        "method": "POST",
+        "url": "/core/soap/transfer",
+        "headers": {
+          "SOAPAction": {
+            "equalTo": "urn:FundTransfer"
+          }
+        },
+        "bodyPatterns": [
+          {
+            "matchesXPath": "//content[string-length(externalId) > 0 and string-length(debitAccount) > 0 and string-length(creditAccount) > 0 and debitAccount != creditAccount]"
+          },
+          {
+            "matchesXPath": "//content[string-length(substring-after(amount, '.')) = 2 and number(amount) > 0]"
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "text/xml; charset=UTF-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:q0=\"http://service.example.com/core\"><soapenv:Body><q0:transactionResponse><response><responseCode>00</responseCode><responseMessage>Transfer accepted</responseMessage><content><transferId>TRF-20261009-0001</transferId><status>POSTED</status></content></response></q0:transactionResponse></soapenv:Body></soapenv:Envelope>"
+      }
+    },
+    {
+      "priority": 5,
+      "request": {
+        "method": "POST",
+        "url": "/core/soap/transfer"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "text/xml; charset=UTF-8"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:q0=\"http://service.example.com/core\"><soapenv:Body><q0:transactionResponse><response><responseCode>51</responseCode><responseMessage>Transfer rejected</responseMessage></response></q0:transactionResponse></soapenv:Body></soapenv:Envelope>"
+      }
+    },
+    {
+      "priority": 1,
+      "request": {
+        "method": "POST",
+        "url": "/notify/template",
+        "headers": {
+          "Content-Type": {
+            "contains": "application/json"
+          }
+        },
+        "bodyPatterns": [
+          {
+            "matchesJsonPath": "$[?(@.header.channel == 'MOBILE')]"
+          },
+          {
+            "matchesJsonPath": "$.payload[?(@.amount == 150000)]"
+          },
+          {
+            "matchesJsonPath": "$.payload.recipients[0]"
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "status": "SENT",
+          "messageId": "MSG-0001"
+        }
+      }
+    }
+  ]
+}

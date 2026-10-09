@@ -60,7 +60,8 @@ final class StudioRows {
                                         s.pathTemplate(), s.conditionExpr(), s.successExpr(), s.onFailure(),
                                         s.timeoutMs(), s.responseSchemaCode(), s.requestHandler(),
                                         s.responseHandler(), s.bodyCodec(), s.enabled(),
-                                        rules(rulesByStep.getOrDefault(s.id(), List.of())), s.sqlText()))
+                                        rules(rulesByStep.getOrDefault(s.id(), List.of())), s.sqlText(),
+                                        s.bodyTemplate()))
                                 .toList(),
                         rules(responseByFlow.getOrDefault(f.id(), List.of()))))
                 .toList();
@@ -135,7 +136,7 @@ final class StudioRows {
                         sql ? null : text(s.method()), sql ? null : text(s.path()), text(s.condition()),
                         text(s.success()), or(s.onFailure(), "STOP"), s.timeoutMs(), text(s.responseSchema()),
                         text(s.requestHandler()), text(s.responseHandler()), sql ? null : text(s.bodyCodec()),
-                        s.enabled(), sql ? s.sql().strip() : null));
+                        s.enabled(), sql ? s.sql().strip() : null, sql || s.bodyTemplate() == null || s.bodyTemplate().isBlank() ? null : s.bodyTemplate()));
                 addRules(rules, s.rules(), flowId, stepId, STEP_REQUEST);
             }
             addRules(rules, f.response(), flowId, null, FLOW_RESPONSE);

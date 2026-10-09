@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Examples of body templates (gw_flow_step.body_template): the request body written out as XML / a SOAP envelope /
+    JSON with ${...} placeholders, sent exactly as written. Stubs: src/test/resources/wiremock/mappings/
+    body-template-examples.json (they only answer when the placeholders were filled in correctly).
+    Loaded only with Liquibase context "dev".
+
+      GET  /api/v1/soap/accounts/{accountNo}?option=8    1001, 2002: found; anything else: 422 (responseCode 14)
+      POST /api/v1/soap/transfers                        {"fromAccount":"1001","toAccount":"2002","amount":150000,
+                                                           "remark":"Rent &amp; utilities &lt;October&gt;"}            201
+      POST /api/v1/template/notify                       {"account":"1001","amount":150000,"message":"Hi",
+                                                           "recipients":["0812..."]}                     200
+-->
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="105-demo-body-templates" author="json-gateway" context="dev">
+        <!-- 1. GET /v1/soap/accounts/{accountNo}?option=8 : the SOAP envelope as written, values from the path / query -->
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="SOAP_ACCOUNT_INQUIRY"/>
+            <column name="name" value="Account inquiry over SOAP (body template)"/>
+            <column name="http_method" value="GET"/>
+            <column name="path_pattern" value="/v1/soap/accounts/{accountNo}"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SOAP_ACCOUNT_INQUIRY')"/>
+            <column name="name" value="inquiry"/>
+            <column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="CORE_BANKING"/>
+            <column name="http_method" value="POST"/>
+            <column name="path_template" value="/core/soap/account-inquiry"/>
+            <column name="success_expr" value="${steps.inquiry.body.transactionResponse.response.responseCode} == '00'"/>
+            <column name="body_template"><![CDATA[<soapenv:Envelope
+	xmlns:q0="http://service.example.com/core"
+	xmlns:bo="http://service.example.com/core/bo"
+	xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+	xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <soapenv:Body>
+        <q0:transaction>
+            <request>
+                <systemId>API</systemId>
+                <content xsi:type="bo:AccountShortInquiryReq"
+					xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+                    <accountNum>${request.path.accountNo}</accountNum>
+                    <options>${request.query.option:8}</options>
+                </content>
+            </request>
+        </q0:transaction>
+    </soapenv:Body>
+</soapenv:Envelope>]]></column>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SOAP_ACCOUNT_INQUIRY')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'SOAP_ACCOUNT_INQUIRY' AND s.name = 'inquiry')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="HEADER"/><column name="target_path" value="SOAPAction"/>
+            <column name="constant_value" value="&quot;urn:AccountShortInquiry&quot;"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SOAP_ACCOUNT_INQUIRY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.accountNo"/>
+            <column name="source_path" value="$.steps.inquiry.body.transactionResponse.response.content.accountNum"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SOAP_ACCOUNT_INQUIRY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.name"/>
+            <column name="source_path" value="$.steps.inquiry.body.transactionResponse.response.content.accountName"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SOAP_ACCOUNT_INQUIRY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="3"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.currency"/>
+            <column name="source_path" value="$.steps.inquiry.body.transactionResponse.response.content.currency"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SOAP_ACCOUNT_INQUIRY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="4"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.balance"/>
+            <column name="source_path" value="$.steps.inquiry.body.transactionResponse.response.content.availableBalance"/>
+            <column name="converter" value="DECIMAL_SCALE:2"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SOAP_ACCOUNT_INQUIRY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="5"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.status"/>
+            <column name="source_path" value="$.steps.inquiry.body.transactionResponse.response.content.accountStatus"/>
+            <column name="lookup_code" value="ACCOUNT_STATUS"/>
+        </insert>
+
+        <!-- 2. POST /v1/soap/transfers {fromAccount, toAccount, amount, remark}: JSON in, SOAP out; ${body.amount} goes through DECIMAL_SCALE:2 -->
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="SOAP_TRANSFER"/>
+            <column name="name" value="Fund transfer over SOAP (body template)"/>
+            <column name="http_method" value="POST"/>
+            <column name="path_pattern" value="/v1/soap/transfers"/>
+            <column name="success_status" valueNumeric="201"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SOAP_TRANSFER')"/>
+            <column name="name" value="transfer"/>
+            <column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="CORE_BANKING"/>
+            <column name="http_method" value="POST"/>
+            <column name="path_template" value="/core/soap/transfer"/>
+            <column name="success_expr" value="${steps.transfer.body.transactionResponse.response.responseCode} == '00'"/>
+            <column name="body_template"><![CDATA[<soapenv:Envelope
+	xmlns:q0="http://service.example.com/core"
+	xmlns:bo="http://service.example.com/core/bo"
+	xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <soapenv:Header>
+        <q0:channel>${request.headers.x-channel:MOBILE}</q0:channel>
+    </soapenv:Header>
+    <soapenv:Body>
+        <q0:transaction>
+            <request>
+                <systemId>API</systemId>
+                <content xsi:type="bo:FundTransferReq">
+                    <externalId>${correlationId}</externalId>
+                    <debitAccount>${request.body.fromAccount}</debitAccount>
+                    <creditAccount>${request.body.toAccount}</creditAccount>
+                    <amount>${body.amount}</amount>
+                    <currency>IDR</currency>
+                    <remark>${request.body.remark}</remark>
+                </content>
+            </request>
+        </q0:transaction>
+    </soapenv:Body>
+</soapenv:Envelope>]]></column>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SOAP_TRANSFER')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'SOAP_TRANSFER' AND s.name = 'transfer')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="HEADER"/><column name="target_path" value="SOAPAction"/>
+            <column name="constant_value" value="&quot;urn:FundTransfer&quot;"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SOAP_TRANSFER')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'SOAP_TRANSFER' AND s.name = 'transfer')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="2"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.amount"/>
+            <column name="source_path" value="$.request.body.amount"/>
+            <column name="converter" value="DECIMAL_SCALE:2"/>
+            <column name="required" valueBoolean="true"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SOAP_TRANSFER')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.transferId"/>
+            <column name="source_path" value="$.steps.transfer.body.transactionResponse.response.content.transferId"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SOAP_TRANSFER')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.status"/>
+            <column name="source_path" value="$.steps.transfer.body.transactionResponse.response.content.status"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SOAP_TRANSFER')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="3"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.message"/>
+            <column name="source_path" value="$.steps.transfer.body.transactionResponse.response.responseMessage"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SOAP_TRANSFER')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="4"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.reference"/>
+            <column name="source_path" value="$.correlationId"/>
+        </insert>
+
+        <!-- 3. POST /v1/template/notify {account, amount, message, recipients[]}: a JSON body template -->
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="TEMPLATE_NOTIFY"/>
+            <column name="name" value="Notification with a JSON body template"/>
+            <column name="http_method" value="POST"/>
+            <column name="path_pattern" value="/v1/template/notify"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TEMPLATE_NOTIFY')"/>
+            <column name="name" value="notify"/>
+            <column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="NOTIFICATION"/>
+            <column name="http_method" value="POST"/>
+            <column name="path_template" value="/notify/template"/>
+            <column name="body_template"><![CDATA[{
+  "header": {
+    "channel": "${request.headers.x-channel:MOBILE}",
+    "reference": "${correlationId}"
+  },
+  "payload": {
+    "account": "${request.body.account}",
+    "amount": ${request.body.amount:0},
+    "message": "${request.body.message}",
+    "recipients": ${request.body.recipients:[]}
+  }
+}]]></column>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TEMPLATE_NOTIFY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.status"/>
+            <column name="source_path" value="$.steps.notify.body.status"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TEMPLATE_NOTIFY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.messageId"/>
+            <column name="source_path" value="$.steps.notify.body.messageId"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

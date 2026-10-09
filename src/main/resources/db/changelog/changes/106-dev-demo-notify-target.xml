@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    The JSON body template example (TEMPLATE_NOTIFY, 105) calls the NOTIFICATION target system. A database where
+    NOTIFICATION was removed (e.g. in Studio > Target systems) would refuse that flow, and the gateway would not start;
+    point the example at CORE_BANKING instead (both are WireMock on :8089 in dev, which has the stub).
+    Runs only when there is no NOTIFICATION target. Liquibase context "dev".
+-->
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="106-demo-notify-target-fallback" author="json-gateway" context="dev">
+        <preConditions onFail="MARK_RAN">
+            <sqlCheck expectedResult="0">SELECT COUNT(*) FROM ${tbl.target_system} WHERE code = 'NOTIFICATION'</sqlCheck>
+            <sqlCheck expectedResult="1">SELECT COUNT(*) FROM ${tbl.target_system} WHERE code = 'CORE_BANKING'</sqlCheck>
+        </preConditions>
+        <update tableName="${tbl.flow_step}">
+            <column name="target_system" value="CORE_BANKING"/>
+            <where>target_system = 'NOTIFICATION' AND name = 'notify'
+                AND flow_id = (SELECT id FROM ${tbl.flow} WHERE code = 'TEMPLATE_NOTIFY')</where>
+        </update>
+    </changeSet>
+</databaseChangeLog>

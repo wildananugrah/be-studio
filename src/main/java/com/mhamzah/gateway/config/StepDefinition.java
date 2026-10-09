@@ -3,6 +3,7 @@ package com.mhamzah.gateway.config;
 import com.mhamzah.gateway.condition.Condition;
 import com.mhamzah.gateway.extension.BodyCodec;
 import com.mhamzah.gateway.extension.MessageHandler;
+import com.mhamzah.gateway.mapping.BodyTemplate;
 import com.mhamzah.gateway.mapping.CompiledRule;
 import com.mhamzah.gateway.schema.CompiledSchema;
 import com.mhamzah.gateway.sql.SqlStatement;
@@ -36,7 +37,8 @@ public record StepDefinition(
         String bodyCodecName,
         List<CompiledRule> requestRules,
         SqlStatement sql,
-        FileStore fileStore) {
+        FileStore fileStore,
+        BodyTemplate bodyTemplate) {
 
     public StepDefinition {
         requestRules = List.copyOf(requestRules);

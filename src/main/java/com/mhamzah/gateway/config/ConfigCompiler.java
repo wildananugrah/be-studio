@@ -14,6 +14,7 @@ import com.mhamzah.gateway.extension.DefaultErrorHandler;
 import com.mhamzah.gateway.extension.ErrorHandler;
 import com.mhamzah.gateway.extension.FieldHandler;
 import com.mhamzah.gateway.extension.MessageHandler;
+import com.mhamzah.gateway.mapping.BodyTemplate;
 import com.mhamzah.gateway.mapping.CompiledRule;
 import com.mhamzah.gateway.mapping.Converters;
 import com.mhamzah.gateway.mapping.JsonPath;
@@ -571,6 +572,15 @@ public class ConfigCompiler {
             CompiledSchema responseSchema = schema(s.responseSchemaCode(), where, "response_schema_code");
             MessageHandler requestHandler = handler(s.requestHandler(), MessageHandler.class, where, "request_handler");
             MessageHandler responseHandler = handler(s.responseHandler(), MessageHandler.class, where, "response_handler");
+            BodyTemplate template = null;
+            if (s.bodyTemplate() != null && !s.bodyTemplate().isBlank()) {
+                try {
+                    template = BodyTemplate.parse(s.bodyTemplate());
+                    template.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), null, where + " body_template"));
+                } catch (IllegalArgumentException e) {
+                    errors.add(where + ": body_template: " + e.getMessage());
+                }
+            }
             String codecName = JsonCodec.BEAN_NAME;
             BodyCodec codec = JsonCodec.INSTANCE;
             if (s.bodyCodec() != null && !s.bodyCodec().isBlank()) {
@@ -579,6 +589,11 @@ public class ConfigCompiler {
             } else if (target != null && target.bodyCodec() != null && !target.bodyCodec().isBlank()) {
                 codecName = target.bodyCodec();
                 codec = targetCodecs.get(s.targetSystem()); // null when invalid, already reported for the target
+            } else if (template != null && template.kind() == BodyTemplate.Kind.XML) {
+                // an XML template expects XML back: a SOAP envelope (decoded to its Body) or plain XML
+                codecName = s.bodyTemplate().contains(":Envelope") || s.bodyTemplate().contains("<Envelope")
+                        ? "soapCodec" : "xmlCodec";
+                codec = codec(codecName, where, "body_codec (default for an XML body_template)");
             }
 
             List<CompiledRule> rules = new ArrayList<>();
@@ -602,7 +617,7 @@ public class ConfigCompiler {
             }
             return new StepDefinition(s.name(), s.stepOrder(), s.targetSystem(), target, method, s.pathTemplate(),
                     condition, success, onFailure, timeout, responseSchema, requestHandler, responseHandler, codec, codecName,
-                    rules, null, null);
+                    rules, null, null, template);
         }
 
         /**
@@ -671,7 +686,7 @@ public class ConfigCompiler {
             }
             return new StepDefinition(s.name(), s.stepOrder(), s.targetSystem(), null, method, s.pathTemplate(),
                     condition, success, onFailure, timeout, responseSchema, requestHandler, responseHandler,
-                    JsonCodec.INSTANCE, JsonCodec.BEAN_NAME, rules, null, store);
+                    JsonCodec.INSTANCE, JsonCodec.BEAN_NAME, rules, null, store, null);
         }
 
         /**
@@ -734,7 +749,7 @@ public class ConfigCompiler {
             }
             return new StepDefinition(s.name(), s.stepOrder(), s.targetSystem(), null, null, null, condition, success,
                     onFailure, timeout, responseSchema, requestHandler, responseHandler, JsonCodec.INSTANCE,
-                    JsonCodec.BEAN_NAME, rules, new SqlStatement(sql, ds, sqlDatasources.maxRows()), null);
+                    JsonCodec.BEAN_NAME, rules, new SqlStatement(sql, ds, sqlDatasources.maxRows()), null, null);
         }
 
         private CompiledRule rule(RuleRow r, String where, Set<TargetType> allowedTargets, String phase) {

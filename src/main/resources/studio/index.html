@@ -35,7 +35,7 @@ input[type=search]::-webkit-search-cancel-button,input[type=search]::-webkit-sea
 .hscroll{overflow-x:auto;overflow-y:hidden;white-space:nowrap;text-overflow:clip}
 /* gateway.studio.mode=view-only: editing controls hidden or frozen (the server refuses saves anyway) */
 .ro .ro-hide,.ro .del,.ro .btn-del{display:none!important}
-.ro input:not(.ro-ok),.ro textarea:not(.ro-ok),.ro select:not(.ro-ok),.ro .tgl{pointer-events:none}
+.ro input:not(.ro-ok),.ro textarea:not(.ro-ok),.ro select:not(.ro-ok),.ro .tgl:not(.ro-ok){pointer-events:none}
 .ro input:not(.ro-ok),.ro textarea:not(.ro-ok),.ro select:not(.ro-ok){background:#F4F3EF!important}
 .ro [draggable=true]{cursor:default!important}
 /* SQL editor: the highlighted copy must keep the textarea's glyph widths, so no bold there */

@@ -37,6 +37,21 @@ class MaskerTest {
     }
 
     @Test
+    void masksXmlTextByElementAndAttributeName() {
+        String xml = "<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"urn:s\"><s:Body><q0:auth pin=\"9999\">"
+                + "<q0:PIN>1234</q0:PIN><cardNo type=\"visa\">4111</cardNo><name>Budi</name></q0:auth></s:Body></s:Envelope>";
+        assertThat(masker.mask(tools.jackson.databind.node.StringNode.valueOf(xml)).asString()).isEqualTo(
+                "<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"urn:s\"><s:Body><q0:auth pin=\"****\">"
+                + "<q0:PIN>****</q0:PIN><cardNo type=\"visa\">****</cardNo><name>Budi</name></q0:auth></s:Body></s:Envelope>");
+    }
+
+    @Test
+    void masksJsonTextAndLeavesOtherTextAlone() {
+        assertThat(masker.maskText("{\"pin\":\"1234\",\"a\":1}")).isEqualTo("{\"pin\":\"****\",\"a\":1}");
+        assertThat(masker.maskText("pin=1234")).isEqualTo("pin=1234");
+    }
+
+    @Test
     void nullIsSafe() {
         assertThat(masker.mask(null)).isNull();
     }

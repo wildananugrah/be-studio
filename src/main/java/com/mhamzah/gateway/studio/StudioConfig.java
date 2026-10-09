@@ -100,7 +100,8 @@ public record StudioConfig(
             String bodyCodec,
             Boolean enabled,
             List<Rule> rules,
-            String sql) {
+            String sql,
+            String bodyTemplate) {
 
         public Step {
             enabled = enabled == null || enabled;
@@ -112,7 +113,7 @@ public record StudioConfig(
                 String success, String onFailure, Integer timeoutMs, String responseSchema, String requestHandler,
                 String responseHandler, String bodyCodec, Boolean enabled, List<Rule> rules) {
             this(name, order, targetSystem, method, path, condition, success, onFailure, timeoutMs, responseSchema,
-                    requestHandler, responseHandler, bodyCodec, enabled, rules, null);
+                    requestHandler, responseHandler, bodyCodec, enabled, rules, null, null);
         }
     }
 

@@ -16,6 +16,7 @@ import com.mhamzah.gateway.invoke.DownstreamException;
 import com.mhamzah.gateway.invoke.DownstreamRequest;
 import com.mhamzah.gateway.invoke.DownstreamResponse;
 import com.mhamzah.gateway.invoke.TlsContexts;
+import com.mhamzah.gateway.mapping.BodyTemplate;
 import com.mhamzah.gateway.mapping.MappedMessage;
 import com.mhamzah.gateway.mapping.MappingEngine;
 import com.mhamzah.gateway.storage.FileStore;
@@ -107,9 +108,19 @@ final class StepRunner {
         JsonNode body = sendsBody(step.method(), request.body()) ? request.body() : null;
         a.requestPayload = body;
         String wireBody = null;
-        if (body != null) {
+        if (step.bodyTemplate() != null && step.method() != HttpMethod.GET) {
+            // written out by the developer: sent as is (placeholders filled), not built from the BODY rules
+            wireBody = withStep(step, () -> step.bodyTemplate().render(ctx, request.body()));
+            a.requestPayload = F.stringNode(wireBody);
+            request.headers().putIfAbsent("Content-Type", step.bodyTemplate().kind() == BodyTemplate.Kind.XML
+                    && codec instanceof com.mhamzah.gateway.codec.SoapCodec soap ? soap.contentType()
+                    : step.bodyTemplate().kind().contentType());
+        } else if (body != null) {
             wireBody = encode(step, body, request.headers(), ctx);
             request.headers().putIfAbsent("Content-Type", codec.contentType());
+            if (codec != JsonCodec.INSTANCE) {
+                a.wireRequest = wireBody; // the audit shows the XML / SOAP that went out, not the JSON it came from
+            }
         }
         request.headers().putIfAbsent("Accept", codec.accept());
         Map<String, String> outHeaders = new LinkedHashMap<>(request.headers());
@@ -139,6 +150,9 @@ final class StepRunner {
             a.finishCall();
         }
         a.status = resp.status();
+        if (codec != JsonCodec.INSTANCE && resp.body() != null && !resp.body().isEmpty()) {
+            a.wireResponse = resp.body(); // likewise the XML / SOAP that came back, not the JSON it was decoded to
+        }
         Decoded decoded = decode(codec, resp);
         JsonNode respBody = decoded.body();
         a.headers = resp.headers();
@@ -444,6 +458,9 @@ final class StepRunner {
         Map<String, String> headers = Map.of();
         JsonNode requestPayload;
         JsonNode responsePayload;
+        /** The body as it was on the wire, for the audit, when the step's codec is not JSON. */
+        String wireRequest;
+        String wireResponse;
 
         Attempt(StepDefinition step) {
             this.step = step;
@@ -475,7 +492,8 @@ final class StepRunner {
             log.info("step={} target={} {} {} status={} outcome={} {}ms", step.name(), step.targetSystemName(),
                     step.methodName(), url, status, outcome, durationMs);
             StepRecord record = new StepRecord(step.name(), step.targetSystemName(), step.methodName(), url,
-                    status, outcome, requestPayload, responsePayload, startedAt, durationMs);
+                    status, outcome, wireRequest != null ? F.stringNode(wireRequest) : requestPayload,
+                    wireResponse != null ? F.stringNode(wireResponse) : responsePayload, startedAt, durationMs);
             return new StepOutcome(step, error, record);
         }
     }

@@ -173,6 +173,9 @@ public final class OpenApiGenerator {
             conditions.add(s.success());
         }
         rules.stream().filter(r -> r.source() != null).forEach(r -> read(in, r.source(), r.required()));
+        // a body template's ${request...} placeholders read the request too
+        flow.allSteps().stream().filter(s -> s.bodyTemplate() != null)
+                .forEach(s -> s.bodyTemplate().references().forEach(p -> read(in, p, false)));
         conditions.stream().filter(c -> c != null).forEach(c -> c.references().forEach(p -> read(in, p, false)));
         return in;
     }
