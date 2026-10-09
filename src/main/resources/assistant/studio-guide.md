@@ -6,6 +6,7 @@ Gateway Studio is the browser UI of the JSON gateway for configuring flows, targ
 
 1. Enable it: `gateway.studio.enabled: true` in `application.yml` (env `GATEWAY_STUDIO_ENABLED=true`). The `dev` profile (`make run`) turns it on. When off, `/studio` and `/studio/api/*` return 404. Keep it off in production: it writes straight to the config tables.
 2. Open `http://localhost:8080/studio` (port from `make run`, `APP_PORT`).
+   `gateway.studio.mode` (env `GATEWAY_STUDIO_MODE`): `edit` (default) or `view-only`. View-only shows a **VIEW ONLY** badge instead of **Save & reload**; the palette and every add/delete control are hidden, fields cannot be changed, and unit-test runs are disabled (the server refuses saves and runs with 403). Browsing, mapping previews, generating test cases, the Rows (SQL) tab and the assistant still work.
 3. Enter the admin token (`gateway.admin.token`, env `GATEWAY_ADMIN_TOKEN`; `make run` uses `dev-admin-token`) and click **Open studio**. The token is kept only in that browser tab (sessionStorage). A rejected token sends you back to this screen.
 
 ## The header (always visible)
@@ -117,9 +118,20 @@ Cards per `lookup_code` (`gw_lookup_entry`): SOURCE_VALUE → TARGET_VALUE rows,
 
 Cards per JSON schema (`gw_json_schema`, draft 2020-12): code (rename updates references), "used by …", description, schema text, **Format**, **Generate from example JSON…** (paste an example; every non-null field becomes required, types from the values), **Delete schema**. **+ New schema** adds a template. An invalid schema shows the server's meta-schema error on the card and blocks saving. Invalid inbound body → 400 `GW-400-SCHEMA`; invalid client response → 500.
 
+## Audit trail screen
+
+Menu **Audit trail** (also **Audit trail →** in a flow's header, pre-filtered to that flow). Read-only, also in view-only mode. Shows `gw_audit_transaction` rows, newest first, 50 per page (**← Newer** / **Older →**).
+- Filters: flow, status (2xx / 4xx / 5xx / All errors), search (exact correlation ID, or part of the path or error code), **from** / **to** time (server time zone), **Refresh**, **auto-refresh 5s**.
+- Each row: client status, method, path, duration, start time, flow code, error code, correlation ID.
+- Click a row for its timeline: **1 · Client → gateway** (request body), one block per step (`gw_audit_step`): outcome (SUCCESS / FAILED / TIMEOUT / SKIPPED), downstream HTTP status, target, duration, method + URL, **Sent (after mapping)** = the body the step's STEP_REQUEST rules produced, **Received** = the downstream answer; then **Gateway → client** (status + response body) and **Logs** (every log line with that correlation ID). **Open flow X →** jumps to the flow; **copy** copies the correlation ID.
+- Use it to verify a flow: compare "Sent (after mapping)" with what the downstream expects, and the client response with the mapping rules.
+- Calls appear only when audited: `gateway.audit.enabled=true` with audit_mode INHERIT, or audit_mode ON. Payloads need `gateway.audit.store-payloads=true` (masked with `gateway.masking.fields`). Logs are kept in memory per correlation ID on this instance (`gateway.studio.log-buffer.max-transactions` 2000, `max-lines` 300), so older calls or calls from another instance show no logs: search the log output for the correlation ID.
+- Unit test runs (Tests tab) are audited too: search their `UT-…` correlation IDs.
+
 ## Common tasks
 
 - **Add a new endpoint**: Flows → + New flow → set Code/Name in the inspector → click Inbound and set Method/Path → drag "Call TARGET" onto the pipeline → select the step, set Path and Method → Edit request mapping (drag context fields; a PATH rule for every `{var}`) → Client response → Edit response mapping → Save & reload → Tests tab → Generate → Run.
+- **Check that a flow transforms correctly**: call it (Tests tab, `make demo`, curl), open **Audit trail** (or the flow's **Audit trail →**), click the call, and compare each step's **Sent (after mapping)** and the **Gateway → client** body with what you expect; the **Logs** show the steps' status and timing.
 - **Point a downstream system at a new IP/port**: Target systems → edit BASE_URL → Save & reload.
 - **Call a downstream over HTTPS with a private CA or client certificate**: Target systems → BASE_URL `https://…` → TLS: CUSTOM → trust store path (e.g. `/etc/gateway/tls/ca.pem`) and/or key store (e.g. `/etc/gateway/tls/client.p12` + password `${CLIENT_P12_PASSWORD}`) → Save & reload. For a dev server with a self-signed certificate: TLS: INSECURE.
 - **Map downstream error codes**: Lookups → add rows to e.g. `CORE_BANKING_ERRORS` (`51` → `{"status":422,"errorCode":"INSUFFICIENT_FUNDS","errorMessage":"..."}`) → set the flow's error handler (On failure card) → Save & reload.

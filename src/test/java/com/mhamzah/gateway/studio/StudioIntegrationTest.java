@@ -256,4 +256,44 @@ class StudioIntegrationTest {
                 .startsWith("%PDF");
         assertThat(call("GET", "/studio/api/tests/runs/" + id + "/report?format=pdf", null, null).status()).isEqualTo(401);
     }
+
+    @Test
+    void auditTrailShowsEachCallWithStepsPayloadsAndLogs() throws Exception {
+        String id = "AUDIT-TRAIL-" + System.nanoTime();
+        HttpResponse<String> ok = HTTP.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v1/accounts/1001"))
+                .header("X-Correlation-Id", id).build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(ok.statusCode()).isEqualTo(200);
+        HTTP.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v1/accounts/9999"))
+                .header("X-Correlation-Id", id + "-ERR").build(), HttpResponse.BodyHandlers.ofString());
+
+        // the audit writer is asynchronous
+        JsonNode list = null;
+        for (int i = 0; i < 50; i++) {
+            list = call("GET", "/studio/api/audit?q=" + id, "studio-token", null).json();
+            if (list.get("totalElements").asLong() > 0) {
+                break;
+            }
+            Thread.sleep(100);
+        }
+        assertThat(list.get("content").get(0).get("flow_code").asString()).isEqualTo("ACCOUNT_INQUIRY");
+        assertThat(list.get("content").get(0).get("client_status").asInt()).isEqualTo(200);
+        assertThat(list.get("content").get(0).has("request_payload")).isFalse();
+
+        JsonNode detail = call("GET", "/studio/api/audit/" + id, "studio-token", null).json();
+        assertThat(detail.get("transaction").get("response_payload").asString()).contains("BUDI SANTOSO");
+        assertThat(detail.get("steps").get(0).get("step_name").asString()).isEqualTo("inquiry");
+        assertThat(detail.get("steps").get(0).get("url").asString()).contains("/core/accounts/1001");
+        assertThat(detail.get("steps").get(0).get("response_payload").asString()).contains("acctNo");
+        assertThat(detail.get("logs").toString()).contains("step=inquiry", "flow=ACCOUNT_INQUIRY");
+
+        for (int i = 0; i < 50 && call("GET", "/studio/api/audit/" + id + "-ERR", "studio-token", null).status() != 200; i++) {
+            Thread.sleep(100);
+        }
+        JsonNode errors = call("GET", "/studio/api/audit?status=errors&flow=ACCOUNT_INQUIRY", "studio-token", null).json();
+        assertThat(errors.get("content").toString()).contains(id + "-ERR").doesNotContain("\"" + id + "\"");
+        assertThat(call("GET", "/studio/api/audit?status=nope", "studio-token", null).status()).isEqualTo(400);
+        assertThat(call("GET", "/studio/api/audit/does-not-exist", "studio-token", null).status()).isEqualTo(404);
+        assertThat(call("GET", "/studio/api/audit", null, null).status()).isEqualTo(401);
+        assertThat(call("GET", "/studio/api/audit/status", "studio-token", null).json().get("auditEnabled").asBoolean()).isTrue();
+    }
 }

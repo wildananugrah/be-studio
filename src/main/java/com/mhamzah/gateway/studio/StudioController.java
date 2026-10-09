@@ -32,6 +32,7 @@ import tools.jackson.databind.JsonNode;
  * POST /studio/api/validate  {config}                          -> {errors: [...]}
  * POST /studio/api/preview   {config, flow, step, sample}       -> per-rule results and the mapped message
  * PUT  /studio/api/config    {baseVersion, config}             -> 200 saved and reloaded | 409 | 422
+ *                                                              | 403 when gateway.studio.mode=view-only
  * </pre>
  */
 @RestController
@@ -43,12 +44,16 @@ public class StudioController {
     private static final Logger log = LoggerFactory.getLogger(StudioController.class);
     private static final ResponseEntity<Object> UNAUTHORIZED =
             ResponseEntity.status(401).body(Map.of("errors", List.of("unauthorized")));
+    static final ResponseEntity<Object> VIEW_ONLY = ResponseEntity.status(403).body(Map.of("errors",
+            List.of("Gateway Studio is view-only (gateway.studio.mode=view-only): changes cannot be saved here")));
 
     private final StudioService studio;
     private final byte[] token;
+    private final boolean viewOnly;
 
     public StudioController(StudioService studio, GatewayProperties properties) {
         this.studio = studio;
+        this.viewOnly = properties.studio().viewOnly();
         String configured = properties.admin().token();
         this.token = configured == null || configured.isBlank() ? null : configured.getBytes(StandardCharsets.UTF_8);
     }
@@ -87,6 +92,9 @@ public class StudioController {
             @RequestBody SaveRequest request) {
         if (!authorized(supplied)) {
             return UNAUTHORIZED;
+        }
+        if (viewOnly) {
+            return VIEW_ONLY;
         }
         try {
             return switch (studio.save(request.config(), request.baseVersion())) {

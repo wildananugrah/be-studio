@@ -166,8 +166,8 @@ function flowSql(f, lookupsUsed) {
 const chipView = ch => html`
   <div style="display:flex;align-items:center;gap:6px;padding:4px 4px 4px 8px;border-radius:5px;background:#F4F3EF;font:11px ${MONO}">
     <span style=${`width:6px;height:6px;border-radius:50%;background:${ch.color};flex:none`}></span>
-    <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title=${ch.label}>${ch.label}</span>
-    <button class="x" onClick=${ch.onRemove} style="border:0;background:none;color:#9A9CA2;cursor:pointer;padding:0 3px;font-size:13px;line-height:1">×</button>
+    <span class="hscroll" style="flex:1;min-width:0" title=${ch.label}>${ch.label}</span>
+    <button class="x ro-hide" onClick=${ch.onRemove} style="border:0;background:none;color:#9A9CA2;cursor:pointer;padding:0 3px;font-size:13px;line-height:1">×</button>
   </div>`;
 const zoneOverlay = (z, color, label) => html`
   ${z.active && html`<div style=${`position:absolute;inset:-5px;border:1.5px dashed ${color};border-radius:12px;background:color-mix(in oklch, ${color} 5%, transparent);pointer-events:none`}></div>`}
@@ -175,7 +175,7 @@ const zoneOverlay = (z, color, label) => html`
 const zoneProps = z => ({ onDragOver: z.onDragOver, onDragLeave: z.onDragLeave, onDrop: z.onDrop });
 const connector = html`<div style="width:26px;height:1px;background:#ADA99E;margin-top:38px;flex:none"></div>`;
 const toggle = (on, onClick, w = 38, h = 22) => html`
-  <button onClick=${onClick} title=${on ? 'enabled' : 'disabled'} style=${`width:${w}px;height:${h}px;flex:none;border:0;border-radius:${h / 2}px;background:${on ? 'oklch(0.62 0.13 155)' : '#D3D0C7'};position:relative;cursor:pointer;padding:0`}>
+  <button class="tgl" onClick=${onClick} title=${on ? 'enabled' : 'disabled'} style=${`width:${w}px;height:${h}px;flex:none;border:0;border-radius:${h / 2}px;background:${on ? 'oklch(0.62 0.13 155)' : '#D3D0C7'};position:relative;cursor:pointer;padding:0`}>
     <span style=${`position:absolute;top:3px;left:${on ? w - h + 3 : 3}px;width:${h - 6}px;height:${h - 6}px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2)`}></span>
   </button>`;
 const errList = errs => errs.length > 0 && html`<div style="display:flex;flex-direction:column;gap:3px">${errs.map(e => html`<div style=${`font:11px/1.45 ${MONO};color:oklch(0.5 0.18 25)`}>${e}</div>`)}</div>`;
@@ -185,7 +185,7 @@ const pageHead = (title, desc, btnLabel, onBtn) => html`
       <div style="font-size:22px;font-weight:600;letter-spacing:-0.02em">${title}</div>
       <div style="margin-top:4px;font-size:12.5px;color:#6A6D75;line-height:1.45">${desc}</div>
     </div>
-    ${btnLabel && html`<button class="btn-dark" onClick=${onBtn} style="border:0;background:#17181C;color:#fff;border-radius:7px;padding:9px 14px;cursor:pointer;font-weight:500">${btnLabel}</button>`}
+    ${btnLabel && html`<button class="btn-dark ro-hide" onClick=${onBtn} style="border:0;background:#17181C;color:#fff;border-radius:7px;padding:9px 14px;cursor:pointer;font-weight:500">${btnLabel}</button>`}
   </div>`;
 const inputStyle = (h = 32, size = 12) => `height:${h}px;border:1px solid #E4E1D8;border-radius:6px;padding:0 9px;font:${size}px ${MONO};background:#FAF9F6;width:100%;min-width:0`;
 const label10 = t => html`<span style=${`font:10px ${MONO};letter-spacing:.06em;color:#9A9CA2`}>${t}</span>`;
@@ -257,6 +257,16 @@ class App extends Component {
 
   componentDidMount() {
     if (this.state.token) this.load();
+    // a vertical mouse wheel over a field whose text overflows scrolls it sideways (scrollbars are hidden);
+    // at either end the page scrolls as usual
+    document.addEventListener('wheel', e => {
+      if (e.shiftKey || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      const el = e.target.closest && e.target.closest('.hscroll, input:not([type=checkbox]):not([type=password])');
+      if (!el || el.scrollWidth <= el.clientWidth + 1) return;
+      const before = el.scrollLeft;
+      el.scrollLeft += e.deltaY;
+      if (el.scrollLeft !== before) e.preventDefault();
+    }, { passive: false });
     window.addEventListener('beforeunload', e => { if (this.dirty()) { e.preventDefault(); e.returnValue = ''; } });
   }
 
@@ -331,10 +341,13 @@ class App extends Component {
   }
 
   // ---------- state ops ----------
-  mut(fn) { this.setState(s => { const cfg = clone(s.cfg); const extra = fn(cfg.flows[s.cur], s, cfg) || {}; return { cfg, ...extra }; }, () => this.changed()); }
-  mutCfg(fn) { this.setState(s => { const cfg = clone(s.cfg); fn(cfg, s); return { cfg }; }, () => this.changed()); }
+  /** gateway.studio.mode=view-only: nothing can change (the server refuses saves and test runs too). */
+  get ro() { return !!(this.state.catalog && this.state.catalog.studioMode === 'view-only'); }
+  // view-only: re-render so a field the user typed into shows the real (unchanged) value again
+  mut(fn) { if (this.ro) { this.forceUpdate(); return; } this.setState(s => { const cfg = clone(s.cfg); const extra = fn(cfg.flows[s.cur], s, cfg) || {}; return { cfg, ...extra }; }, () => this.changed()); }
+  mutCfg(fn) { if (this.ro) { this.forceUpdate(); return; } this.setState(s => { const cfg = clone(s.cfg); fn(cfg, s); return { cfg }; }, () => this.changed()); }
   norm(f) { const os = [...new Set(f.steps.map(x => x.order))].sort((a, b) => a - b); f.steps.forEach(x => { x.order = os.indexOf(x.order) + 1; }); }
-  ds(payload) { return e => { e.dataTransfer.effectAllowed = 'copyMove'; try { e.dataTransfer.setData('text/plain', payload.kind); } catch (_) { /* ignore */ } setTimeout(() => this.setState({ drag: payload, over: null }), 0); }; }
+  ds(payload) { if (this.ro) return e => e.preventDefault(); return e => { e.dataTransfer.effectAllowed = 'copyMove'; try { e.dataTransfer.setData('text/plain', payload.kind); } catch (_) { /* ignore */ } setTimeout(() => this.setState({ drag: payload, over: null }), 0); }; }
   dragEnd = () => this.setState({ drag: null, over: null });
   zone(id, accepts, onDrop) {
     const d = this.state.drag; const active = !!d && accepts(d); const over = active && this.state.over === id;
@@ -433,13 +446,14 @@ class App extends Component {
     if (s.phase === 'loading' || !s.cfg) return html`<div style="height:100vh;display:grid;place-items:center;color:#6A6D75">Loading configuration…</div>`;
     const f = s.screen === 'flow' ? s.cfg.flows[s.cur] : null;
     return html`
-      <div style="height:100vh;display:flex;flex-direction:column;background:#F4F3EF;overflow:hidden">
+      <div class=${this.ro ? 'ro' : ''} style="height:100vh;display:flex;flex-direction:column;background:#F4F3EF;overflow:hidden">
         ${this.renderHeader()}
         ${f && this.renderFlow(f)}
         ${s.screen === 'flows' && this.renderFlows()}
         ${s.screen === 'targets' && this.renderTargets()}
         ${s.screen === 'lookups' && this.renderLookups()}
         ${s.screen === 'schemas' && this.renderSchemas()}
+        ${s.screen === 'audit' && this.renderAudit()}
         ${s.toast && this.renderToast()}
         ${s.catalog.assistantEnabled && s.assistant && s.assistant.open && this.renderAssistant()}
       </div>`;
@@ -465,9 +479,9 @@ class App extends Component {
 
   renderHeader() {
     const s = this.state; const dirty = this.dirty();
-    const nav = [['Flows', 'flows'], ['Target systems', 'targets'], ['Lookups', 'lookups'], ['Schemas', 'schemas']].map(([label, k]) => {
+    const nav = [['Flows', 'flows'], ['Target systems', 'targets'], ['Lookups', 'lookups'], ['Schemas', 'schemas'], ['Audit trail', 'audit']].map(([label, k]) => {
       const on = s.screen === k || (k === 'flows' && s.screen === 'flow');
-      return html`<button onClick=${() => this.setState({ screen: k })} style=${`border:0;background:${on ? '#2B2D33' : 'transparent'};color:${on ? '#FFFFFF' : '#A4A6AC'};padding:6px 11px;border-radius:6px;cursor:pointer;font-weight:500`}>${label}</button>`;
+      return html`<button onClick=${() => this.setState({ screen: k }, () => { if (k === 'audit') this.loadAudit(); })} style=${`border:0;background:${on ? '#2B2D33' : 'transparent'};color:${on ? '#FFFFFF' : '#A4A6AC'};padding:6px 11px;border-radius:6px;cursor:pointer;font-weight:500`}>${label}</button>`;
     });
     const n = s.problems.length;
     return html`
@@ -478,11 +492,12 @@ class App extends Component {
         </div>
         <nav style="display:flex;gap:2px">${nav}</nav>
         <div style="flex:1"></div>
+        ${this.ro && html`<span title="gateway.studio.mode=view-only: browse only; saving and test runs are disabled" style=${`font:600 11px ${MONO};letter-spacing:.06em;color:#17181C;background:oklch(0.85 0.1 85);padding:4px 9px;border-radius:6px`}>VIEW ONLY</span>`}
         ${dirty && html`<span style=${`font:12px ${MONO};color:oklch(0.8 0.12 75)`}>unsaved changes</span>`}
         ${dirty && html`<button onClick=${() => this.discard()} style="border:1px solid #3A3C43;background:none;color:#C9CBD1;padding:6px 11px;border-radius:7px;cursor:pointer">${s.discardArm ? 'Click again to discard' : 'Discard'}</button>`}
         <div style=${`font:12px ${MONO};color:#8E9097`}>${location.host}</div>
         ${s.catalog.assistantEnabled && html`<button onClick=${() => this.toggleAssistant()} title="Ask the project assistant" style=${`display:flex;align-items:center;gap:7px;border:1px solid #3A3C43;background:${s.assistant && s.assistant.open ? '#2B2D33' : 'none'};color:#E9E7E1;padding:6px 11px;border-radius:7px;cursor:pointer;font-weight:500`}><span style=${`font:600 11px ${MONO};color:${C.call}`}>?</span>Ask</button>`}
-        <button class="btn-acc" disabled=${s.saving} onClick=${() => this.save()} title=${n ? n + ' problem(s): the save would be rejected' : 'Write to the database and reload'} style=${`display:flex;align-items:center;gap:8px;border:0;background:${C.call};color:#17181C;padding:7px 12px;border-radius:7px;cursor:pointer;font-weight:600`}>
+        <button class="btn-acc ro-hide" disabled=${s.saving} onClick=${() => this.save()} title=${n ? n + ' problem(s): the save would be rejected' : 'Write to the database and reload'} style=${`display:flex;align-items:center;gap:8px;border:0;background:${C.call};color:#17181C;padding:7px 12px;border-radius:7px;cursor:pointer;font-weight:600`}>
           ${s.saving ? 'Saving…' : 'Save & reload'}
           ${n > 0 && html`<span style=${`font:600 10px ${MONO};background:#17181C;color:#fff;border-radius:9px;padding:2px 6px`}>${n}</span>`}
         </button>
@@ -597,7 +612,7 @@ class App extends Component {
                       <input class="inp" value=${h.v} onInput=${e => { const v = val(e); T(i, x => { x.headers[j].v = v; }); }} placeholder="\${API_KEY}" style=${inputStyle(28, 11.5) + ';flex:1'}/>
                       <button class="del" onClick=${() => T(i, x => { x.headers.splice(j, 1); })} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:14px;padding:0 4px">×</button>
                     </div>`)}
-                  <button onClick=${() => T(i, x => { x.headers.push({ n: '', v: '' }); })} style="align-self:flex-start;border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">+ Header</button>
+                  <button class="ro-hide" onClick=${() => T(i, x => { x.headers.push({ n: '', v: '' }); })} style="align-self:flex-start;border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">+ Header</button>
                 </div>
                 ${errList(errs)}
                 <div style="display:flex;justify-content:flex-end">
@@ -692,14 +707,174 @@ class App extends Component {
                     </div>`)}
                 </div>
                 <div style="display:flex;gap:6px">
-                  <button onClick=${() => upd(code, x => { const star = x.findIndex(r => r.src === '*'); const row = { src: '', tgt: '' }; if (star >= 0) x.splice(star, 0, row); else x.push(row); })} style="border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">+ Row</button>
-                  ${!rows.some(r => r.src === '*') && html`<button onClick=${() => upd(code, x => { x.push({ src: '*', tgt: 'UNKNOWN' }); })} style="border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">+ Fallback *</button>`}
+                  <button class="ro-hide" onClick=${() => upd(code, x => { const star = x.findIndex(r => r.src === '*'); const row = { src: '', tgt: '' }; if (star >= 0) x.splice(star, 0, row); else x.push(row); })} style="border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">+ Row</button>
+                  ${!rows.some(r => r.src === '*') && html`<button class="ro-hide" onClick=${() => upd(code, x => { x.push({ src: '*', tgt: 'UNKNOWN' }); })} style="border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">+ Fallback *</button>`}
                   <span style="flex:1"></span>
                   <button class="del" onClick=${() => this.mutCfg(cfg => { delete cfg.lookups[code]; })} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px">Delete lookup</button>
                 </div>
                 ${errList(errs)}
               </div>`;
             })}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // ---------- audit trail ----------
+  auditState() { return this.state.audit || { filters: { flow: '', status: '', q: '', from: '', to: '' }, page: 1, data: null, sel: null, detail: null, auto: false }; }
+  setAudit(fn, then) { this.setState(s => { const a = clone(this.auditState()); fn(a); return { audit: a }; }, then); }
+  openAudit(filters) {
+    this.setState(st => ({ screen: 'audit', audit: { ...this.auditState(), filters: { flow: '', status: '', q: '', from: '', to: '', ...filters }, page: 1, sel: null, detail: null } }), () => this.loadAudit());
+  }
+
+  async loadAudit() {
+    const a = this.auditState();
+    if (!this.state.auditStatus) {
+      try { const st = await this.api('GET', 'audit/status'); if (st.status === 200) this.setState({ auditStatus: st.json }); } catch (e) { /* api() */ }
+    }
+    const qs = Object.entries({ ...a.filters, page: a.page, size: 50 }).filter(([, v]) => v !== '' && v != null).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
+    this.setAudit(x => { x.loading = true; });
+    try {
+      const r = await this.api('GET', 'audit?' + qs);
+      this.setAudit(x => { x.loading = false; x.error = r.status === 200 ? '' : (r.json.errors || ['HTTP ' + r.status]).join('; '); if (r.status === 200) x.data = r.json; });
+    } catch (e) { /* api() */ }
+    clearTimeout(this.timers.audit);
+    if (this.auditState().auto && this.state.screen === 'audit') this.timers.audit = setTimeout(() => { if (this.state.screen === 'audit') this.loadAudit(); }, 5000);
+  }
+
+  async openAuditDetail(id) {
+    this.setAudit(x => { x.sel = id; x.detail = null; x.detailError = ''; });
+    try {
+      const r = await this.api('GET', 'audit/' + encodeURIComponent(id));
+      this.setAudit(x => { if (x.sel !== id) return; if (r.status === 200) x.detail = r.json; else x.detailError = (r.json.errors || ['HTTP ' + r.status]).join('; '); });
+    } catch (e) { /* api() */ }
+  }
+
+  renderAudit() {
+    const s = this.state; const a = this.auditState(); const st = s.auditStatus || {};
+    const F = (k, v) => this.setAudit(x => { x.filters[k] = v; x.page = 1; }, () => { clearTimeout(this.timers.auditq); this.timers.auditq = setTimeout(() => this.loadAudit(), k === 'q' ? 400 : 0); });
+    const statusChip = code => {
+      const c = code == null ? ['#6A6D75', '#EFEDE6'] : code < 300 ? ['oklch(0.4 0.12 155)', 'oklch(0.94 0.05 155)'] : code < 500 ? ['#7A5B12', '#F6EDD5'] : ['oklch(0.45 0.17 25)', 'oklch(0.94 0.04 25)'];
+      return html`<span style=${`font:600 10.5px ${MONO};color:${c[0]};background:${c[1]};padding:2px 6px;border-radius:4px;flex:none`}>${code == null ? '—' : code}</span>`;
+    };
+    const outcomeChip = o => {
+      const c = o === 'SUCCESS' ? ['oklch(0.4 0.12 155)', 'oklch(0.94 0.05 155)'] : o === 'SKIPPED' ? ['#6A6D75', '#EFEDE6'] : ['oklch(0.45 0.17 25)', 'oklch(0.94 0.04 25)'];
+      return html`<span style=${`font:600 10px ${MONO};color:${c[0]};background:${c[1]};padding:2px 6px;border-radius:4px`}>${o || '—'}</span>`;
+    };
+    const prettyText = v => { if (v == null || v === '') return null; try { return pretty(JSON.parse(v)); } catch (e) { return String(v); } };
+    const block = (title, text, hint) => html`
+      <div style="min-width:0;display:flex;flex-direction:column;gap:4px">
+        <div style=${`font:600 10px ${MONO};letter-spacing:.06em;color:#6A6D75;text-transform:uppercase`}>${title}</div>
+        ${text != null ? html`<pre style=${`margin:0;padding:9px 11px;background:#22242A;color:#E9E7E1;border-radius:7px;font:11px/1.5 ${MONO};white-space:pre-wrap;word-break:break-all;max-height:300px;overflow:auto`}>${text}</pre>`
+          : html`<div style="font-size:11.5px;color:#9A9CA2;padding:6px 0">${hint || 'No payload.'}</div>`}
+      </div>`;
+    const noPayload = st.storePayloads === false ? 'Not stored (gateway.audit.store-payloads=false).' : 'No body.';
+    const flows = s.cfg.flows.map(f => f.code).sort();
+    const d = a.detail; const tx = d && d.transaction;
+    const sel = 'height:32px;border:1px solid #E4E1D8;border-radius:6px;padding:0 8px;background:#fff;font-size:12.5px';
+    const rows = a.data ? a.data.content : [];
+    return html`
+      <div style="flex:1;min-height:0;display:flex;flex-direction:column;padding:20px 24px 0;gap:12px">
+        <div style="display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap">
+          <div style="flex:1;min-width:320px">
+            <div style="font-size:22px;font-weight:600;letter-spacing:-0.02em">Audit trail</div>
+            <div style="margin-top:4px;font-size:12.5px;color:#6A6D75;line-height:1.45">Every call through the gateway, newest first. Open one to check your flow end to end: what the client sent, what each step sent downstream <b>after mapping</b>, what came back, what the client got, and the log lines of that correlation ID. ${mono('gw_audit_transaction')} · ${mono('gw_audit_step')}</div>
+          </div>
+        </div>
+        ${st.auditEnabled === false && html`<div style="padding:9px 12px;border:1px solid oklch(0.85 0.08 75);background:oklch(0.97 0.03 85);border-radius:8px;font-size:12px;color:oklch(0.42 0.1 70)">gateway.audit.enabled is false: only flows with audit_mode ON are recorded. Set GATEWAY_AUDIT_ENABLED=true (or a flow's audit_mode to ON) to see calls here.</div>`}
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <select value=${a.filters.flow} onChange=${e => F('flow', e.currentTarget.value)} class="ro-ok" style=${sel}><option value="">All flows</option>${flows.map(c => html`<option value=${c}>${c}</option>`)}</select>
+          <select value=${a.filters.status} onChange=${e => F('status', e.currentTarget.value)} class="ro-ok" style=${sel}>
+            <option value="">Any status</option><option value="2xx">2xx success</option><option value="4xx">4xx client error</option><option value="5xx">5xx server error</option><option value="errors">All errors</option>
+          </select>
+          <input class="inp ro-ok" value=${a.filters.q} onInput=${e => F('q', e.currentTarget.value)} placeholder="correlation ID, path or error code" style=${sel + ';width:260px;font-family:' + MONO + ';font-size:12px'}/>
+          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#6A6D75">from<input type="datetime-local" class="ro-ok" value=${a.filters.from} onChange=${e => F('from', e.currentTarget.value)} style=${sel}/></label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#6A6D75">to<input type="datetime-local" class="ro-ok" value=${a.filters.to} onChange=${e => F('to', e.currentTarget.value)} style=${sel}/></label>
+          <button class="btn-line" onClick=${() => this.loadAudit()} style="height:32px;border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:0 12px;cursor:pointer;font-size:12.5px;font-weight:500">${a.loading ? 'Loading…' : 'Refresh'}</button>
+          <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#6A6D75"><input type="checkbox" class="ro-ok" checked=${a.auto} onChange=${e => { const v = e.currentTarget.checked; this.setAudit(x => { x.auto = v; }, () => this.loadAudit()); }}/>auto-refresh 5s</label>
+          <span style="flex:1"></span>
+          ${a.data && html`<span style=${`font:11.5px ${MONO};color:#9A9CA2`}>${a.data.totalElements} call${a.data.totalElements === 1 ? '' : 's'}${st.zone ? ' · times in ' + st.zone : ''}</span>`}
+        </div>
+        ${a.error && html`<div style="font-size:12px;color:oklch(0.5 0.18 25)">${a.error}</div>`}
+
+        <div style="flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:14px;padding-bottom:16px">
+          <div style="min-height:0;display:flex;flex-direction:column;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:hidden">
+            <div style="flex:1;min-height:0;overflow:auto">
+              ${a.data && rows.length === 0 && html`<div style="padding:24px;text-align:center;color:#6A6D75;font-size:12.5px">No calls match. Call an endpoint (e.g. ${mono('make demo')} or the Tests tab of a flow), then Refresh.</div>`}
+              ${rows.map(r => { const on = a.sel === r.correlation_id; return html`
+                <div class="row" onClick=${() => this.openAuditDetail(r.correlation_id)} style=${`display:flex;flex-direction:column;gap:4px;padding:9px 12px;border-bottom:1px solid #F3F1EC;cursor:pointer;background:${on ? 'oklch(0.97 0.03 50)' : ''};box-shadow:${on ? 'inset 3px 0 0 ' + C.call : 'none'}`}>
+                  <div style="display:flex;align-items:center;gap:8px;min-width:0">
+                    ${statusChip(r.client_status)}
+                    <span style=${`font:600 10px ${MONO};color:#fff;background:${MC[r.http_method] || '#555'};padding:2px 5px;border-radius:4px;flex:none`}>${r.http_method}</span>
+                    <span class="hscroll" style=${`font:12px ${MONO};flex:1;min-width:0`}>${r.path}</span>
+                    <span style=${`font:11px ${MONO};color:#9A9CA2;flex:none`}>${r.duration_ms} ms</span>
+                  </div>
+                  <div style=${`display:flex;gap:10px;font:11px ${MONO};color:#6A6D75;min-width:0`}>
+                    <span style="flex:none">${r.started_at}</span>
+                    <span style="flex:none;color:#3E4047">${r.flow_code || '(no flow)'}</span>
+                    ${r.error_code && html`<span style="flex:none;color:oklch(0.5 0.17 25)">${r.error_code}</span>`}
+                    <span class="hscroll" style="flex:1;min-width:0;text-align:right;color:#9A9CA2">${r.correlation_id}</span>
+                  </div>
+                </div>`; })}
+            </div>
+            ${a.data && a.data.totalPages > 1 && html`
+              <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid #EFEDE6;font-size:12px">
+                <button class="btn-line" disabled=${a.page <= 1} onClick=${() => this.setAudit(x => { x.page--; }, () => this.loadAudit())} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:4px 10px;cursor:pointer">← Newer</button>
+                <span style=${`font:11.5px ${MONO};color:#6A6D75`}>page ${a.page} of ${a.data.totalPages}</span>
+                <button class="btn-line" disabled=${a.page >= a.data.totalPages} onClick=${() => this.setAudit(x => { x.page++; }, () => this.loadAudit())} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:4px 10px;cursor:pointer">Older →</button>
+              </div>`}
+          </div>
+
+          <div style="min-height:0;overflow:auto;background:#fff;border:1px solid #E4E1D8;border-radius:10px">
+            ${!a.sel && html`<div style="padding:28px;text-align:center;color:#6A6D75;font-size:12.5px;line-height:1.5">Select a call to see its timeline: client request → each step's request (after mapping) and downstream response → client response, plus its logs.</div>`}
+            ${a.sel && !d && html`<div style="padding:24px;color:${a.detailError ? 'oklch(0.5 0.18 25)' : '#9A9CA2'};font-size:12.5px">${a.detailError || 'Loading…'}</div>`}
+            ${tx && html`
+              <div style="padding:14px 16px;display:flex;flex-direction:column;gap:14px">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                  ${statusChip(tx.client_status)}
+                  <span style=${`font:600 10px ${MONO};color:#fff;background:${MC[tx.http_method] || '#555'};padding:2px 5px;border-radius:4px`}>${tx.http_method}</span>
+                  <span style=${`font:600 13px ${MONO}`}>${s.catalog.apiBasePath}${tx.path}</span>
+                  <span style="flex:1"></span>
+                  ${tx.flow_code && s.cfg.flows.some(f => f.code === tx.flow_code) && html`<button class="btn-line" onClick=${() => { const i = s.cfg.flows.findIndex(f => f.code === tx.flow_code); this.setState({ screen: 'flow', cur: i, tab: 'pipeline', sel: { kind: 'flow' }, scope: 'resp', preview: null }, () => this.changed()); }} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px">Open flow ${tx.flow_code} →</button>`}
+                </div>
+                <div style=${`display:grid;grid-template-columns:auto 1fr;gap:3px 14px;font:11.5px ${MONO}`}>
+                  <span style="color:#9A9CA2">correlation</span><span class="hscroll">${tx.correlation_id} <button class="btn-line" onClick=${() => { try { navigator.clipboard.writeText(tx.correlation_id); } catch (e) { /* no clipboard */ } }} style="margin-left:6px;border:1px solid #E4E1D8;background:#fff;border-radius:4px;padding:0 6px;cursor:pointer;font-size:10.5px">copy</button></span>
+                  <span style="color:#9A9CA2">flow</span><span>${tx.flow_code || '(no flow matched)'}</span>
+                  <span style="color:#9A9CA2">started</span><span>${tx.started_at} · ${tx.duration_ms} ms</span>
+                  ${(tx.error_type || tx.error_code) && html`<span style="color:#9A9CA2">error</span><span style="color:oklch(0.5 0.17 25)">${[tx.error_type, tx.error_code].filter(Boolean).join(' · ')}</span>`}
+                </div>
+
+                <div style="display:flex;flex-direction:column;gap:12px;border-left:2px solid #E4E1D8;padding-left:14px;margin-left:4px">
+                  <div style="display:flex;flex-direction:column;gap:6px">
+                    <div style="font-weight:600;font-size:13px">1 · Client → gateway</div>
+                    ${block('Request body', prettyText(tx.request_payload), noPayload)}
+                  </div>
+                  ${d.steps.length === 0 && html`<div style="font-size:12px;color:#9A9CA2">No downstream step ran (stopped before the first call, or the flow has no steps).</div>`}
+                  ${d.steps.map((x, i) => html`
+                    <div style="display:flex;flex-direction:column;gap:6px">
+                      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                        <span style="font-weight:600;font-size:13px">${i + 2} · Step ${x.step_name}</span>
+                        ${outcomeChip(x.outcome)} ${x.http_status != null && statusChip(x.http_status)}
+                        <span style=${`font:11px ${MONO};color:#9A9CA2`}>${x.target_system} · ${x.duration_ms == null ? '' : x.duration_ms + ' ms'}</span>
+                      </div>
+                      ${x.url && html`<div class="hscroll" style=${`font:11.5px ${MONO};color:#3E4047`}><span style=${`font:600 10px ${MONO};color:#fff;background:${MC[x.http_method] || '#555'};padding:1px 5px;border-radius:4px;margin-right:6px`}>${x.http_method}</span>${x.url}</div>`}
+                      <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px">
+                        ${block('Sent (after mapping)', prettyText(x.request_payload), x.http_method === 'GET' ? 'No body (GET).' : noPayload)}
+                        ${block('Received', prettyText(x.response_payload), x.outcome === 'SKIPPED' ? 'Skipped: its condition was false.' : noPayload)}
+                      </div>
+                    </div>`)}
+                  <div style="display:flex;flex-direction:column;gap:6px">
+                    <div style="display:flex;align-items:center;gap:8px"><span style="font-weight:600;font-size:13px">${d.steps.length + 2} · Gateway → client</span>${statusChip(tx.client_status)}</div>
+                    ${block('Response body', prettyText(tx.response_payload), noPayload)}
+                  </div>
+                </div>
+
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <div style="font-weight:600;font-size:13px">Logs</div>
+                  ${d.logs.length ? html`<pre style=${`margin:0;padding:9px 11px;background:#22242A;color:#E9E7E1;border-radius:7px;font:10.5px/1.55 ${MONO};white-space:pre-wrap;word-break:break-all;max-height:320px;overflow:auto`}>${d.logs.map(l => html`<div style=${`color:${/ ERROR /.test(l) ? 'oklch(0.75 0.14 25)' : / WARN /.test(l) ? 'oklch(0.82 0.12 85)' : '#E9E7E1'}`}>${l}</div>`)}</pre>`
+                    : html`<div style="font-size:11.5px;color:#9A9CA2;line-height:1.45">No log lines kept for this call. Studio keeps recent log lines in memory on this instance only (gateway.studio.log-buffer); for calls from before a restart, or handled by another instance, search the log output for the correlation ID.</div>`}
+                </div>
+              </div>`}
           </div>
         </div>
       </div>`;
@@ -748,8 +923,8 @@ class App extends Component {
                     </div>
                   </div>`}
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
-                  <button disabled=${!!parseErr} onClick=${() => upd(i, y => { y.text = pretty(JSON.parse(y.text)); })} style="border:1px solid #E4E1D8;background:#fff;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#3E4047">Format</button>
-                  ${!exOpen && html`<button onClick=${() => this.setState({ example: { i, text: '' } })} style="border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">Generate from example JSON…</button>`}
+                  <button class="ro-hide" disabled=${!!parseErr} onClick=${() => upd(i, y => { y.text = pretty(JSON.parse(y.text)); })} style="border:1px solid #E4E1D8;background:#fff;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#3E4047">Format</button>
+                  ${!exOpen && html`<button class="ro-hide" onClick=${() => this.setState({ example: { i, text: '' } })} style="border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">Generate from example JSON…</button>`}
                   <span style="flex:1"></span>
                   <button class="del" onClick=${() => this.mutCfg(cfg => { cfg.schemas.splice(i, 1); })} title=${uses.length ? 'Still used: the save will be rejected until the references are removed' : ''} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px">Delete schema</button>
                 </div>
@@ -773,6 +948,7 @@ class App extends Component {
           <span style=${`font:500 13px ${MONO};white-space:nowrap;overflow:hidden;text-overflow:ellipsis`}>${s.catalog.apiBasePath}${f.path}</span>
           <span style=${`font:11.5px ${MONO};color:#9A9CA2`}>${f.code}</span>
           <div style="flex:1"></div>
+          <button class="btn-line" onClick=${() => this.openAudit({ flow: f.code })} title="Calls of this flow, with each step's mapped request and response, and the logs" style="flex:none;border:1px solid #E4E1D8;background:#fff;border-radius:7px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:500">Audit trail →</button>
           <div style="display:flex;gap:2px;background:#F4F3EF;padding:3px;border-radius:8px;flex:none">
             ${tabs.map(([label, k]) => html`<button onClick=${() => this.setState({ tab: k }, () => this.changed())} style=${`border:0;background:${s.tab === k ? '#FFFFFF' : 'transparent'};box-shadow:${s.tab === k ? '0 1px 2px rgba(23,24,28,.12)' : 'none'};color:#17181C;padding:5px 12px;border-radius:6px;cursor:pointer;font-weight:500`}>${label}</button>`)}
           </div>
@@ -837,7 +1013,7 @@ class App extends Component {
 
     return html`
       <div style="flex:1;min-height:0;display:flex">
-        <aside style="width:248px;flex:none;background:#FFFFFF;border-right:1px solid #E4E1D8;overflow:auto;padding:16px 12px 32px">
+        <aside class="ro-hide" style="width:248px;flex:none;background:#FFFFFF;border-right:1px solid #E4E1D8;overflow:auto;padding:16px 12px 32px">
           <div style="font-size:12px;color:#6A6D75;margin:0 4px 16px;line-height:1.45">Drag a policy onto the pipeline. Each drop sets a column or adds a row.</div>
           ${this.palette().map(c => html`
             <div style="margin-bottom:18px">
@@ -1053,7 +1229,7 @@ class App extends Component {
               ${fd.kind === 'select' && html`<select class="inp" value=${fd.value} onChange=${onSet(fd)} style=${inputStyle() + ';padding:0 6px'}>${fd.options.map(o => html`<option value=${o.v}>${o.l}</option>`)}</select>`}
               ${fd.kind === 'area' && html`<textarea class="inp" value=${fd.value} onInput=${onSet(fd)} rows="3" placeholder=${fd.placeholder || ''} style=${`border:1px solid #E4E1D8;border-radius:6px;padding:7px 9px;font:11.5px/1.45 ${MONO};background:#FAF9F6;resize:vertical;width:100%`}></textarea>`}
               ${fd.hint && html`<span style="font-size:11px;color:#9A9CA2;line-height:1.4">${fd.hint}</span>`}
-              ${fd.actions && html`<span style="display:flex;gap:6px;flex-wrap:wrap">${fd.actions.map(a => html`<button type="button" class="btn-line" onClick=${e => { e.preventDefault(); a.go(); }} title=${a.title || ''} style="border:1px solid #E4E1D8;background:#FAF9F6;border-radius:5px;padding:3px 8px;cursor:pointer;font-size:11.5px;color:#3E4047">${a.label}</button>`)}</span>`}
+              ${fd.actions && html`<span style="display:flex;gap:6px;flex-wrap:wrap">${fd.actions.map(a => html`<button type="button" class=${'btn-line' + (a.label.startsWith('+') ? ' ro-hide' : '')} onClick=${e => { e.preventDefault(); a.go(); }} title=${a.title || ''} style="border:1px solid #E4E1D8;background:#FAF9F6;border-radius:5px;padding:3px 8px;cursor:pointer;font-size:11.5px;color:#3E4047">${a.label}</button>`)}</span>`}
             </label>`)}
           ${insp.mapping && html`<button class="btn-dark" onClick=${insp.mapping.go} style="margin-top:4px;border:1px solid #17181C;background:#17181C;color:#fff;border-radius:7px;padding:9px 12px;cursor:pointer;font-weight:500;display:flex;justify-content:space-between">${insp.mapping.label}<span>→</span></button>`}
           ${insp.del && html`<button class="btn-del" onClick=${insp.del.go} style="border:1px solid #E4E1D8;background:#fff;color:oklch(0.5 0.17 25);border-radius:7px;padding:8px 12px;cursor:pointer;font-weight:500">${insp.del.label}</button>`}
@@ -1143,7 +1319,7 @@ class App extends Component {
             ${tree.map(n => html`
               <div class="ctx" draggable="true" onDragStart=${this.ds({ kind: 'src', path: n.path })} onDragEnd=${this.dragEnd} title=${n.path} style=${`display:flex;align-items:center;gap:8px;padding:4px 6px 4px ${6 + n.depth * 14}px;border-radius:5px;cursor:grab;font:11.5px ${MONO}`}>
                 <span style=${`color:${n.depth === 0 ? '#17181C' : n.sample === '' ? '#3E4047' : 'oklch(0.42 0.12 255)'};font-weight:${n.depth === 0 ? 600 : 400}`}>${n.key}</span>
-                <span style="flex:1;min-width:0;text-align:right;color:#9A9CA2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${n.sample}</span>
+                <span class="hscroll" style="flex:1;min-width:0;text-align:right;color:#9A9CA2">${n.sample}</span>
               </div>`)}
           </div>
           <div style=${`margin:22px 6px 8px;font:600 10px ${MONO};letter-spacing:.08em;color:#6A6D75`}>CONVERTERS</div>
@@ -1181,19 +1357,19 @@ class App extends Component {
                   <span style="color:#ADA99E">←</span>
                   ${r.source ? html`
                     <div style=${`flex:1.25;min-width:0;height:28px;display:flex;align-items:center;gap:6px;padding:0 4px 0 9px;border-radius:5px;background:oklch(0.96 0.025 255);font:11.5px ${MONO};color:oklch(0.38 0.12 255)`}>
-                      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title=${r.source}>${r.source}</span>
+                      <span class="hscroll" style="flex:1;min-width:0" title=${r.source}>${r.source}</span>
                       <button onClick=${() => updRule(r.id, x => { x.source = ''; })} style="border:0;background:none;color:oklch(0.5 0.08 255);cursor:pointer;font-size:13px;padding:0 3px">×</button>
                     </div>` : html`
                     <input class="inp" value=${r.constant} onInput=${set('constant')} placeholder="constant, or drop a field" style=${`flex:1.25;min-width:0;height:28px;border:1px dashed #C9C6BC;border-radius:5px;padding:0 9px;font:11.5px ${MONO};background:#FAF9F6`}/>`}
                 </div>
                 <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-left:26px">
                   ${r.lookup && html`<span style=${`display:flex;align-items:center;gap:4px;padding:2px 3px 2px 7px;border-radius:5px;background:oklch(0.96 0.03 160);font:11px ${MONO};color:oklch(0.38 0.1 160)`}>lookup ${r.lookup}<button onClick=${() => updRule(r.id, x => { x.lookup = ''; })} style="border:0;background:none;color:inherit;cursor:pointer;padding:0 3px">×</button></span>`}
-                  ${r.conv && html`<span style=${`display:flex;align-items:center;gap:2px;padding:2px 3px;border-radius:5px;background:oklch(0.95 0.03 300);font:11px ${MONO};color:oklch(0.4 0.13 300)`}><input value=${r.conv} onInput=${set('conv')} style=${`border:0;background:transparent;font:11px ${MONO};color:inherit;width:${Math.max(6, r.conv.length + 1)}ch;padding:0 4px;outline:none`}/><button onClick=${() => updRule(r.id, x => { x.conv = ''; })} style="border:0;background:none;color:inherit;cursor:pointer;padding:0 3px">×</button></span>`}
+                  ${r.conv && html`<span style=${`display:flex;flex:0 1 auto;max-width:100%;min-width:0;align-items:center;gap:2px;padding:2px 3px;border-radius:5px;background:oklch(0.95 0.03 300);font:11px ${MONO};color:oklch(0.4 0.13 300)`}><input value=${r.conv} onInput=${set('conv')} style=${`border:0;background:transparent;font:11px ${MONO};color:inherit;flex:0 1 calc(${Math.max(6, r.conv.length)}ch + 12px);width:calc(${Math.max(6, r.conv.length)}ch + 12px);min-width:0;padding:0 4px;outline:none`}/><button onClick=${() => updRule(r.id, x => { x.conv = ''; })} style="border:0;background:none;color:inherit;cursor:pointer;padding:0 3px">×</button></span>`}
                   ${r.fh && html`<span style=${`display:flex;align-items:center;gap:4px;padding:2px 3px 2px 7px;border-radius:5px;background:#F6EDD5;font:11px ${MONO};color:#7A5B12`}>${r.fh}<button onClick=${() => updRule(r.id, x => { x.fh = ''; })} style="border:0;background:none;color:inherit;cursor:pointer;padding:0 3px">×</button></span>`}
                   <input class="inp" value=${r.def} onInput=${set('def')} placeholder="default" style=${`width:104px;height:24px;border:1px solid #EFEDE6;border-radius:5px;padding:0 7px;font:11px ${MONO};background:#FAF9F6`}/>
                   <button onClick=${() => updRule(r.id, x => { x.required = !x.required; })} style=${`height:24px;border:1px solid ${r.required ? '#17181C' : '#E4E1D8'};background:${r.required ? '#17181C' : '#fff'};color:${r.required ? '#fff' : '#9A9CA2'};border-radius:5px;padding:0 8px;font:11px ${MONO};cursor:pointer`}>required</button>
                   <span style="flex:1"></span>
-                  <span title=${res.t} style=${`font:11px ${MONO};color:${res.c};max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>${res.t}</span>
+                  <span class="hscroll" title=${res.t} style=${`font:11px ${MONO};color:${res.c};max-width:300px`}>${res.t}</span>
                   <button class="del" onClick=${() => updRule(r.id, (x, list, idx) => { list.splice(idx, 1); })} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:14px;padding:0 4px">×</button>
                 </div>
                 ${z.active && html`<div style=${`position:absolute;inset:-4px;border:1.5px dashed ${C.in};border-radius:11px;background:oklch(0.56 0.13 255 / 0.04);pointer-events:none`}></div>`}
@@ -1202,7 +1378,7 @@ class App extends Component {
             })}
             <div ...${zoneProps(newZone)} style=${`display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border:1.5px dashed ${nzBorder};background:${nzBg};border-radius:9px;color:#6A6D75;font-size:12px`}>
               <span>Drop a context field here to add a rule</span>
-              <button onClick=${addConst} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:500">+ Constant rule</button>
+              <button class="ro-hide" onClick=${addConst} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:500">+ Constant rule</button>
             </div>
           </div>
         </main>
@@ -1219,7 +1395,7 @@ class App extends Component {
           <details style="margin-top:18px" open=${stored !== undefined}>
             <summary style=${`cursor:pointer;font:600 10px ${MONO};letter-spacing:.08em;color:#8E9097`}>SAMPLE CONTEXT ${stored !== undefined ? '· EDITED' : '· GENERATED'}</summary>
             <div style="margin-top:8px;font-size:11.5px;color:#8E9097;line-height:1.5">${'{request: {headers, path, query, body}, steps: {name: {outcome, status, headers, body}}}'}. Kept in this tab only.</div>
-            <textarea value=${sampleValue} onInput=${e => { const v = e.currentTarget.value; this.setState(st => ({ samples: { ...st.samples, [f.code]: v } }), () => this.changed()); }} rows="14" spellcheck="false" style=${`margin-top:8px;width:100%;border:1px solid #3A3C43;border-radius:7px;background:#22242A;color:#E9E7E1;padding:10px;font:11px/1.5 ${MONO};resize:vertical`}></textarea>
+            <textarea class="ro-ok" value=${sampleValue} onInput=${e => { const v = e.currentTarget.value; this.setState(st => ({ samples: { ...st.samples, [f.code]: v } }), () => this.changed()); }} rows="14" spellcheck="false" style=${`margin-top:8px;width:100%;border:1px solid #3A3C43;border-radius:7px;background:#22242A;color:#E9E7E1;padding:10px;font:11px/1.5 ${MONO};resize:vertical`}></textarea>
             ${stored !== undefined && html`<button onClick=${() => this.setState(st => { const n = { ...st.samples }; delete n[f.code]; return { samples: n }; }, () => this.changed())} style="margin-top:6px;border:1px solid #3A3C43;background:none;color:#C9CBD1;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px">Regenerate from rules</button>`}
           </details>
         </aside>
@@ -1334,7 +1510,7 @@ class App extends Component {
               </div>`)}
         </div>
         <div style="border-top:1px solid #EFEDE6;padding:10px 12px;display:flex;gap:8px;align-items:flex-end">
-          <textarea id="assistant-input" class="inp" rows="2" value=${a.input} disabled=${st && !st.configured}
+          <textarea id="assistant-input" class="inp ro-ok" rows="2" value=${a.input} disabled=${st && !st.configured}
             onInput=${e => { const v = e.currentTarget.value; this.setAssistant(x => { x.input = v; }); }}
             onKeyDown=${e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
             placeholder="Ask about setup, flows, custom classes… (Enter to send)" style="flex:1;resize:none;border:1px solid #E4E1D8;border-radius:8px;padding:8px 10px;font-size:13px;line-height:1.4;background:#FAF9F6;max-height:160px"></textarea>
@@ -1422,7 +1598,7 @@ class App extends Component {
       const err = jsonErr(c[key], emptyOk);
       return html`<label style="display:flex;flex-direction:column;gap:4px;min-width:0">
         <span style=${`font:10px ${MONO};letter-spacing:.06em;color:#9A9CA2`}>${label}</span>
-        <textarea class="inp" spellcheck="false" value=${c[key]} onInput=${e => { const v = e.currentTarget.value; upd(c.id, x => { x[key] = v; }); }} rows=${Math.min(14, Math.max(3, c[key].split('\n').length))} style=${`border:1px solid ${err ? 'oklch(0.75 0.12 25)' : '#E4E1D8'};border-radius:6px;padding:7px 9px;font:11.5px/1.45 ${MONO};background:#FAF9F6;resize:vertical;width:100%`}></textarea>
+        <textarea class="inp ro-ok" spellcheck="false" value=${c[key]} onInput=${e => { const v = e.currentTarget.value; upd(c.id, x => { x[key] = v; }); }} rows=${Math.min(14, Math.max(3, c[key].split('\n').length))} style=${`border:1px solid ${err ? 'oklch(0.75 0.12 25)' : '#E4E1D8'};border-radius:6px;padding:7px 9px;font:11.5px/1.45 ${MONO};background:#FAF9F6;resize:vertical;width:100%`}></textarea>
         ${err && html`<span style=${`font:10.5px ${MONO};color:oklch(0.5 0.18 25)`}>${err}</span>`}
       </label>`;
     };
@@ -1436,8 +1612,9 @@ class App extends Component {
             </div>
             ${btn(t.loading ? 'Generating…' : t.cases.length ? 'Regenerate from Swagger' : 'Generate from Swagger', () => this.generateTests(f), false, dirty || t.loading, dirty ? 'Save & reload first: cases come from the live configuration' : '')}
             ${btn('+ Custom case', () => this.setTests(f, x => { x.cases.push({ id: uid('t'), enabled: true, open: true, name: 'Custom case', description: '', method: f.method, path: f.path.replace(/\{([^}]+)\}/g, '1001'), query: '{}', headers: '{}', body: f.method === 'GET' ? '' : '{}', expected: String(f.successStatus) }); }), false, false)}
-            ${btn(t.running ? 'Running…' : 'Run ' + enabled + ' case' + (enabled === 1 ? '' : 's'), () => this.runTests(f), true, dirty || t.running || enabled === 0, dirty ? 'Save & reload first: tests run against the live configuration' : '')}
+            ${btn(t.running ? 'Running…' : 'Run ' + enabled + ' case' + (enabled === 1 ? '' : 's'), () => this.runTests(f), true, this.ro || dirty || t.running || enabled === 0, this.ro ? 'View-only Studio: running tests is disabled' : dirty ? 'Save & reload first: tests run against the live configuration' : '')}
           </div>
+          ${this.ro && html`<div style="padding:9px 12px;border:1px solid oklch(0.85 0.08 75);background:oklch(0.97 0.03 85);border-radius:8px;font-size:12px;color:oklch(0.42 0.1 70)">This Studio is <b>view-only</b> (gateway.studio.mode=view-only): you can generate and read cases, but running them is disabled because a run calls the downstream systems.</div>`}
           ${dirty && html`<div style="padding:9px 12px;border:1px solid oklch(0.85 0.08 75);background:oklch(0.97 0.03 85);border-radius:8px;font-size:12px;color:oklch(0.42 0.1 70)">You have unsaved changes. Tests generate from and run against the <b>live</b> configuration, so Save & reload first.</div>`}
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:#6A6D75">
             ${audited ? chip('AUDIT TRAIL ON', 'oklch(0.4 0.12 155)', 'oklch(0.94 0.05 155)') : chip('AUDIT TRAIL OFF', '#7A5B12', '#F6EDD5')}

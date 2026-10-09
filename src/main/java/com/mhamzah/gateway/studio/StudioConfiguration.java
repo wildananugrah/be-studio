@@ -6,6 +6,8 @@ import com.mhamzah.gateway.config.FlowRegistryHolder;
 import com.mhamzah.gateway.config.GatewayProperties;
 import com.mhamzah.gateway.mapping.MappingEngine;
 import com.mhamzah.gateway.masking.Masker;
+import com.mhamzah.gateway.studio.audit.AuditQueries;
+import com.mhamzah.gateway.studio.audit.LogBuffer;
 import com.mhamzah.gateway.studio.testing.TestRecorder;
 import com.mhamzah.gateway.studio.testing.TestRunner;
 import javax.sql.DataSource;
@@ -33,6 +35,18 @@ public class StudioConfiguration implements WebMvcConfigurer {
             MappingEngine mapping, ListableBeanFactory beans, GatewayProperties properties, DataSource dataSource,
             PlatformTransactionManager txManager) {
         return new StudioService(loader, compiler, holder, mapping, beans, properties, dataSource, txManager);
+    }
+
+    /** Recent log lines per correlation ID, for the audit trail screen. */
+    @Bean
+    LogBuffer studioLogBuffer(GatewayProperties properties) {
+        GatewayProperties.Studio.LogBuffer b = properties.studio().logBuffer();
+        return new LogBuffer(b.maxTransactions(), b.maxLines());
+    }
+
+    @Bean
+    AuditQueries studioAuditQueries(DataSource dataSource, GatewayProperties properties, LogBuffer logs) {
+        return new AuditQueries(dataSource, properties, logs);
     }
 
     /** Static: it wraps the DownstreamClient bean, so it must exist before that bean is created. */

@@ -42,7 +42,26 @@ public record GatewayProperties(
      * Gateway Studio, the browser UI for editing flows, target systems and lookups: {@code /studio}. Off unless
      * enabled. Its API needs the admin token and writes straight to the config tables.
      */
-    public record Studio(@DefaultValue("false") boolean enabled) {}
+    public record Studio(
+            @DefaultValue("false") boolean enabled,
+            @DefaultValue("edit") Mode mode,
+            @DefaultValue LogBuffer logBuffer) {
+
+        /** Log lines kept in memory per correlation ID for the audit trail screen. */
+        public record LogBuffer(
+                @DefaultValue("2000") int maxTransactions,
+                @DefaultValue("300") int maxLines) {}
+
+        /** {@code edit}: full editor. {@code view-only}: browse everything, no save and no test runs. */
+        public enum Mode {
+            EDIT,
+            VIEW_ONLY
+        }
+
+        public boolean viewOnly() {
+            return mode == Mode.VIEW_ONLY;
+        }
+    }
 
     /**
      * Studio's project assistant (the "Ask" button). Needs {@code gateway.studio.enabled} too. The AI connection

@@ -30,7 +30,7 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <pre>
  * GET  /studio/api/tests/{flow}/cases          cases generated from the flow's operation in the API description
- * POST /studio/api/tests/{flow}/runs  {cases}  runs them against this gateway and returns the evidence
+ * POST /studio/api/tests/{flow}/runs  {cases}  runs them against this gateway and returns the evidence (403 view-only)
  * GET  /studio/api/tests/runs/{id}/report?format=md|docx|pdf&amp;audit=true&amp;logs=true   the unit test document
  * </pre>
  */
@@ -45,9 +45,11 @@ public class StudioTestController {
 
     private final TestRunner runner;
     private final byte[] token;
+    private final boolean viewOnly;
 
     public StudioTestController(TestRunner runner, GatewayProperties properties) {
         this.runner = runner;
+        this.viewOnly = properties.studio().viewOnly();
         String configured = properties.admin().token();
         this.token = configured == null || configured.isBlank() ? null : configured.getBytes(StandardCharsets.UTF_8);
     }
@@ -72,6 +74,11 @@ public class StudioTestController {
             @PathVariable String flow, @RequestBody RunRequest request) {
         if (!authorized(supplied)) {
             return UNAUTHORIZED;
+        }
+        if (viewOnly) {
+            // a run sends real requests to the downstream systems: not for a view-only Studio
+            return ResponseEntity.status(403).body(Map.of("errors", List.of(
+                    "Gateway Studio is view-only (gateway.studio.mode=view-only): running tests is disabled")));
         }
         if (request.cases() == null || request.cases().isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("errors", List.of("no test cases")));

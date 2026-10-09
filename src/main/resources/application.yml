@@ -53,8 +53,17 @@ gateway:
     title: ${GATEWAY_DOCS_TITLE:JSON Gateway API}
   # Gateway Studio: browser UI at /studio for editing flows, target systems and lookups. Its API needs the admin
   # token and writes straight to the config tables, then reloads. Keep it off in production.
+  #   mode: edit      - full editor (Save & reload, test runs)
+  #   mode: view-only - browse flows, mappings, targets, lookups, schemas, previews and the SQL, but nothing can be
+  #                     saved and no test runs (they would call the downstream systems); the server enforces it
+  #   log-buffer      - log lines kept in memory per correlation ID for the Audit trail screen (this instance only,
+  #                     lost on restart; the log output stays the record)
   studio:
     enabled: ${GATEWAY_STUDIO_ENABLED:true}
+    mode: ${GATEWAY_STUDIO_MODE:edit}
+    log-buffer:
+      max-transactions: 2000
+      max-lines: 300
   # Studio's project assistant (the "Ask" button): Claude via the Anthropic Messages API. Needs studio enabled too;
   # false removes the Ask button and its API, and nothing calls the AI endpoint. Connection settings are AI_BASE_URL
   # (optional, default https://api.anthropic.com), AI_AUTH_KEY, AI_MODEL (default claude-opus-5-5), optional

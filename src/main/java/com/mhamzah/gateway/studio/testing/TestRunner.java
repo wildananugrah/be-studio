@@ -9,6 +9,7 @@ import com.mhamzah.gateway.invoke.DownstreamRequest;
 import com.mhamzah.gateway.logging.CorrelationId;
 import com.mhamzah.gateway.mapping.JsonValues;
 import com.mhamzah.gateway.masking.Masker;
+import com.mhamzah.gateway.studio.audit.AuditRows;
 import com.mhamzah.gateway.studio.testing.TestModel.AuditTrail;
 import com.mhamzah.gateway.studio.testing.TestModel.DownstreamExchange;
 import com.mhamzah.gateway.studio.testing.TestModel.Message;
@@ -262,33 +263,13 @@ public class TestRunner {
             return new AuditTrail(true, "No audit row arrived within " + AUDIT_WAIT.toSeconds()
                     + " s (the audit writer is asynchronous; check the logs for audit errors).", null, List.of());
         }
-        Map<String, Object> transaction = row(rows.getFirst());
+        Map<String, Object> transaction = AuditRows.row(rows.getFirst());
         Object id = transaction.get("id");
         List<Map<String, Object>> steps = jdbc.sql("SELECT * FROM " + step + " WHERE transaction_id = ? ORDER BY id")
-                .param(id).query().listOfRows().stream().map(TestRunner::row).toList();
+                .param(id).query().listOfRows().stream().map(AuditRows::row).toList();
         String note = properties.audit().storePayloads() ? null
                 : "gateway.audit.store-payloads is false, so the audit rows carry no payloads.";
         return new AuditTrail(true, note, transaction, steps);
     }
 
-    /** Lower-case column names (Oracle reports upper case); CLOBs and timestamps as text. */
-    private static Map<String, Object> row(Map<String, Object> raw) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        raw.forEach((k, v) -> out.put(k.toLowerCase(Locale.ROOT), value(v)));
-        return out;
-    }
-
-    private static Object value(Object v) {
-        try {
-            if (v instanceof Clob clob) {
-                return clob.getSubString(1, (int) Math.min(clob.length(), Integer.MAX_VALUE));
-            }
-        } catch (SQLException e) {
-            return "(unreadable: " + e.getMessage() + ")";
-        }
-        if (v instanceof java.sql.Timestamp t) {
-            return STAMP.format(t.toInstant()) + "." + String.format("%03d", t.toInstant().toEpochMilli() % 1000);
-        }
-        return v instanceof Number || v instanceof Boolean || v == null ? v : v.toString();
-    }
 }

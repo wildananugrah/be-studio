@@ -66,6 +66,9 @@ public class StudioAssistant {
               mention when the developer's open flow has unsaved changes or validation problems that matter.
             - Keep answers focused: lead with the answer, then the steps; no filler. Use the developer's language
               (reply in Indonesian when asked in Indonesian).
+            - If the live snapshot's settings.studioMode is "view-only", this Studio cannot save changes or run tests:
+              still explain the steps, but say they need an editable Studio (gateway.studio.mode=edit, e.g. in dev)
+              or a Liquibase changeset / SQL for this environment.
             - Never ask for, repeat or guess secrets (admin token, AI keys, database passwords, API keys in target
               headers). Refer to them by setting name only.
             """;

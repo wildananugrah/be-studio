@@ -251,6 +251,7 @@ public class StudioService {
         out.put("defaultStepTimeoutMs", properties.defaultStepTimeoutMs());
         out.put("auditEnabled", properties.audit().enabled());
         out.put("assistantEnabled", properties.assistant().enabled());
+        out.put("studioMode", properties.studio().viewOnly() ? "view-only" : "edit");
         out.put("messageHandlers", names(MessageHandler.class));
         out.put("fieldHandlers", names(FieldHandler.class));
         out.put("bodyCodecs", names(BodyCodec.class));
