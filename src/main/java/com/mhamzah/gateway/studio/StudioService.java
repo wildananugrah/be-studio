@@ -250,6 +250,7 @@ public class StudioService {
         out.put("defaultFlowTimeoutMs", properties.defaultFlowTimeoutMs());
         out.put("defaultStepTimeoutMs", properties.defaultStepTimeoutMs());
         out.put("auditEnabled", properties.audit().enabled());
+        out.put("assistantEnabled", properties.assistant().enabled());
         out.put("messageHandlers", names(MessageHandler.class));
         out.put("fieldHandlers", names(FieldHandler.class));
         out.put("bodyCodecs", names(BodyCodec.class));

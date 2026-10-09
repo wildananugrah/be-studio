@@ -18,10 +18,16 @@ public class TargetSystemEntity {
     private Integer readTimeoutMs;
     private String bodyCodec;
     private boolean enabled;
+    private String tlsMode;
+    private String tlsTrustStore;
+    private String tlsTrustStorePassword;
+    private String tlsKeyStore;
+    private String tlsKeyStorePassword;
 
     protected TargetSystemEntity() {}
 
     public TargetRow toRow() {
-        return new TargetRow(id, code, baseUrl, connectTimeoutMs, readTimeoutMs, bodyCodec, enabled);
+        return new TargetRow(id, code, baseUrl, connectTimeoutMs, readTimeoutMs, bodyCodec, enabled, tlsMode,
+                tlsTrustStore, tlsTrustStorePassword, tlsKeyStore, tlsKeyStorePassword);
     }
 }

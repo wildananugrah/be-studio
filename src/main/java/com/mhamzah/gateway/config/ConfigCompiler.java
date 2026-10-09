@@ -138,6 +138,7 @@ public class ConfigCompiler {
             configTargets.forEach((code, system) -> {
                 String where = "target system '" + code + "' (application config)";
                 checkBaseUrl(system.baseUrl(), where, "base-url");
+                checkTls(system.baseUrl(), system.tls(), where);
                 out.put(code, new ResolvedTarget(code, system, ResolvedTarget.Source.CONFIG, false));
                 targetCodec(code, system.bodyCodec(), where, "body-codec");
             });
@@ -192,8 +193,14 @@ public class ConfigCompiler {
                     errors.add(where + ": read_timeout_ms must be > 0");
                 }
                 int connect = t.connectTimeoutMs() == null ? DEFAULT_CONNECT_TIMEOUT_MS : t.connectTimeoutMs();
+                var tls = new GatewayProperties.Tls(t.tlsMode(), optional(t.tlsTrustStore(), where),
+                        optional(t.tlsTrustStorePassword(), where), optional(t.tlsKeyStore(), where),
+                        optional(t.tlsKeyStorePassword(), where));
+                if (baseUrl != null) {
+                    checkTls(baseUrl, tls, where);
+                }
                 var system = new GatewayProperties.TargetSystem(baseUrl, connect, t.readTimeoutMs(),
-                        headers.getOrDefault(code, Map.of()), t.bodyCodec());
+                        headers.getOrDefault(code, Map.of()), t.bodyCodec(), tls);
                 out.put(code, new ResolvedTarget(code, system, ResolvedTarget.Source.DATABASE,
                         configTargets.containsKey(code)));
                 targetCodecs.remove(code); // the database row replaces the application.yml definition
@@ -226,6 +233,45 @@ public class ConfigCompiler {
             } catch (IllegalArgumentException e) {
                 errors.add(where + ": " + e.getMessage());
                 return null;
+            }
+        }
+
+        /** Optional text with {@code ${...}} placeholders resolved; null when absent or unresolvable (reported). */
+        private String optional(String text, String where) {
+            if (text == null || text.isBlank()) {
+                return null;
+            }
+            try {
+                return placeholders.apply(text);
+            } catch (IllegalArgumentException e) {
+                errors.add(where + ": tls: " + e.getMessage());
+                return null;
+            }
+        }
+
+        /**
+         * Validates the TLS settings of an https target by building its context now (a missing file or a wrong
+         * password is a config error, not a failed call later); a reload re-reads the stores. Ignored for http.
+         */
+        private void checkTls(String baseUrl, GatewayProperties.Tls tls, String where) {
+            if (tls == null) {
+                return;
+            }
+            if (!Set.of("VERIFY", "INSECURE", "CUSTOM").contains(tls.mode())) {
+                errors.add(where + ": tls_mode '" + tls.mode() + "' must be VERIFY, INSECURE or CUSTOM");
+                return;
+            }
+            if (baseUrl == null || !baseUrl.regionMatches(true, 0, "https:", 0, 6)) {
+                return;
+            }
+            try {
+                com.mhamzah.gateway.invoke.TlsContexts.rebuild(tls);
+                if ("INSECURE".equals(tls.mode())) {
+                    org.slf4j.LoggerFactory.getLogger(ConfigCompiler.class).warn(
+                            "{}: tls_mode INSECURE, certificates and host names are NOT verified (dev/test only)", where);
+                }
+            } catch (IllegalArgumentException e) {
+                errors.add(where + ": tls: " + e.getMessage());
             }
         }
 

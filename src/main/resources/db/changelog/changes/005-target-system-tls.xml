@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        TLS of https:// target systems (ignored for http://). tls_mode: VERIFY (NULL = default, the JVM's CAs),
+        INSECURE (trust any certificate; dev/test only) or CUSTOM (the trust store and/or client key store below).
+        A store is PEM text or a path to a .pem/.crt, .p12/.pfx or .jks file. Values may contain ${ENV_VAR}
+        placeholders: keep keys and passwords in the environment, not in this table.
+    -->
+    <changeSet id="005-gw-target-system-tls" author="json-gateway">
+        <addColumn tableName="${tbl.target_system}">
+            <column name="tls_mode" type="varchar(10)"/>
+            <column name="tls_trust_store" type="varchar(4000)"/>
+            <column name="tls_trust_store_password" type="varchar(500)"/>
+            <column name="tls_key_store" type="varchar(4000)"/>
+            <column name="tls_key_store_password" type="varchar(500)"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

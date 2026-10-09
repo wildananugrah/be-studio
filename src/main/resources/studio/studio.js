@@ -36,7 +36,8 @@ function fromApi(c) {
         respSchema: str(s.responseSchema), bodyCodec: str(s.bodyCodec), enabled: s.enabled, rules: s.rules.map(ruleIn) })),
       response: f.response.map(ruleIn)
     })),
-    targets: c.targets.map(t => ({ code: str(t.code), base: str(t.baseUrl), connect: str(t.connectTimeoutMs), read: str(t.readTimeoutMs), bodyCodec: str(t.bodyCodec), enabled: t.enabled, headers: t.headers.map(h => ({ n: str(h.name), v: str(h.value) })) })),
+    targets: c.targets.map(t => ({ code: str(t.code), base: str(t.baseUrl), connect: str(t.connectTimeoutMs), read: str(t.readTimeoutMs), bodyCodec: str(t.bodyCodec), enabled: t.enabled, headers: t.headers.map(h => ({ n: str(h.name), v: str(h.value) })),
+      tls: { mode: (t.tls && t.tls.mode) || 'VERIFY', trust: str(t.tls && t.tls.trustStore), trustPw: str(t.tls && t.tls.trustStorePassword), key: str(t.tls && t.tls.keyStore), keyPw: str(t.tls && t.tls.keyStorePassword) } })),
     lookups,
     schemas: (c.schemas || []).map(x => ({ code: str(x.code), desc: str(x.description), text: str(x.text) }))
   };
@@ -52,10 +53,19 @@ function toApi(cfg) {
         enabled: s.enabled, rules: s.rules.map(ruleOut) })),
       response: f.response.map(ruleOut)
     })),
-    targets: cfg.targets.map(t => ({ code: t.code, baseUrl: t.base, connectTimeoutMs: int(t.connect), readTimeoutMs: int(t.read), bodyCodec: nn(t.bodyCodec), enabled: t.enabled !== false, headers: t.headers.map(h => ({ name: h.n, value: h.v })) })),
+    targets: cfg.targets.map(t => ({ code: t.code, baseUrl: t.base, connectTimeoutMs: int(t.connect), readTimeoutMs: int(t.read), bodyCodec: nn(t.bodyCodec), enabled: t.enabled !== false, headers: t.headers.map(h => ({ name: h.n, value: h.v })),
+      tls: tlsOut(t.tls) })),
     lookups: Object.keys(cfg.lookups).map(code => ({ code, entries: cfg.lookups[code].map(r => ({ source: r.src, target: r.tgt })) })),
     schemas: cfg.schemas.map(x => ({ code: x.code, description: nn(x.desc), text: x.text }))
   };
+}
+
+const TLS0 = { mode: 'VERIFY', trust: '', trustPw: '', key: '', keyPw: '' };
+/** VERIFY sends nothing; INSECURE no stores; CUSTOM its stores. */
+function tlsOut(t) {
+  const x = t || TLS0;
+  if (x.mode === 'CUSTOM') return { mode: 'CUSTOM', trustStore: nn(x.trust), trustStorePassword: nn(x.trustPw), keyStore: nn(x.key), keyStorePassword: nn(x.keyPw) };
+  return { mode: x.mode === 'INSECURE' ? 'INSECURE' : null, trustStore: null, trustStorePassword: null, keyStore: null, keyStorePassword: null };
 }
 
 // ---------- JSON paths and sample data ----------
@@ -180,6 +190,60 @@ const pageHead = (title, desc, btnLabel, onBtn) => html`
 const inputStyle = (h = 32, size = 12) => `height:${h}px;border:1px solid #E4E1D8;border-radius:6px;padding:0 9px;font:${size}px ${MONO};background:#FAF9F6;width:100%;min-width:0`;
 const label10 = t => html`<span style=${`font:10px ${MONO};letter-spacing:.06em;color:#9A9CA2`}>${t}</span>`;
 const mono = t => html`<span style=${`font-family:${MONO}`}>${t}</span>`;
+
+// ---------- assistant: safe Markdown ----------
+const esc = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function inlineMd(t) {
+  // t is already escaped; code spans are cut out first so nothing inside them is formatted
+  const codes = [];
+  t = t.replace(/`([^`]+)`/g, (m, c) => { codes.push(c); return '\u0000' + (codes.length - 1) + '\u0000'; });
+  t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, label, url) => {
+    if (/^studio:/.test(url)) return '<a href="#" data-nav="' + url + '">' + label + '</a>';
+    if (/^https?:\/\//.test(url)) return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+    return label;
+  });
+  t = t.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/(^|[\s(])\*([^*\s][^*]*)\*(?=$|[\s).,:;!?])/g, '$1<i>$2</i>')
+    .replace(/(^|[\s(])_([^_\s][^_]*)_(?=$|[\s).,:;!?])/g, '$1<i>$2</i>');
+  return t.replace(/\u0000(\d+)\u0000/g, (m, i) => '<code>' + codes[+i] + '</code>');
+}
+function md(src) {
+  const lines = esc(src).split('\n'); const out = []; let i = 0;
+  const isTable = l => /^\s*\|.*\|\s*$/.test(l);
+  while (i < lines.length) {
+    const l = lines[i];
+    const fence = /^\s*(```|~~~)\s*([\w+-]*)\s*$/.exec(l);
+    if (fence) {
+      const body = []; i++;
+      while (i < lines.length && !new RegExp('^\\s*' + fence[1] + '\\s*$').test(lines[i])) body.push(lines[i++]);
+      i++;
+      out.push('<div class="md-code"><button class="md-copy" data-copy="1">Copy</button>' + (fence[2] ? '<span class="md-lang">' + fence[2] + '</span>' : '') + '<pre><code>' + body.join('\n') + '</code></pre></div>');
+      continue;
+    }
+    const h = /^(#{1,6})\s+(.*)$/.exec(l);
+    if (h) { out.push('<h4>' + inlineMd(h[2]) + '</h4>'); i++; continue; }
+    if (isTable(l) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      const row = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => inlineMd(c.trim()));
+      let html = '<table><thead><tr>' + row(l).map(c => '<th>' + c + '</th>').join('') + '</tr></thead><tbody>'; i += 2;
+      while (i < lines.length && isTable(lines[i])) { html += '<tr>' + row(lines[i]).map(c => '<td>' + c + '</td>').join('') + '</tr>'; i++; }
+      out.push(html + '</tbody></table>'); continue;
+    }
+    if (/^\s*([-*]|\d+\.)\s+/.test(l)) {
+      const ordered = /^\s*\d+\./.test(l); const items = [];
+      while (i < lines.length && /^\s*([-*]|\d+\.)\s+/.test(lines[i])) {
+        let item = lines[i].replace(/^\s*([-*]|\d+\.)\s+/, ''); i++;
+        while (i < lines.length && /^\s{2,}\S/.test(lines[i]) && !/^\s*([-*]|\d+\.)\s+/.test(lines[i])) item += ' ' + lines[i++].trim();
+        items.push('<li>' + inlineMd(item) + '</li>');
+      }
+      out.push((ordered ? '<ol>' : '<ul>') + items.join('') + (ordered ? '</ol>' : '</ul>')); continue;
+    }
+    if (!l.trim()) { i++; continue; }
+    const para = [];
+    while (i < lines.length && lines[i].trim() && !/^\s*(```|~~~|#{1,6}\s|([-*]|\d+\.)\s+)/.test(lines[i]) && !isTable(lines[i])) para.push(lines[i++]);
+    if (!para.length) para.push(lines[i++]);
+    out.push('<p>' + inlineMd(para.join('<br>')) + '</p>');
+  }
+  return out.join('');
+}
 
 class App extends Component {
   constructor() {
@@ -377,6 +441,7 @@ class App extends Component {
         ${s.screen === 'lookups' && this.renderLookups()}
         ${s.screen === 'schemas' && this.renderSchemas()}
         ${s.toast && this.renderToast()}
+        ${s.catalog.assistantEnabled && s.assistant && s.assistant.open && this.renderAssistant()}
       </div>`;
   }
 
@@ -416,6 +481,7 @@ class App extends Component {
         ${dirty && html`<span style=${`font:12px ${MONO};color:oklch(0.8 0.12 75)`}>unsaved changes</span>`}
         ${dirty && html`<button onClick=${() => this.discard()} style="border:1px solid #3A3C43;background:none;color:#C9CBD1;padding:6px 11px;border-radius:7px;cursor:pointer">${s.discardArm ? 'Click again to discard' : 'Discard'}</button>`}
         <div style=${`font:12px ${MONO};color:#8E9097`}>${location.host}</div>
+        ${s.catalog.assistantEnabled && html`<button onClick=${() => this.toggleAssistant()} title="Ask the project assistant" style=${`display:flex;align-items:center;gap:7px;border:1px solid #3A3C43;background:${s.assistant && s.assistant.open ? '#2B2D33' : 'none'};color:#E9E7E1;padding:6px 11px;border-radius:7px;cursor:pointer;font-weight:500`}><span style=${`font:600 11px ${MONO};color:${C.call}`}>?</span>Ask</button>`}
         <button class="btn-acc" disabled=${s.saving} onClick=${() => this.save()} title=${n ? n + ' problem(s): the save would be rejected' : 'Write to the database and reload'} style=${`display:flex;align-items:center;gap:8px;border:0;background:${C.call};color:#17181C;padding:7px 12px;border-radius:7px;cursor:pointer;font-weight:600`}>
           ${s.saving ? 'Saving…' : 'Save & reload'}
           ${n > 0 && html`<span style=${`font:600 10px ${MONO};background:#17181C;color:#fff;border-radius:9px;padding:2px 6px`}>${n}</span>`}
@@ -490,7 +556,7 @@ class App extends Component {
     const used = code => s.cfg.flows.reduce((a, x) => a + x.steps.filter(y => y.target === code).length, 0);
     const T = (i, fn) => this.mutCfg(cfg => fn(cfg.targets[i], cfg));
     const val = e => e.currentTarget.value;
-    const newTarget = () => this.mutCfg(cfg => { let k = 1; while (cfg.targets.some(x => x.code === 'NEW_SYSTEM_' + k)) k++; cfg.targets.push({ code: 'NEW_SYSTEM_' + k, base: '${NEW_SYSTEM_' + k + '_URL:http://localhost:9000}', connect: '3000', read: '10000', bodyCodec: '', enabled: true, headers: [] }); });
+    const newTarget = () => this.mutCfg(cfg => { let k = 1; while (cfg.targets.some(x => x.code === 'NEW_SYSTEM_' + k)) k++; cfg.targets.push({ code: 'NEW_SYSTEM_' + k, base: '${NEW_SYSTEM_' + k + '_URL:http://localhost:9000}', connect: '3000', read: '10000', bodyCodec: '', enabled: true, headers: [], tls: { ...TLS0 } }); });
     const yml = (cat.configTargets || []);
     return html`
       <div style="flex:1;min-height:0;overflow:auto;padding:28px 32px 60px">
@@ -522,6 +588,7 @@ class App extends Component {
                     ${cat.bodyCodecs.map(c => html`<option value=${c}>${c}</option>`)}
                   </select>
                 </label>
+                ${this.renderTls(t, i, resolved)}
                 <div style="padding-top:10px;border-top:1px solid #EFEDE6;display:flex;flex-direction:column;gap:6px">
                   ${label10('FIXED HEADERS · gw_target_system_header')}
                   ${t.headers.map((h, j) => html`
@@ -553,6 +620,36 @@ class App extends Component {
               })}
             </div>`}
         </div>
+      </div>`;
+  }
+
+  /** TLS of one target: HTTP/HTTPS from the resolved URL, the mode, and for CUSTOM the trust / key stores. */
+  renderTls(t, i, resolved) {
+    const tls = t.tls || TLS0; const https = /^https:/i.test(resolved);
+    const T = fn => this.mutCfg(cfg => { const x = cfg.targets[i]; x.tls = { ...TLS0, ...(x.tls || {}) }; fn(x.tls); });
+    const val = e => e.currentTarget.value;
+    const badge = https ? html`<span style=${`font:600 10px ${MONO};color:oklch(0.4 0.12 155);background:oklch(0.94 0.05 155);padding:2px 6px;border-radius:4px`}>HTTPS</span>`
+      : html`<span style=${`font:600 10px ${MONO};color:#6A6D75;background:#EFEDE6;padding:2px 6px;border-radius:4px`}>HTTP</span>`;
+    const store = (label, key, pwKey, ph, hint) => html`
+      <label style="display:flex;flex-direction:column;gap:5px">${label10(label)}
+        <textarea class="inp" spellcheck="false" rows=${tls[key].includes('-----BEGIN') ? 5 : 1} value=${tls[key]} placeholder=${ph} onInput=${e => { const v = val(e); T(x => { x[key] = v; }); }} style=${`border:1px solid #E4E1D8;border-radius:6px;padding:6px 9px;font:11.5px/1.45 ${MONO};background:#FAF9F6;resize:vertical;width:100%`}></textarea>
+        <input class="inp" type="password" autocomplete="new-password" value=${tls[pwKey]} placeholder="password (PKCS12/JKS or encrypted key), e.g. \${TLS_PASSWORD}" onInput=${e => { const v = val(e); T(x => { x[pwKey] = v; }); }} style=${inputStyle(28, 11.5)}/>
+        <span style="font-size:11px;color:#9A9CA2;line-height:1.4">${hint}</span>
+      </label>`;
+    return html`
+      <div style="padding-top:10px;border-top:1px solid #EFEDE6;display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px">${label10('TLS · gw_target_system.tls_*')}<span style="flex:1"></span>${badge}</div>
+        <select class="inp" value=${tls.mode} onChange=${e => { const v = val(e); T(x => { x.mode = v; }); }} style=${inputStyle(30)}>
+          <option value="VERIFY">VERIFY · trusted CAs + host name check (default)</option>
+          <option value="INSECURE">INSECURE · skip certificate checks (dev/test only)</option>
+          <option value="CUSTOM">CUSTOM · own trust store and/or client key (mTLS)</option>
+        </select>
+        ${!https && tls.mode !== 'VERIFY' && html`<span style="font-size:11.5px;color:#7A5B12">The base URL is http://, so TLS settings are ignored until it is https://.</span>`}
+        ${tls.mode === 'INSECURE' && html`<span style="font-size:11.5px;line-height:1.4;color:oklch(0.48 0.17 25)">Certificates and host names are not verified: anyone in the network path can read and change the traffic. Use only against dev/test systems.</span>`}
+        ${tls.mode === 'CUSTOM' && html`
+          ${store('TRUST STORE (server CA / self-signed cert)', 'trust', 'trustPw', '/etc/gateway/tls/core-ca.pem  or  \${CORE_CA_PEM}', 'Replaces the JVM CAs for this target. PEM text, or a path to .pem/.crt, .p12/.pfx or .jks. Empty = JVM CAs.')}
+          ${store('KEY STORE (client certificate, mutual TLS)', 'key', 'keyPw', '/etc/gateway/tls/gateway-client.p12  or  \${CORE_CLIENT_PEM}', 'Presented to the server. PEM with certificate chain + private key, or .p12/.pfx/.jks. Empty = no client certificate.')}
+          <span style="font-size:11px;color:#9A9CA2;line-height:1.4">Keep keys and passwords out of the database: use a file path on the gateway server or a \${ENV_VAR} placeholder. Files are re-read on every Save & reload.</span>`}
       </div>`;
   }
 
@@ -1127,6 +1224,125 @@ class App extends Component {
           </details>
         </aside>
       </div>`;
+  }
+
+  // ---------- assistant ----------
+  async toggleAssistant() {
+    const a = this.state.assistant || { open: false, messages: [], input: '', streaming: false, status: null };
+    this.setState({ assistant: { ...a, open: !a.open } });
+    if (!a.open) { // refresh on every open: the server may have been restarted with new settings
+      try { const r = await this.api('GET', 'assistant'); this.setAssistant(x => { x.status = r.status === 200 ? r.json : { configured: false }; }); } catch (e) { /* api() */ }
+    }
+    setTimeout(() => { const el = document.getElementById('assistant-input'); if (el) el.focus(); }, 50);
+  }
+  setAssistant(fn) { this.setState(s => { const a = { ...(s.assistant || {}) }; a.messages = (a.messages || []).map(m => ({ ...m })); fn(a); return { assistant: a }; }); }
+
+  assistantContext() {
+    const s = this.state; const f = s.screen === 'flow' && s.cfg ? s.cfg.flows[s.cur] : null;
+    const problems = f ? this.flowProblems(f) : s.problems;
+    return { screen: s.screen, tab: f ? s.tab : null, flowCode: f ? f.code : null,
+      flow: f ? toApi({ flows: [f], targets: [], lookups: {}, schemas: [] }).flows[0] : null,
+      unsaved: !!this.dirty(), problems: (problems || []).slice(0, 30) };
+  }
+
+  async askAssistant(text) {
+    const q = (text || '').trim(); const a = this.state.assistant;
+    if (!q || a.streaming) return;
+    const history = [...a.messages.filter(m => !m.error), { role: 'user', content: q }];
+    this.setAssistant(x => { x.messages.push({ role: 'user', content: q }, { role: 'assistant', content: '', pending: true }); x.input = ''; x.streaming = true; });
+    const ctrl = new AbortController(); this.assistantAbort = ctrl;
+    const finish = fn => this.setAssistant(x => { const last = x.messages[x.messages.length - 1]; fn(last, x); last.pending = false; x.streaming = false; });
+    try {
+      const r = await fetch('api/assistant/chat', { method: 'POST', signal: ctrl.signal,
+        headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream', 'X-Admin-Token': this.state.token },
+        body: JSON.stringify({ messages: history.map(m => ({ role: m.role, content: m.content })), context: this.assistantContext() }) });
+      if (r.status === 401) { finish(l => { l.error = true; l.content = 'The admin token was rejected.'; }); return; }
+      if (!r.ok || !r.body) { finish(l => { l.error = true; l.content = 'HTTP ' + r.status; }); return; }
+      const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2);
+          let ev = 'message', data = '';
+          chunk.split('\n').forEach(line => { if (line.startsWith('event:')) ev = line.slice(6).trim(); else if (line.startsWith('data:')) data += line.slice(5).replace(/^ /, ''); });
+          let payload = {}; try { payload = JSON.parse(data || '{}'); } catch (e) { /* ignore */ }
+          if (ev === 'delta') this.setAssistant(x => { const l = x.messages[x.messages.length - 1]; l.content += payload.text || ''; l.pending = false; });
+          else if (ev === 'error') finish(l => { l.error = true; l.content = (l.content ? l.content + '\n\n' : '') + payload.message; });
+          else if (ev === 'done') finish(l => { l.usage = payload.usage; });
+        }
+        const el = document.getElementById('assistant-log'); if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 120) el.scrollTop = el.scrollHeight;
+      }
+      finish(() => {});
+    } catch (e) {
+      finish(l => { if (e.name === 'AbortError') { l.content += (l.content ? '\n\n' : '') + '_Stopped._'; } else { l.error = true; l.content = 'Could not reach the gateway: ' + e.message; } });
+    }
+  }
+
+  onAssistantClick(e) {
+    const nav = e.target.closest('[data-nav]');
+    if (nav) {
+      e.preventDefault();
+      const parts = nav.getAttribute('data-nav').replace(/^studio:/, '').split('/');
+      if (parts[0] === 'flow') {
+        const i = this.state.cfg.flows.findIndex(f => f.code === parts[1]);
+        if (i >= 0) this.setState({ screen: 'flow', cur: i, tab: ['pipeline', 'mapping', 'tests', 'rows'].includes(parts[2]) ? parts[2] : 'pipeline', sel: { kind: 'flow' }, scope: 'resp', preview: null }, () => this.changed());
+      } else if (['flows', 'targets', 'lookups', 'schemas'].includes(parts[0])) this.setState({ screen: parts[0] });
+      return;
+    }
+    const copy = e.target.closest('[data-copy]');
+    if (copy) { const code = copy.parentElement.querySelector('code'); try { navigator.clipboard.writeText(code.textContent); copy.textContent = 'Copied'; setTimeout(() => { copy.textContent = 'Copy'; }, 1200); } catch (err) { /* no clipboard */ } }
+  }
+
+  renderAssistant() {
+    const s = this.state; const a = s.assistant; const st = a.status;
+    const f = s.screen === 'flow' ? s.cfg.flows[s.cur] : null;
+    const suggestions = [
+      ...(f ? ['Explain the flow ' + f.code + ' step by step'] : []),
+      ...(f && this.flowProblems(f).length ? ['How do I fix the problems in ' + f.code + '?'] : []),
+      'How do I set up and run this project locally?',
+      'Walk me through creating a new flow in Studio',
+      'How do I write a custom class (handler) and use it?',
+      'How do I generate a unit test document for a flow?',
+      'What does each menu in Gateway Studio do?'
+    ];
+    const send = () => this.askAssistant(a.input);
+    return html`
+      <aside style="position:fixed;top:52px;right:0;bottom:0;width:min(460px,100vw);background:#fff;border-left:1px solid #E4E1D8;box-shadow:-12px 0 40px rgba(23,24,28,.12);display:flex;flex-direction:column;z-index:20">
+        <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid #EFEDE6">
+          <div style=${`width:24px;height:24px;border-radius:6px;background:${C.call};display:grid;place-items:center;font:600 12px ${MONO};color:#17181C`}>?</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600">Project assistant</div>
+            <div style=${`font:10.5px ${MONO};color:#9A9CA2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis`}>${st ? (st.configured ? st.model + ' · ' + st.baseUrl : 'not configured') : 'connecting…'}</div>
+          </div>
+          ${a.messages.length > 0 && html`<button class="btn-line" disabled=${a.streaming} onClick=${() => this.setAssistant(x => { x.messages = []; })} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:4px 9px;cursor:pointer;font-size:12px">New chat</button>`}
+          <button class="x" onClick=${() => this.setAssistant(x => { x.open = false; })} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:18px">×</button>
+        </div>
+        <div id="assistant-log" onClick=${e => this.onAssistantClick(e)} style="flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:12px">
+          ${st && !st.configured && html`<div style="padding:12px;border:1px solid oklch(0.85 0.08 75);background:oklch(0.97 0.03 85);border-radius:8px;font-size:12.5px;line-height:1.5;color:oklch(0.42 0.1 70)">The assistant needs an AI endpoint. Put <code>AI_AUTH_KEY</code> (and <code>AI_BASE_URL</code>, <code>AI_MODEL</code>) in the project's <code>.env</code> file (see <code>.env.example</code>), then restart the gateway.</div>`}
+          ${a.messages.length === 0 && html`
+            <div style="font-size:12.5px;color:#6A6D75;line-height:1.5">Ask anything about this project: setting it up, building flows in Studio, custom classes, testing, configuration, troubleshooting. Answers come from the project's documentation and this gateway's live configuration${f ? ', including the open flow ' : ''}${f && html`<code>${f.code}</code>`}.</div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              ${suggestions.map(q => html`<button class="btn-line" onClick=${() => this.askAssistant(q)} disabled=${st && !st.configured} style="text-align:left;border:1px solid #E4E1D8;background:#FAF9F6;border-radius:8px;padding:8px 10px;cursor:pointer;font-size:12.5px">${q}</button>`)}
+            </div>`}
+          ${a.messages.map(m => m.role === 'user'
+            ? html`<div style="align-self:flex-end;max-width:85%;background:#17181C;color:#fff;border-radius:12px 12px 2px 12px;padding:8px 12px;font-size:13px;line-height:1.45;white-space:pre-wrap">${m.content}</div>`
+            : html`<div class="md" style=${`align-self:stretch;font-size:13px;line-height:1.55;color:${m.error ? 'oklch(0.48 0.17 25)' : '#17181C'}`}>
+                ${m.pending && !m.content ? html`<span style="color:#9A9CA2">Thinking…</span>` : html`<div dangerouslySetInnerHTML=${{ __html: md(m.content) }}></div>`}
+              </div>`)}
+        </div>
+        <div style="border-top:1px solid #EFEDE6;padding:10px 12px;display:flex;gap:8px;align-items:flex-end">
+          <textarea id="assistant-input" class="inp" rows="2" value=${a.input} disabled=${st && !st.configured}
+            onInput=${e => { const v = e.currentTarget.value; this.setAssistant(x => { x.input = v; }); }}
+            onKeyDown=${e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+            placeholder="Ask about setup, flows, custom classes… (Enter to send)" style="flex:1;resize:none;border:1px solid #E4E1D8;border-radius:8px;padding:8px 10px;font-size:13px;line-height:1.4;background:#FAF9F6;max-height:160px"></textarea>
+          ${a.streaming
+            ? html`<button class="btn-line" onClick=${() => this.assistantAbort && this.assistantAbort.abort()} style="border:1px solid #E4E1D8;background:#fff;border-radius:8px;padding:9px 12px;cursor:pointer;font-weight:500">Stop</button>`
+            : html`<button class="btn-acc" onClick=${send} disabled=${!a.input.trim() || (st && !st.configured)} style=${`border:0;background:${C.call};color:#17181C;border-radius:8px;padding:9px 14px;cursor:pointer;font-weight:600`}>Send</button>`}
+        </div>
+      </aside>`;
   }
 
   // ---------- unit tests ----------

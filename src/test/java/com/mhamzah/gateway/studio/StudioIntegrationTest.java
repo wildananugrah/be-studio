@@ -23,6 +23,7 @@ import tools.jackson.databind.node.ObjectNode;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
     "gateway.admin.token=studio-token",
     "gateway.studio.enabled=true",
+    "gateway.assistant.enabled=false",
 })
 @ActiveProfiles("dev")
 @Import({TestcontainersConfiguration.class, WireMockConfiguration.class})
@@ -98,6 +99,14 @@ class StudioIntegrationTest {
 
         assertThat(call("GET", "/studio/api/config", null, null).status()).isEqualTo(401);
         assertThat(call("GET", "/studio/api/config", "wrong", null).status()).isEqualTo(401);
+    }
+
+    @Test
+    void assistantCanBeSwitchedOffOnItsOwn() throws Exception {
+        assertThat(call("GET", "/studio/api/assistant", "studio-token", null).status()).isEqualTo(404);
+        assertThat(call("GET", "/studio/api/catalog", "studio-token", null).json().get("assistantEnabled").asBoolean())
+                .isFalse();
+        assertThat(call("GET", "/studio/", null, null).status()).isEqualTo(200);
     }
 
     @Test

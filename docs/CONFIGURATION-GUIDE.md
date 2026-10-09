@@ -508,6 +508,11 @@ FROM gw_audit_transaction ORDER BY id DESC FETCH FIRST 10 ROWS ONLY;
 | `read_timeout_ms` | | `gateway.default-step-timeout-ms` (10000) | Default read timeout for steps calling this system (a step's own `timeout_ms` wins) |
 | `body_codec` | | `jsonCodec` | Wire format for every step calling this system: `xmlCodec`, `soapCodec`, `soap12Codec` or a custom `BodyCodec` bean ([§4.15](#415-xml-or-soap-downstream)). A step's own `body_codec` wins. |
 | `enabled` | | `true` | `false` = row ignored (an `application.yml` definition with the same code is used, if any) |
+| `tls_mode` | | `VERIFY` | Only for `https://` URLs ([§4.16](#416-https-downstream-certificates-and-keys)): `VERIFY` (JVM CAs + host name check), `INSECURE` (no checks, dev/test only) or `CUSTOM` (the stores below) |
+| `tls_trust_store` | | | `CUSTOM`: the CA / self-signed certificate(s) to trust instead of the JVM CAs. PEM text, or a path to `.pem`/`.crt`, `.p12`/`.pfx` or `.jks`; `${...}` allowed |
+| `tls_trust_store_password` | | | Password of a `.p12`/`.jks` trust store |
+| `tls_key_store` | | | `CUSTOM`: client certificate + private key for mutual TLS. PEM (chain + key), or `.p12`/`.pfx`/`.jks` |
+| `tls_key_store_password` | | | Password of the key store, or of an encrypted PEM key |
 
 **`gw_target_system_header`**: fixed headers sent on every call to that system. A step's `HEADER` rules and `request_handler` can still override them.
 
@@ -689,7 +694,7 @@ When a code is in both places, **the database row wins** and the startup/reload 
 target CORE_BANKING -> http://localhost:8089 (database)
 ```
 
-For `https://` URLs the JVM's default truststore is used. For an internal CA, start the JVM with `-Djavax.net.ssl.trustStore=... -Djavax.net.ssl.trustStorePassword=...`.
+HTTP or HTTPS is decided by the scheme of `base_url`. For `https://`, the JVM's trusted CAs are used unless the target sets `tls_mode` ([§4.16](#416-https-downstream-certificates-and-keys)).
 
 ### 4.14 Switch things off
 
@@ -773,6 +778,51 @@ SOAPAction: urn:bank/Inquiry
 and turns `<S:Body><ns2:InquiryResponse><ns2:name>BUDI</ns2:name><ns2:balance>100.10</ns2:balance>…` into `{"name":"BUDI","balance":"100.10"}` for the client. For SOAP 1.2 (`soap12Codec`) the `SOAPAction` header is moved into the Content-Type `action` parameter automatically. The integration test `soapTargetSystemIsCalledInXmlAndAnsweredInJson` runs exactly this flow.
 
 **Audit and masking.** The audit tables store the JSON form of the request and response, so `gateway.masking.fields` works for XML and SOAP calls too.
+
+### 4.16 HTTPS downstream: certificates and keys
+
+Whether a downstream is called over HTTP or HTTPS is the scheme of its `base_url` (`http://` or `https://`). For HTTPS, each target system chooses how the connection is secured with `tls_mode`:
+
+| `tls_mode` | What happens | Use for |
+|---|---|---|
+| `VERIFY` (default, NULL) | The server certificate must chain to a CA the JVM trusts, and match the host name | Public or company-CA certificates the JVM already trusts |
+| `INSECURE` | Any certificate and host name is accepted; a warning is logged on every reload | Dev/test systems with self-signed certificates only. Never production: anyone in the network path can read and change the traffic |
+| `CUSTOM` | `tls_trust_store` replaces the JVM CAs for this target, and/or `tls_key_store` presents a client certificate (mutual TLS) | An internal CA or a pinned self-signed certificate; partners that require a client certificate |
+
+A store is either **PEM text** (`-----BEGIN CERTIFICATE-----...`), or a **path** on the gateway server to a `.pem`/`.crt` file (PEM), a `.p12`/`.pfx` file (PKCS12) or a `.jks` file. `classpath:` and `file:` prefixes work. A PEM key store contains the client certificate chain and the private key (one file). Passwords are needed for PKCS12/JKS stores and encrypted PEM keys.
+
+Keep key material out of the database: put files on the server (or a mounted secret) and store only the path, or use `${ENV_VAR}` placeholders for paths, PEM text and passwords. Files are read on every load and reload, so a renewed certificate is picked up by `make reload` (or **Save & reload** in Studio) without a restart. A wrong path, an unreadable store or a wrong password is a config error, so the reload is rejected and the old configuration keeps running.
+
+```sql
+-- internal CA: trust only that CA for CORE_BANKING
+UPDATE gw_target_system SET base_url = 'https://core.internal:9443', tls_mode = 'CUSTOM',
+       tls_trust_store = '/etc/gateway/tls/company-ca.pem'
+ WHERE code = 'CORE_BANKING';
+
+-- partner that requires mutual TLS: our client certificate from a PKCS12 file, password from the environment
+UPDATE gw_target_system SET base_url = 'https://api.partner.co.id', tls_mode = 'CUSTOM',
+       tls_key_store = '/etc/gateway/tls/gateway-client.p12', tls_key_store_password = '${PARTNER_P12_PASSWORD}'
+ WHERE code = 'PARTNER';
+
+-- dev only: a test server with a self-signed certificate
+UPDATE gw_target_system SET tls_mode = 'INSECURE' WHERE code = 'CARD_SYSTEM';
+```
+
+The same settings exist for targets in `application.yml`:
+
+```yaml
+gateway:
+  target-systems:
+    PARTNER:
+      base-url: https://api.partner.co.id
+      tls:
+        mode: CUSTOM
+        trust-store: /etc/gateway/tls/partner-ca.pem
+        key-store: /etc/gateway/tls/gateway-client.p12
+        key-store-password: ${PARTNER_P12_PASSWORD}
+```
+
+In Gateway Studio: **Target systems**, then the target's **TLS** section. The badge shows HTTP or HTTPS from the resolved base URL; pick the mode and, for `CUSTOM`, fill in the trust store and/or key store.
 
 ---
 

@@ -72,7 +72,9 @@ final class StudioRows {
         List<Target> targets = rows.targets().stream()
                 .sorted(Comparator.comparing(TargetRow::code, Comparator.nullsFirst(Comparator.naturalOrder())))
                 .map(t -> new Target(t.code(), t.baseUrl(), t.connectTimeoutMs(), t.readTimeoutMs(), t.bodyCodec(),
-                        t.enabled(), headers.getOrDefault(t.code(), List.of())))
+                        t.enabled(), headers.getOrDefault(t.code(), List.of()),
+                        new StudioConfig.Tls(t.tlsMode(), t.tlsTrustStore(), t.tlsTrustStorePassword(),
+                                t.tlsKeyStore(), t.tlsKeyStorePassword())))
                 .toList();
 
         Map<String, List<Entry>> entries = new TreeMap<>();
@@ -134,8 +136,12 @@ final class StudioRows {
         long targetId = 0;
         long headerId = 0;
         for (Target t : config.targets()) {
+            StudioConfig.Tls tls = t.tls();
+            String mode = text(tls.mode()) == null || "VERIFY".equalsIgnoreCase(tls.mode().strip()) ? null
+                    : tls.mode().strip().toUpperCase(java.util.Locale.ROOT);
             targets.add(new TargetRow(++targetId, text(t.code()), text(t.baseUrl()), t.connectTimeoutMs(),
-                    t.readTimeoutMs(), text(t.bodyCodec()), t.enabled()));
+                    t.readTimeoutMs(), text(t.bodyCodec()), t.enabled(), mode, text(tls.trustStore()),
+                    text(tls.trustStorePassword()), text(tls.keyStore()), text(tls.keyStorePassword())));
             for (Header h : t.headers()) {
                 headers.add(new TargetHeaderRow(++headerId, text(t.code()), text(h.name()),
                         h.value() == null ? "" : h.value()));

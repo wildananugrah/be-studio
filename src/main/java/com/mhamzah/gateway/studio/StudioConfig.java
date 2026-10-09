@@ -98,13 +98,27 @@ public record StudioConfig(
             Integer readTimeoutMs,
             String bodyCodec,
             Boolean enabled,
-            List<Header> headers) {
+            List<Header> headers,
+            Tls tls) {
 
         public Target {
             enabled = enabled == null || enabled;
             headers = headers == null ? List.of() : List.copyOf(headers);
+            tls = tls == null ? new Tls(null, null, null, null, null) : tls;
+        }
+
+        public Target(String code, String baseUrl, Integer connectTimeoutMs, Integer readTimeoutMs, String bodyCodec,
+                Boolean enabled, List<Header> headers) {
+            this(code, baseUrl, connectTimeoutMs, readTimeoutMs, bodyCodec, enabled, headers, null);
         }
     }
+
+    /**
+     * TLS of an https target ({@code gw_target_system.tls_*}): mode VERIFY (null), INSECURE or CUSTOM; stores are
+     * PEM text or file paths (.pem/.crt/.p12/.pfx/.jks), values may use {@code ${ENV}} placeholders.
+     */
+    public record Tls(String mode, String trustStore, String trustStorePassword, String keyStore,
+            String keyStorePassword) {}
 
     public record Header(String name, String value) {}
 

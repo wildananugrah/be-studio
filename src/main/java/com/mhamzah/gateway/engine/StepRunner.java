@@ -14,6 +14,7 @@ import com.mhamzah.gateway.invoke.DownstreamClient;
 import com.mhamzah.gateway.invoke.DownstreamException;
 import com.mhamzah.gateway.invoke.DownstreamRequest;
 import com.mhamzah.gateway.invoke.DownstreamResponse;
+import com.mhamzah.gateway.invoke.TlsContexts;
 import com.mhamzah.gateway.mapping.MappedMessage;
 import com.mhamzah.gateway.mapping.MappingEngine;
 import java.nio.charset.StandardCharsets;
@@ -105,7 +106,8 @@ final class StepRunner {
         Duration readTimeout = cappedByFlow ? Duration.ofNanos(remainingNanos) : step.timeout();
         DownstreamRequest req = new DownstreamRequest(step.targetSystemName(), stripSlash(target.baseUrl()),
                 step.method(), path(step.pathTemplate(), mapped.pathVariables(), mapped.query()), outHeaders, wireBody,
-                Duration.ofMillis(target.connectTimeoutMs()), readTimeout);
+                Duration.ofMillis(target.connectTimeoutMs()), readTimeout,
+                target.baseUrl().regionMatches(true, 0, "https:", 0, 6) ? TlsContexts.of(target.tls()) : null);
         a.url = req.url();
 
         DownstreamResponse resp;

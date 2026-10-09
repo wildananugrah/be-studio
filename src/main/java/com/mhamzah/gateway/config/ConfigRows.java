@@ -139,7 +139,10 @@ public record ConfigRows(
     /** {@code gw_json_schema}. */
     public record SchemaRow(long id, String code, String schemaText) {}
 
-    /** {@code gw_target_system}: a downstream system. {@code baseUrl} may contain {@code ${...}} placeholders. */
+    /**
+     * {@code gw_target_system}: a downstream system. {@code baseUrl}, the TLS stores and their passwords may contain
+     * {@code ${...}} placeholders. {@code tlsMode} null means VERIFY (see {@link GatewayProperties.Tls}).
+     */
     public record TargetRow(
             long id,
             String code,
@@ -147,7 +150,18 @@ public record ConfigRows(
             Integer connectTimeoutMs,
             Integer readTimeoutMs,
             String bodyCodec,
-            boolean enabled) {}
+            boolean enabled,
+            String tlsMode,
+            String tlsTrustStore,
+            String tlsTrustStorePassword,
+            String tlsKeyStore,
+            String tlsKeyStorePassword) {
+
+        public TargetRow(long id, String code, String baseUrl, Integer connectTimeoutMs, Integer readTimeoutMs,
+                String bodyCodec, boolean enabled) {
+            this(id, code, baseUrl, connectTimeoutMs, readTimeoutMs, bodyCodec, enabled, null, null, null, null, null);
+        }
+    }
 
     /** {@code gw_target_system_header}: a fixed header sent to a target. {@code headerValue} may contain {@code ${...}}. */
     public record TargetHeaderRow(long id, String targetCode, String headerName, String headerValue) {}

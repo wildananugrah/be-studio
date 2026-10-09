@@ -49,12 +49,21 @@ gateway:
   # API documentation generated from the flow configuration: Swagger UI at /docs, OpenAPI at /docs/openapi.json.
   # Off unless enabled; it lists every endpoint, so think twice before enabling it in production.
   docs:
-    enabled: ${GATEWAY_DOCS_ENABLED:false}
+    enabled: ${GATEWAY_DOCS_ENABLED:true}
     title: ${GATEWAY_DOCS_TITLE:JSON Gateway API}
   # Gateway Studio: browser UI at /studio for editing flows, target systems and lookups. Its API needs the admin
   # token and writes straight to the config tables, then reloads. Keep it off in production.
   studio:
-    enabled: ${GATEWAY_STUDIO_ENABLED:false}
+    enabled: ${GATEWAY_STUDIO_ENABLED:true}
+  # Studio's project assistant (the "Ask" button): Claude via the Anthropic Messages API. Needs studio enabled too;
+  # false removes the Ask button and its API, and nothing calls the AI endpoint. Connection settings are AI_BASE_URL
+  # (optional, default https://api.anthropic.com), AI_AUTH_KEY, AI_MODEL (default claude-opus-5-5), optional
+  # AI_AUTH_TYPE and AI_EFFORT; taken from the environment first, then from env-file (git-ignored, never committed).
+  assistant:
+    enabled: ${GATEWAY_ASSISTANT_ENABLED:true}
+    env-file: ${GATEWAY_ASSISTANT_ENV_FILE:.env}
+    max-tokens: 64000
+    history-messages: 20
   audit:
     enabled: ${GATEWAY_AUDIT_ENABLED:true}
     store-payloads: true

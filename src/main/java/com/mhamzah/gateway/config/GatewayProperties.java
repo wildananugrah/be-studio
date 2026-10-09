@@ -16,6 +16,7 @@ public record GatewayProperties(
         @DefaultValue Masking masking,
         @DefaultValue Docs docs,
         @DefaultValue Studio studio,
+        @DefaultValue Assistant assistant,
         Map<String, TargetSystem> targetSystems,
         @DefaultValue Db db) {
 
@@ -43,6 +44,16 @@ public record GatewayProperties(
      */
     public record Studio(@DefaultValue("false") boolean enabled) {}
 
+    /**
+     * Studio's project assistant (the "Ask" button). Needs {@code gateway.studio.enabled} too. The AI connection
+     * ({@code AI_BASE_URL}, {@code AI_AUTH_KEY}, {@code AI_MODEL}, ...) comes from the environment or {@code envFile}.
+     */
+    public record Assistant(
+            @DefaultValue("true") boolean enabled,
+            @DefaultValue(".env") String envFile,
+            @DefaultValue("64000") int maxTokens,
+            @DefaultValue("20") int historyMessages) {}
+
     public record Masking(
             @DefaultValue({"pin", "password", "cardNo", "cvv", "authorization", "x-admin-token"}) List<String> fields,
             @DefaultValue("****") String mask) {}
@@ -56,10 +67,41 @@ public record GatewayProperties(
             @DefaultValue("3000") int connectTimeoutMs,
             Integer readTimeoutMs,
             Map<String, String> staticHeaders,
-            String bodyCodec) {
+            String bodyCodec,
+            Tls tls) {
 
         public TargetSystem {
             staticHeaders = staticHeaders == null ? Map.of() : Map.copyOf(staticHeaders);
+            tls = tls == null ? Tls.VERIFY : tls;
+        }
+
+        public TargetSystem(String baseUrl, int connectTimeoutMs, Integer readTimeoutMs,
+                Map<String, String> staticHeaders, String bodyCodec) {
+            this(baseUrl, connectTimeoutMs, readTimeoutMs, staticHeaders, bodyCodec, null);
+        }
+    }
+
+    /**
+     * TLS for an {@code https://} target system (ignored for {@code http://}).
+     * <ul>
+     *   <li>{@code VERIFY} (default): the JVM's trusted CAs and hostname verification.</li>
+     *   <li>{@code INSECURE}: trust any certificate and host name. Development and test systems only.</li>
+     *   <li>{@code CUSTOM}: {@code trustStore} replaces the JVM's CAs (the server's CA or self-signed certificate);
+     *       {@code keyStore} presents a client certificate (mutual TLS). Either or both.</li>
+     * </ul>
+     * A store is PEM text ({@code -----BEGIN ...}), or a path to a {@code .pem}/{@code .crt} file, or to a PKCS12
+     * ({@code .p12}/{@code .pfx}) or JKS ({@code .jks}) file; {@code classpath:} and {@code file:} prefixes work. A PEM
+     * key store holds the certificate chain and the private key (one file or one text). Passwords are for PKCS12/JKS
+     * stores and encrypted PEM keys. Every value may use {@code ${ENV_VAR}} placeholders, which is the way to keep keys
+     * and passwords out of the database.
+     */
+    public record Tls(String mode, String trustStore, String trustStorePassword, String keyStore,
+            String keyStorePassword) {
+
+        public static final Tls VERIFY = new Tls("VERIFY", null, null, null, null);
+
+        public Tls {
+            mode = mode == null || mode.isBlank() ? "VERIFY" : mode.strip().toUpperCase(java.util.Locale.ROOT);
         }
     }
 

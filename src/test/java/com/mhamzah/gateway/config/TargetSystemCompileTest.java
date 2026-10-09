@@ -85,6 +85,39 @@ class TargetSystemCompileTest {
     }
 
     @Test
+    void tlsSettingsResolvePlaceholdersAndReachTheStep() {
+        env.put("CORE_TLS_MODE_UNUSED", "x");
+        env.put("CORE_CA", "classpath:does-not-matter.pem");
+        rows.target(new TargetRow(1, "CORE", "http://core", null, null, null, true, "insecure", null, null, null, null));
+        flowCalling("CORE");
+        StepDefinition step = compile().flows().getFirst().allSteps().getFirst();
+        assertThat(step.targetSystem().tls().mode()).isEqualTo("INSECURE"); // kept, but unused for http://
+    }
+
+    @Test
+    void badTlsOnAnHttpsTargetIsAConfigError() {
+        rows.target(new TargetRow(1, "CORE", "https://core", null, null, null, true, "CUSTOM",
+                "/no/such/ca.pem", null, null, null));
+        flowCalling("CORE");
+        assertInvalid("target system 'CORE': tls: cannot load the trust store (/no/such/ca.pem)");
+    }
+
+    @Test
+    void customTlsNeedsAStoreAndPlaceholdersMustResolve() {
+        rows.target(new TargetRow(1, "CORE", "https://core", null, null, null, true, "CUSTOM", null, null, null, null));
+        rows.target(new TargetRow(2, "CARD", "https://card", null, null, null, true, "CUSTOM", "${CARD_CA}", null,
+                null, null));
+        assertInvalid("target system 'CORE': tls: tls_mode CUSTOM needs a trust store",
+                "target system 'CARD': tls: Could not resolve placeholder 'CARD_CA'");
+    }
+
+    @Test
+    void unknownTlsModeIsReportedEvenForHttp() {
+        rows.target(new TargetRow(1, "CORE", "http://core", null, null, null, true, "STRICT", null, null, null, null));
+        assertInvalid("target system 'CORE': tls_mode 'STRICT' must be VERIFY, INSECURE or CUSTOM");
+    }
+
+    @Test
     void databaseDefaultsForTimeouts() {
         rows.target("CORE", "http://core");
         flowCalling("CORE");

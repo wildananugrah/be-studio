@@ -61,9 +61,12 @@ class StudioWriter {
 
         for (TargetRow r : rows.targets()) {
             jdbc.sql("INSERT INTO " + db.qualify(t.targetSystem())
-                            + " (code, base_url, connect_timeout_ms, read_timeout_ms, body_codec, enabled)"
-                            + " VALUES (?, ?, ?, ?, ?, ?)")
-                    .params(r.code(), r.baseUrl(), r.connectTimeoutMs(), r.readTimeoutMs(), r.bodyCodec(), r.enabled())
+                            + " (code, base_url, connect_timeout_ms, read_timeout_ms, body_codec, enabled, tls_mode,"
+                            + " tls_trust_store, tls_trust_store_password, tls_key_store, tls_key_store_password)"
+                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                    .params(r.code(), r.baseUrl(), r.connectTimeoutMs(), r.readTimeoutMs(), r.bodyCodec(), r.enabled(),
+                            r.tlsMode(), r.tlsTrustStore(), r.tlsTrustStorePassword(), r.tlsKeyStore(),
+                            r.tlsKeyStorePassword())
                     .update();
         }
         for (TargetHeaderRow r : rows.targetHeaders()) {

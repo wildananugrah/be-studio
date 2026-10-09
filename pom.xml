@@ -21,6 +21,7 @@
 		<swagger-ui.version>5.29.5</swagger-ui.version>
 		<poi.version>5.5.1</poi.version>
 		<pdfbox.version>3.0.7</pdfbox.version>
+		<anthropic-java.version>2.70.0</anthropic-java.version>
 		<!-- Integration tests run against PostgreSQL by default; the oracle-it profile switches to Oracle Free -->
 		<it.db>postgres</it.db>
 	</properties>
@@ -78,6 +79,13 @@
 			<groupId>org.apache.pdfbox</groupId>
 			<artifactId>pdfbox</artifactId>
 			<version>${pdfbox.version}</version>
+		</dependency>
+
+		<!-- Gateway Studio assistant: Claude via the official Anthropic SDK (AI_BASE_URL / AI_AUTH_KEY / AI_MODEL) -->
+		<dependency>
+			<groupId>com.anthropic</groupId>
+			<artifactId>anthropic-java</artifactId>
+			<version>${anthropic-java.version}</version>
 		</dependency>
 
 		<dependency>
@@ -140,6 +148,24 @@
 	</dependencies>
 
 	<build>
+		<resources>
+			<resource>
+				<directory>src/main/resources</directory>
+			</resource>
+			<!-- Project docs for the Gateway Studio assistant's knowledge (classpath:assistant/project/) -->
+			<resource>
+				<directory>${project.basedir}</directory>
+				<targetPath>assistant/project</targetPath>
+				<includes>
+					<include>README.md</include>
+					<include>Makefile</include>
+					<include>docker-compose.yml</include>
+					<include>docs/*.md</include>
+					<include>docs/examples/*.sql</include>
+					<include>http/*.http</include>
+				</includes>
+			</resource>
+		</resources>
 		<plugins>
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
