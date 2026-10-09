@@ -182,7 +182,7 @@ Every inbound call is logged in a standard format (`com.mhamzah.gateway.logging`
 | `gateway.docs.enabled` (`GATEWAY_DOCS_ENABLED`), `gateway.docs.title` (`GATEWAY_DOCS_TITLE`) | Swagger UI at `/docs` and OpenAPI at `/docs/openapi.json`. **Off by default**; when off, both return 404. Only `application.yml` (or the environment variable) sets it; no profile overrides it. The description lists every endpoint, so enable it in production only on purpose. |
 | `gateway.studio.enabled` (`GATEWAY_STUDIO_ENABLED`) | Gateway Studio at `/studio` and its API at `/studio/api/*` (admin token required). **Off by default**, on in the `dev` profile; when off, both return 404. It writes straight to the config tables, so keep it off in production, where DBAs apply changes as Liquibase changesets. |
 
-**Oracle:** activate profile `oracle` and set `DB_URL` (e.g. `jdbc:oracle:thin:@//host:1521/SERVICE`), `DB_USERNAME` and `DB_PASSWORD`.
+**Oracle:** activate profile `oracle` and set `DB_URL` (e.g. `jdbc:oracle:thin:@//host:1521/SERVICE`), `DB_USERNAME` and `DB_PASSWORD`. Locally, `make run DB=oracle` starts Oracle Database Free in Docker and runs the app on it with the demo data (see [docs/MAKEFILE.md](docs/MAKEFILE.md#oracle-instead-of-postgresql)).
 
 **DBA-managed schemas:** set `LIQUIBASE_ENABLED=false`, and generate the DDL for review. The output is written to `target/liquibase/update.sql`:
 

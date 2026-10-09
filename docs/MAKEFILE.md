@@ -32,6 +32,22 @@ make down     # stop the containers (data is kept)
 
 `make run` runs `make up` first, so `make run` on its own is enough.
 
+### Oracle instead of PostgreSQL
+
+Add `DB=oracle` to the same commands; everything else works the same:
+
+```bash
+make run DB=oracle     # starts Oracle Free + WireMock, then the app on :8080 (profiles dev,oracle)
+make demo
+make audit DB=oracle
+make sql DB=oracle     # SQL*Plus as gateway/gateway on FREEPDB1 (same as: make sqlplus)
+make down              # stops PostgreSQL and Oracle containers (data is kept)
+```
+
+The first `make up DB=oracle` downloads Oracle Database Free (`gvenzl/oracle-free:23-slim-faststart`, several GB) and creates the database (1-3 minutes); later starts take seconds. The app user is `DB_USERNAME` / `DB_PASSWORD` (`gateway` / `gateway`) in the pluggable database `FREEPDB1`; Liquibase creates the tables and the demo data on the first run, exactly as on PostgreSQL. Both databases can exist side by side; `DB` picks the one a command uses. `make run-oracle` and `make up-oracle` are shortcuts.
+
+To use an Oracle server that isn't in Docker, don't use `make run`; set `DB_URL=jdbc:oracle:thin:@//host:1521/SERVICE`, `DB_USERNAME`, `DB_PASSWORD` and start with the `oracle` profile (see the README's Configuration section).
+
 Instead of `make demo`, you can send requests one at a time from your IDE with [`http/gateway.http`](../http/gateway.http). In IntelliJ, click ▶ next to a request; in VS Code, install the *REST Client* extension and click *Send Request*. Each request has a comment with the expected status and response.
 
 ## What `docker-compose.yml` starts
@@ -39,6 +55,7 @@ Instead of `make demo`, you can send requests one at a time from your IDE with [
 | Service | Container | Port | Purpose |
 |---|---|---|---|
 | `postgres` | `json-gateway-postgres` | `5432` | Gateway database `gateway`, user `gateway` / password `gateway`. Data is kept in the `postgres-data` volume. |
+| `oracle` | `json-gateway-oracle` | `1521` | Only with `DB=oracle` (compose profile `oracle`). Oracle Database Free 23ai, service `FREEPDB1`, app user `gateway` / `gateway`, SYS password `oracle`. Data is kept in the `oracle-data` volume. |
 | `wiremock` | `json-gateway-wiremock` | `8089` | Fake downstream systems `CORE_BANKING` and `NOTIFICATION`, using the stubs in `src/test/resources/wiremock/mappings`. |
 
 The credentials match the defaults in `application-dev.yml`, so the app connects without extra configuration. Liquibase creates the tables and seeds the demo flows on the first `make run`.
@@ -49,13 +66,14 @@ The credentials match the defaults in `application-dev.yml`, so the app connects
 
 | Target | What it does |
 |---|---|
-| `make up` | Starts PostgreSQL and WireMock in the background and waits until both are healthy. |
-| `make down` | Stops and removes the containers. **The database volume is kept.** |
-| `make db-reset` | Like `down`, but **also deletes the database volume**. The next `make run` starts from an empty DB and re-seeds the demo flows. |
-| `make db-truncate` | **Deletes all rows** from the gateway tables (flows, steps, rules, lookups, schemas, target systems, audit) but keeps the tables. Asks you to type `yes`; `make db-truncate CONFIRM=yes` skips the question. Then run `make reload` if the app is running. |
+| `make up` | Starts the database (`DB=postgres` default, or `DB=oracle`) and WireMock in the background and waits until both are healthy. `make up-oracle` = `make up DB=oracle`. |
+| `make down` | Stops and removes all containers, PostgreSQL and Oracle. **The database volumes are kept.** |
+| `make db-reset` | Stops the database of `DB` and **deletes its volume** (asks first; `CONFIRM=yes` skips). The next `make run` (with the same `DB`) starts from an empty DB and re-seeds the demo flows. |
+| `make db-truncate` | **Deletes all rows** from the gateway tables (flows, steps, rules, lookups, schemas, target systems, audit) but keeps the tables; `DB=oracle` runs the Oracle script through SQL*Plus. Asks you to type `yes`; `make db-truncate CONFIRM=yes` skips the question. Then run `make reload` if the app is running. |
 | `make ps` | Shows container status. |
 | `make logs` | Follows container logs (Ctrl+C to stop following). |
-| `make psql` | Opens a `psql` shell in the gateway database, e.g. to insert or inspect config rows. |
+| `make sql` | Opens a SQL shell in the gateway database: `psql`, or SQL*Plus with `DB=oracle`. |
+| `make psql` / `make sqlplus` | The same for PostgreSQL / Oracle explicitly. |
 
 #### Emptying the database: `db-truncate` vs `db-reset`
 
@@ -67,7 +85,7 @@ The credentials match the defaults in `application-dev.yml`, so the app connects
 | App can stay running | yes, then `make reload` (it will have 0 flows) | no, restart with `make run` |
 | Use when | you want a clean slate for your own config | you want the demo data back, or the schema is broken |
 
-The SQL behind `db-truncate` is in [`scripts/`](../scripts): `truncate-all.postgres.sql` (used by make) and `truncate-all.oracle.sql`, to run with SQL*Plus/SQLcl against Oracle. Both use the default table names; edit them if you configured `gateway.db.tables.*` or a schema. Liquibase's own tables are deliberately not emptied, because the app would then fail to start.
+The SQL behind `db-truncate` is in [`scripts/`](../scripts): `truncate-all.postgres.sql` and `truncate-all.oracle.sql` (used by `make db-truncate DB=oracle`, or run it yourself with SQL*Plus/SQLcl against another Oracle). Both use the default table names; edit them if you configured `gateway.db.tables.*` or a schema. Liquibase's own tables are deliberately not emptied, because the app would then fail to start.
 
 > After truncating, any config you add must bring its own lookup rows. Otherwise `make reload` rejects it with `lookup_code '...' has no gw_lookup_entry rows`. The tutorial script [`examples/account-overview.sql`](examples/account-overview.sql) inserts the lookups it needs, so it works on an empty database too.
 
@@ -75,8 +93,8 @@ The SQL behind `db-truncate` is in [`scripts/`](../scripts): `truncate-all.postg
 
 | Target | What it does |
 |---|---|
-| `make run` | Runs the app with profile `dev` against the compose PostgreSQL and WireMock. |
-| `make run-test` | Runs the app with a **throwaway** Testcontainers PostgreSQL and in-process WireMock. Docker Compose isn't used, and nothing persists after you stop it. |
+| `make run` | Runs the app with profile `dev` against the compose PostgreSQL and WireMock. `make run DB=oracle` (or `make run-oracle`) uses the compose Oracle Free with profiles `dev,oracle`. |
+| `make run-test` | Runs the app with a **throwaway** Testcontainers database (PostgreSQL, or Oracle Free with `DB=oracle`) and in-process WireMock. Docker Compose isn't used, and nothing persists after you stop it. |
 | `make build` | Builds the executable jar into `target/` (tests skipped). Run it with `java -jar target/json-gateway-0.0.1-SNAPSHOT.jar`. |
 | `make clean` | Deletes build output. |
 
@@ -85,8 +103,8 @@ The SQL behind `db-truncate` is in [`scripts/`](../scripts): `truncate-all.postg
 | Target | Docker needed | What it runs |
 |---|---|---|
 | `make test-unit` | no | Unit tests only. Fast; use it while coding. |
-| `make test-it` | yes | Integration tests against PostgreSQL (Testcontainers). |
-| `make test` | yes | Everything. Run it before committing. |
+| `make test-it` | yes | Integration tests against PostgreSQL (Testcontainers); `DB=oracle` runs them on Oracle Free. |
+| `make test` | yes | Everything. Run it before committing. `make test DB=oracle` runs the whole suite on Oracle Free. |
 | `make test-oracle` | yes | Integration tests against Oracle Free. The first run downloads a large image (~1 GB+). |
 
 Tests use their own Testcontainers databases and never touch the compose database.
@@ -95,7 +113,7 @@ Tests use their own Testcontainers databases and never touch the compose databas
 
 | Target | What it does |
 |---|---|
-| `make ddl-pending` | Connects to an **existing** database and generates only the SQL it is still missing (e.g. new tables after an upgrade), including the `gw_db_changelog` rows, so Liquibase won't try again later. Nothing is executed. Default target: the compose DB. Other DBs: `make ddl-pending DDL_DB_URL=jdbc:oracle:thin:@//host:1521/SERVICE DB_USERNAME=... DB_PASSWORD=...`. |
+| `make ddl-pending` | Connects to an **existing** database and generates only the SQL it is still missing (e.g. new tables after an upgrade), including the `gw_db_changelog` rows, so Liquibase won't try again later. Nothing is executed. Default target: the compose DB of `DB` (`make ddl-pending DB=oracle` for the compose Oracle). Other DBs: `make ddl-pending DDL_DB_URL=jdbc:oracle:thin:@//host:1521/SERVICE DB_USERNAME=... DB_PASSWORD=...`. |
 | `make ddl-postgres` | Generates the PostgreSQL DDL offline (no DB connection) into `target/liquibase/update.sql`. |
 | `make ddl-oracle` | Same for Oracle. |
 
@@ -120,7 +138,7 @@ Don't create the new tables by hand: Liquibase wouldn't know about them and woul
 | `make health` | `GET /actuator/health` |
 | `make demo` | Calls each demo flow: inquiry, history, a successful transfer, insufficient funds (422), blocked beneficiary (debit skipped), unknown account (404) and an invalid request (400). |
 | `make reload` | `POST /admin/config/reload`, which applies config changes made in the DB without a restart. |
-| `make audit` | Shows the 10 most recent rows of `gw_audit_transaction`. |
+| `make audit` | Shows the 10 most recent rows of `gw_audit_transaction` (`DB=oracle`: from the compose Oracle). |
 
 ## Overridable variables
 
@@ -128,9 +146,13 @@ Pass any of these on the command line, e.g. `make up DB_PORT=5433`.
 
 | Variable | Default | Used by |
 |---|---|---|
+| `DB` | `postgres` | Which database `up`, `run`, `run-test`, `db-reset`, `db-truncate`, `sql`, `audit`, `ddl-pending`, `test`, `test-it` use: `postgres` or `oracle` |
 | `APP_PORT` | `8080` | `run`, `run-test`, demo targets |
 | `DB_PORT` | `5432` | compose port mapping, `run` |
-| `DB_NAME` / `DB_USERNAME` / `DB_PASSWORD` | `gateway` | compose, `run`, `psql`, `audit` |
+| `DB_NAME` / `DB_USERNAME` / `DB_PASSWORD` | `gateway` | compose, `run`, `sql`, `audit` (`DB_USERNAME`/`DB_PASSWORD` are also the Oracle app user) |
+| `ORACLE_PORT` | `1521` | `DB=oracle`: compose port mapping, `run` |
+| `ORACLE_SERVICE` | `FREEPDB1` | `DB=oracle`: service name in the JDBC URL and SQL*Plus |
+| `ORACLE_SYS_PASSWORD` | `oracle` | `DB=oracle`: SYS/SYSTEM password of the container (first start only) |
 | `WIREMOCK_PORT` | `8089` | compose port mapping, `run` |
 | `ADMIN_TOKEN` | `dev-admin-token` | `run`, `reload` |
 | `CORE_BANKING_URL` | `http://localhost:$(WIREMOCK_PORT)` | `run`: base URL of the core banking system, e.g. `make run CORE_BANKING_URL=http://10.20.30.40:9080`. It fills the `${CORE_BANKING_URL:...}` placeholder in the demo `gw_target_system` row; if you put a literal URL in that row, the row wins. |

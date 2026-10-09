@@ -1,8 +1,10 @@
 # Local development infrastructure.
 #   postgres  - gateway database (matches the defaults in application-dev.yml)
+#   oracle    - Oracle Database Free 23ai, only with the "oracle" profile (make up DB=oracle)
 #   wiremock  - stubs for the demo downstream systems CORE_BANKING and NOTIFICATION
 #
 # Usage: make up / make down (see docs/MAKEFILE.md), or docker compose up -d
+#        Oracle: make up DB=oracle, or docker compose --profile oracle up -d oracle wiremock
 
 name: json-gateway
 
@@ -26,6 +28,29 @@ services:
       retries: 20
     restart: unless-stopped
 
+  # Same image as the Oracle integration tests. Creates the application user DB_USERNAME in the pluggable
+  # database FREEPDB1 on first start (1-3 minutes; later starts take seconds).
+  oracle:
+    image: gvenzl/oracle-free:23-slim-faststart
+    container_name: json-gateway-oracle
+    profiles: ["oracle"]
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_SYS_PASSWORD:-oracle}
+      APP_USER: ${DB_USERNAME:-gateway}
+      APP_USER_PASSWORD: ${DB_PASSWORD:-gateway}
+      TZ: UTC
+    ports:
+      - "${ORACLE_PORT:-1521}:1521"
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+    restart: unless-stopped
+
   wiremock:
     image: wiremock/wiremock:3.13.2
     container_name: json-gateway-wiremock
@@ -38,3 +63,4 @@ services:
 
 volumes:
   postgres-data:
+  oracle-data:
