@@ -257,6 +257,13 @@ class App extends Component {
 
   componentDidMount() {
     if (this.state.token) this.load();
+    document.addEventListener('keydown', e => {
+      const t = e.target; const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+      if (e.key === '/' && !typing && !e.metaKey && !e.ctrlKey) {
+        const el = document.getElementById('palette-search');
+        if (el) { e.preventDefault(); el.focus(); el.select(); }
+      }
+    });
     // a vertical mouse wheel over a field whose text overflows scrolls it sideways (scrollbars are hidden);
     // at either end the page scrolls as usual
     document.addEventListener('wheel', e => {
@@ -969,6 +976,13 @@ class App extends Component {
     const applyFlow = z => d => { this.mut(fl => { d.item.apply(fl); return { sel: { kind: z } }; }); };
     const chip = (label, color, clear) => ({ label, color, onRemove: e => { e.stopPropagation(); this.mut(clear); } });
     const P = this.flowProblems(f);
+    // palette search: every word must appear in the label, the column/bean (sub) or the category
+    const palQ = s.palQ || '';
+    const words = palQ.toLowerCase().split(/\s+/).filter(Boolean);
+    const fullPalette = this.palette();
+    const palette = fullPalette.map(c => ({ ...c, items: c.items.filter(it => { const hay = (it.label + ' ' + it.sub + ' ' + c.cat).toLowerCase(); return words.every(w => hay.includes(w)); }) })).filter(c => c.items.length);
+    const palTotal = fullPalette.reduce((n, c) => n + c.items.length, 0);
+    const palCount = palette.reduce((n, c) => n + c.items.length, 0);
     const card = (on, extra = '') => `position:relative;flex:none;background:#fff;border:1px solid ${selBorder(on)};box-shadow:${selShadow(on)};border-radius:9px;padding:12px;cursor:pointer;${extra}`;
 
     const flowZone = this.zone('flow', isPal('flow'), applyFlow('flow'));
@@ -1013,9 +1027,20 @@ class App extends Component {
 
     return html`
       <div style="flex:1;min-height:0;display:flex">
-        <aside class="ro-hide" style="width:248px;flex:none;background:#FFFFFF;border-right:1px solid #E4E1D8;overflow:auto;padding:16px 12px 32px">
-          <div style="font-size:12px;color:#6A6D75;margin:0 4px 16px;line-height:1.45">Drag a policy onto the pipeline. Each drop sets a column or adds a row.</div>
-          ${this.palette().map(c => html`
+        <aside class="ro-hide" style="width:248px;flex:none;background:#FFFFFF;border-right:1px solid #E4E1D8;overflow:auto;padding:0 12px 32px">
+          <div style="position:sticky;top:0;z-index:1;background:#fff;padding:14px 0 10px;margin-bottom:6px">
+            <div style="position:relative">
+              <input id="palette-search" class="inp" type="search" value=${palQ} placeholder="Search policies…  ( / )" autocomplete="off" spellcheck="false"
+                onInput=${e => this.setState({ palQ: e.currentTarget.value })}
+                onKeyDown=${e => { if (e.key === 'Escape') { this.setState({ palQ: '' }); e.currentTarget.blur(); } }}
+                style=${`width:100%;height:32px;border:1px solid #E4E1D8;border-radius:7px;padding:0 28px 0 30px;font-size:12.5px;background:#FAF9F6`}/>
+              <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#9A9CA2;font-size:13px;pointer-events:none">⌕</span>
+              ${palQ && html`<button class="x" onClick=${() => this.setState({ palQ: '' })} title="Clear (Esc)" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:15px;padding:0 4px">×</button>`}
+            </div>
+            <div style="font-size:11.5px;color:#9A9CA2;margin:8px 4px 0;line-height:1.4">${palQ ? palCount + ' of ' + palTotal + ' policies' : 'Drag a policy onto the pipeline. Each drop sets a column or adds a row.'}</div>
+          </div>
+          ${palQ && palCount === 0 && html`<div style="margin:8px 4px;font-size:12px;color:#6A6D75;line-height:1.45">No policy matches “${palQ}”. Search by name, column (e.g. ${mono('condition_expr')}), bean name or category.</div>`}
+          ${palette.map(c => html`
             <div style="margin-bottom:18px">
               <div style=${`display:flex;align-items:center;gap:7px;margin:0 4px 7px;font:600 10px ${MONO};letter-spacing:.08em;text-transform:uppercase;color:#6A6D75`}><span style=${`width:7px;height:7px;border-radius:2px;background:${c.color}`}></span>${c.cat}</div>
               <div style="display:flex;flex-direction:column;gap:4px">
