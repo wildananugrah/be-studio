@@ -41,3 +41,5 @@ reference/
 .DS_Store
 
 .env
+# local file storage (gateway.storages.LOCAL_FILES)
+/data/

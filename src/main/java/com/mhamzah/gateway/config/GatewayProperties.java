@@ -18,10 +18,77 @@ public record GatewayProperties(
         @DefaultValue Studio studio,
         @DefaultValue Assistant assistant,
         Map<String, TargetSystem> targetSystems,
-        @DefaultValue Db db) {
+        @DefaultValue Db db,
+        @DefaultValue Sql sql,
+        @DefaultValue Files files,
+        Map<String, FileStorage> storages) {
 
     public GatewayProperties {
         targetSystems = targetSystems == null ? Map.of() : Map.copyOf(targetSystems);
+        storages = storages == null ? Map.of() : Map.copyOf(storages);
+    }
+
+    /**
+     * Uploads: {@code maxSize} limits a raw (non-multipart) request body such as {@code application/pdf}; multipart
+     * uploads are limited by {@code spring.servlet.multipart.*}, which application.yml sets from the same value.
+     */
+    public record Files(@DefaultValue("20MB") org.springframework.util.unit.DataSize maxSize) {}
+
+    /**
+     * Where file storage steps put files: {@code type} {@code local} (a directory, {@code baseDir}) or {@code s3}
+     * ({@code bucket}, optional {@code prefix}, {@code region}, {@code endpoint} for S3-compatible servers such as
+     * MinIO, {@code pathStyle}, and {@code accessKey} / {@code secretKey}; blank keys use the default AWS credential
+     * chain). An S3 storage without a bucket is skipped. {@code allowedTypes} (e.g. {@code image/*},
+     * {@code application/pdf}; empty = any) and {@code maxSize} (empty = only the upload limit) are checked before
+     * storing.
+     */
+    public record FileStorage(
+            @DefaultValue("local") String type,
+            String baseDir,
+            String bucket,
+            String prefix,
+            String region,
+            String endpoint,
+            String accessKey,
+            String secretKey,
+            @DefaultValue("false") boolean pathStyle,
+            List<String> allowedTypes,
+            org.springframework.util.unit.DataSize maxSize) {
+
+        public FileStorage {
+            allowedTypes = allowedTypes == null ? List.of() : allowedTypes.stream().map(String::strip)
+                    .filter(s -> !s.isEmpty()).toList();
+        }
+    }
+
+    /**
+     * Databases that database query steps may use ({@code gw_flow_step.sql_text}; the step's {@code target_system}
+     * names one of {@code datasources}). {@code maxRows}: a query returning more rows is cut off there and reports
+     * {@code truncated: true}.
+     */
+    public record Sql(@DefaultValue("1000") int maxRows, Map<String, SqlDatasource> datasources) {
+
+        public Sql {
+            datasources = datasources == null ? Map.of() : Map.copyOf(datasources);
+        }
+    }
+
+    /**
+     * One database for query steps. A blank {@code url} means the gateway's own database (its connection pool).
+     * {@code readOnly}: only SELECT / WITH statements, run in a read-only transaction. Values may use
+     * {@code ${ENV_VAR}} placeholders like any Spring property.
+     */
+    public record SqlDatasource(
+            String url,
+            String username,
+            String password,
+            String driverClassName,
+            @DefaultValue("5") int maxPoolSize,
+            @DefaultValue("false") boolean readOnly) {
+
+        public boolean gatewayDatabase() {
+            return url == null || url.isBlank();
+        }
     }
 
     /** Admin endpoints; when {@code token} is blank every admin call is rejected. */
@@ -146,7 +213,17 @@ public record GatewayProperties(
             @DefaultValue("gw_audit_transaction") String auditTransaction,
             @DefaultValue("gw_audit_step") String auditStep,
             @DefaultValue("gw_target_system") String targetSystem,
-            @DefaultValue("gw_target_system_header") String targetSystemHeader) {
+            @DefaultValue("gw_target_system_header") String targetSystemHeader,
+            @DefaultValue("gw_storage") String storage) {
+
+        @org.springframework.boot.context.properties.bind.ConstructorBinding
+        public Tables {}
+
+        public Tables(String flow, String flowStep, String mappingRule, String lookupEntry, String jsonSchema,
+                String auditTransaction, String auditStep, String targetSystem, String targetSystemHeader) {
+            this(flow, flowStep, mappingRule, lookupEntry, jsonSchema, auditTransaction, auditStep, targetSystem,
+                    targetSystemHeader, "gw_storage");
+        }
 
         /** Logical name (as used in {@code @Table} and Liquibase {@code tbl.*} parameters) to configured name. */
         public Map<String, String> byLogicalName() {
@@ -159,7 +236,8 @@ public record GatewayProperties(
                     "audit_transaction", auditTransaction,
                     "audit_step", auditStep,
                     "target_system", targetSystem,
-                    "target_system_header", targetSystemHeader);
+                    "target_system_header", targetSystemHeader,
+                    "storage", storage);
         }
     }
 

@@ -10,9 +10,16 @@ public record ConfigRows(
         List<LookupRow> lookups,
         List<SchemaRow> schemas,
         List<TargetRow> targets,
-        List<TargetHeaderRow> targetHeaders) {
+        List<TargetHeaderRow> targetHeaders,
+        List<StorageRow> storages) {
+
+    public ConfigRows(List<FlowRow> flows, List<StepRow> steps, List<RuleRow> rules, List<LookupRow> lookups,
+            List<SchemaRow> schemas, List<TargetRow> targets, List<TargetHeaderRow> targetHeaders) {
+        this(flows, steps, rules, lookups, schemas, targets, targetHeaders, List.of());
+    }
 
     public ConfigRows {
+        storages = storages == null ? List.of() : List.copyOf(storages);
         flows = List.copyOf(flows);
         steps = List.copyOf(steps);
         rules = List.copyOf(rules);
@@ -77,42 +84,69 @@ public record ConfigRows(
             String requestHandler,
             String responseHandler,
             String bodyCodec,
-            boolean enabled) {
+            boolean enabled,
+            String sqlText) {
+
+        /** An HTTP step (no {@code sql_text}). */
+        public StepRow(long id, long flowId, String name, int stepOrder, String targetSystem, String httpMethod,
+                String pathTemplate, String conditionExpr, String successExpr, String onFailure, Integer timeoutMs,
+                String responseSchemaCode, String requestHandler, String responseHandler, String bodyCodec,
+                boolean enabled) {
+            this(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr, successExpr,
+                    onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler, bodyCodec, enabled, null);
+        }
+
+        /** A database query step: {@code sql_text} set; {@code target_system} names a SQL datasource. */
+        public boolean isSql() {
+            return sqlText != null && !sqlText.isBlank();
+        }
+
+        public StepRow withSql(String value) {
+            return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
+                    successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
+                    bodyCodec, enabled, value);
+        }
 
         public StepRow withTarget(String value) {
             return new StepRow(id, flowId, name, stepOrder, value, httpMethod, pathTemplate, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled);
+                    bodyCodec, enabled, sqlText);
+        }
+
+        public StepRow withMethod(String value) {
+            return new StepRow(id, flowId, name, stepOrder, targetSystem, value, pathTemplate, conditionExpr,
+                    successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
+                    bodyCodec, enabled, sqlText);
         }
 
         public StepRow withPathTemplate(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, value, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled);
+                    bodyCodec, enabled, sqlText);
         }
 
         public StepRow withCondition(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, value,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled);
+                    bodyCodec, enabled, sqlText);
         }
 
         public StepRow withSuccess(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                     value, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled);
+                    bodyCodec, enabled, sqlText);
         }
 
         public StepRow withBodyCodec(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    value, enabled);
+                    value, enabled, sqlText);
         }
 
         public StepRow withEnabled(boolean value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, value);
+                    bodyCodec, value, sqlText);
         }
     }
 
@@ -162,6 +196,26 @@ public record ConfigRows(
             this(id, code, baseUrl, connectTimeoutMs, readTimeoutMs, bodyCodec, enabled, null, null, null, null, null);
         }
     }
+
+    /**
+     * {@code gw_storage}: where file storage steps put files. {@code storageType} LOCAL or S3; text values may contain
+     * {@code ${...}} placeholders; {@code allowedTypes} comma-separated; {@code maxSize} like {@code 10MB}.
+     */
+    public record StorageRow(
+            long id,
+            String code,
+            String storageType,
+            String baseDir,
+            String bucket,
+            String keyPrefix,
+            String region,
+            String endpoint,
+            boolean pathStyle,
+            String accessKey,
+            String secretKey,
+            String allowedTypes,
+            String maxSize,
+            boolean enabled) {}
 
     /** {@code gw_target_system_header}: a fixed header sent to a target. {@code headerValue} may contain {@code ${...}}. */
     public record TargetHeaderRow(long id, String targetCode, String headerName, String headerValue) {}

@@ -9,6 +9,10 @@ import com.mhamzah.gateway.config.FlowRegistry;
 import com.mhamzah.gateway.config.FlowRegistryHolder;
 import com.mhamzah.gateway.config.GatewayProperties;
 import com.mhamzah.gateway.config.StepDefinition;
+import com.mhamzah.gateway.sql.SqlDatasources;
+import com.mhamzah.gateway.storage.FileStore;
+import com.mhamzah.gateway.storage.FileStores;
+import com.mhamzah.gateway.storage.StorageKeys;
 import com.mhamzah.gateway.extension.BodyCodec;
 import com.mhamzah.gateway.extension.ErrorHandler;
 import com.mhamzah.gateway.extension.ExecutionContext;
@@ -71,6 +75,32 @@ public class StudioService {
         this.tx = new TransactionTemplate(txManager);
     }
 
+    /**
+     * Tries a storage's settings (unsaved ones too): the directory is writable or can be created, or the S3 bucket
+     * answers with these credentials. {@code ${...}} placeholders are resolved like on a reload. Writes nothing.
+     */
+    public Map<String, Object> checkStorage(StudioConfig.Storage s) {
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        org.springframework.core.env.Environment env = beans.getBean(org.springframework.core.env.Environment.class);
+        java.util.function.UnaryOperator<String> resolve = v -> v == null || v.isBlank() ? null : env.resolveRequiredPlaceholders(v.strip());
+        try {
+            boolean s3 = "S3".equalsIgnoreCase(s.type());
+            GatewayProperties.FileStorage cfg = new GatewayProperties.FileStorage(s3 ? "s3" : "local",
+                    resolve.apply(s.baseDir()), resolve.apply(s.bucket()), resolve.apply(s.prefix()),
+                    resolve.apply(s.region()), resolve.apply(s.endpoint()), resolve.apply(s.accessKey()),
+                    resolve.apply(s.secretKey()), Boolean.TRUE.equals(s.pathStyle()), List.of(), null);
+            try (FileStore store = FileStores.temporary(s.code() == null ? "CHECK" : s.code(), cfg)) {
+                out.put("ok", true);
+                out.put("location", store.location());
+                out.put("message", store.check(java.time.Duration.ofSeconds(10)));
+            }
+        } catch (RuntimeException e) {
+            out.put("ok", false);
+            out.put("message", e.getMessage());
+        }
+        return out;
+    }
+
     /** The configuration as stored in the database, with its version. */
     public StudioConfig load() {
         StudioConfig config = StudioRows.fromRows(loader.load(), writer.schemaDescriptions());
@@ -96,7 +126,7 @@ public class StudioService {
     private static ConfigRows withoutEmptySchemas(ConfigRows rows) {
         return new ConfigRows(rows.flows(), rows.steps(), rows.rules(), rows.lookups(),
                 rows.schemas().stream().filter(x -> x.schemaText() != null && !x.schemaText().isBlank()).toList(),
-                rows.targets(), rows.targetHeaders());
+                rows.targets(), rows.targetHeaders(), rows.storages());
     }
 
     /** Outcome of {@link #save}. */
@@ -147,7 +177,8 @@ public class StudioService {
                 flow.responseSchema(), flow.requestHandler(), flow.responseHandler(), flow.errorHandler(),
                 flow.successStatus(), flow.timeoutMs(), flow.auditMode(), true,
                 flow.steps().stream().map(StudioService::enabled).toList(), flow.response());
-        StudioConfig single = new StudioConfig(null, List.of(only), draft.targets(), draft.lookups(), draft.schemas());
+        StudioConfig single = new StudioConfig(null, List.of(only), draft.targets(), draft.lookups(), draft.schemas(),
+                draft.storages());
         FlowRegistry registry;
         try {
             registry = compiler.compile(withoutEmptySchemas(StudioRows.toRows(single)));
@@ -193,7 +224,7 @@ public class StudioService {
     private static Step enabled(Step s) {
         return new Step(s.name(), s.order(), s.targetSystem(), s.method(), s.path(), s.condition(), s.success(),
                 s.onFailure(), s.timeoutMs(), s.responseSchema(), s.requestHandler(), s.responseHandler(),
-                s.bodyCodec(), true, s.rules());
+                s.bodyCodec(), true, s.rules(), s.sql());
     }
 
     private static ExecutionContext context(String flowCode, FlowRegistry registry, JsonNode sample) {
@@ -280,6 +311,12 @@ public class StudioService {
             configTargets.add(m);
         });
         out.put("configTargets", configTargets);
+        SqlDatasources sql = beans.getBeanProvider(SqlDatasources.class).getIfAvailable(SqlDatasources::none);
+        out.put("sqlDatasources", sql.describe());
+        out.put("sqlMaxRows", sql.maxRows());
+        FileStores stores = beans.getBeanProvider(FileStores.class).getIfAvailable(FileStores::none);
+        out.put("configStorages", stores.describe());
+        out.put("storageKeyVariables", new java.util.TreeSet<>(StorageKeys.BUILT_INS));
         return out;
     }
 

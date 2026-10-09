@@ -14,7 +14,7 @@ import tools.jackson.databind.node.ObjectNode;
 /**
  * Per-request state that mappings, conditions and handlers read from (spec Section 6.1):
  * <pre>
- * $.request.headers / .path / .query / .body
+ * $.request.headers / .path / .query / .body / .files.&lt;field&gt; (uploads: filename, contentType, size, sha256)
  * $.steps.&lt;name&gt;.outcome / .status / .headers / .body
  * $.correlationId
  * </pre>
@@ -28,8 +28,16 @@ public final class ExecutionContext {
     private final ObjectNode root;
     private final ObjectNode steps;
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
+    private final Map<String, InboundFile> files;
 
     public ExecutionContext(String flowCode, String correlationId, Map<String, LookupTable> lookups, ObjectNode request) {
+        this(flowCode, correlationId, lookups, request, Map.of());
+    }
+
+    /** @param files the uploaded files by form field (their descriptions are expected at {@code request.files}) */
+    public ExecutionContext(String flowCode, String correlationId, Map<String, LookupTable> lookups, ObjectNode request,
+            Map<String, InboundFile> files) {
+        this.files = files == null ? Map.of() : Map.copyOf(files);
         this.flowCode = flowCode;
         this.correlationId = correlationId;
         this.lookups = lookups == null ? Map.of() : lookups;
@@ -39,6 +47,15 @@ public final class ExecutionContext {
         root.set("request", request == null ? f.objectNode() : request);
         root.set("steps", steps);
         root.put("correlationId", correlationId);
+    }
+
+    /** The uploaded file of a form field ({@code body} for a raw upload); null when there is none. */
+    public InboundFile file(String field) {
+        return field == null ? null : files.get(field);
+    }
+
+    public Map<String, InboundFile> files() {
+        return files;
     }
 
     /** Flow code, or null when no flow matched. */

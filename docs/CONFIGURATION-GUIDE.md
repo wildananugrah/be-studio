@@ -269,9 +269,11 @@ Then run `make reload`. To switch a flow off without deleting it, use `UPDATE gw
 | `flow_id` | ✔ | | Owning flow |
 | `name` | ✔ | | Letters, digits, `_`, `-`; unique within the flow. Results are at `$.steps.<name>`. |
 | `step_order` | ✔ | | ≥ 1. Groups run in ascending order; **steps with the same number run in parallel**. |
-| `target_system` | ✔ | | `gw_target_system.code` (or a key under `gateway.target-systems` in `application.yml`) |
-| `http_method` | ✔ | | `GET`, `POST`, `PUT`, `PATCH`, `DELETE` |
-| `path_template` | ✔ | | Starts with `/`, appended to the target's `base-url`. Every `{var}` needs a `PATH` rule. |
+| `target_system` | ✔ | | `gw_target_system.code` (or a key under `gateway.target-systems` in `application.yml`). For a database query step: a datasource of `gateway.sql.datasources` ([§4.17](#417-query-a-database)). |
+| `http_method` | ✔ (HTTP steps) | | `GET`, `POST`, `PUT`, `PATCH`, `DELETE`. Empty for a database query step. |
+| `path_template` | ✔ (HTTP steps) | | Starts with `/`, appended to the target's `base-url`. Every `{var}` needs a `PATH` rule. Empty for a database query step. |
+| *(file storage)* | | | When `target_system` names a storage of `gateway.storages`, the step is a **file storage step**: `http_method` `PUT` (store) or `DELETE`, `path_template` the object key ([§4.18](#418-file-uploads-local-storage-and-s3)). |
+| `sql_text` | | | Makes this a **database query step**: one SQL statement with `:name` parameters, run on the `target_system` datasource instead of an HTTP call ([§4.17](#417-query-a-database)). |
 | `condition_expr` | | | Run only when true; otherwise the outcome is `SKIPPED` ([§3.6](#36-expressions-condition_expr-success_expr)) |
 | `success_expr` | | | Checked after a 2xx response; false → `DOWNSTREAM_BUSINESS_ERROR` |
 | `on_failure` | | `STOP` | `STOP`: end the flow with an error. `CONTINUE`: record the failure and carry on. |
@@ -380,6 +382,8 @@ For each rule, in `seq` order:
 | `SUBSTRING:begin[:end]` | `SUBSTRING:0:6` | `"abcdefgh"` → `"abcdef"` (out-of-range is clamped) |
 | `DATE_FORMAT:in:out` | `DATE_FORMAT:yyyyMMdd:dd/MM/yyyy` | `"20261001"` → `"01/10/2026"` |
 | `DECIMAL_SCALE:n` | `DECIMAL_SCALE:2` | `"10.005"` → `10.01`, `"10"` → `10.00` (half-up) |
+
+In Gateway Studio, click a converter on a rule (or drop one onto it) to open the **converter editor**: pick the converter, fill in its arguments (date formats have a list of common ones: `ddMMyyyy`, `MMddyyyy`, `yyyy-MM-dd`, `dd/MM/yyyy`, …), and check the result in **Try it**, which runs the real converter on a sample value. It writes the spec, colons escaped, for you.
 
 Write `\:` for a literal colon inside an argument: `DATE_FORMAT:yyyy-MM-dd'T'HH\:mm:HHmm`. Date patterns use Java `DateTimeFormatter` syntax. A value that can't be converted, such as `TO_NUMBER` of `"abc"`, raises a mapping error. Decimal numbers are always kept exact (`12500.50` never becomes `12500.5`).
 
@@ -823,6 +827,198 @@ gateway:
 ```
 
 In Gateway Studio: **Target systems**, then the target's **TLS** section. The badge shows HTTP or HTTPS from the resolved base URL; pick the mode and, for `CUSTOM`, fill in the trust store and/or key store.
+
+### 4.17 Query a database
+
+A **database query step** runs one SQL statement instead of an HTTP call. Its request mapping supplies the SQL parameters from the client's path, query string, headers or body; the rows come back as JSON in `$.steps.<step>.body`, and the response mapping shapes them for the client like any other step result.
+
+**1. The datasource** (`application.yml`). `GATEWAY_DB` (the gateway's own database) is there by default, read-only:
+
+```yaml
+gateway:
+  sql:
+    max-rows: 1000                       # more rows are cut off, truncated: true
+    datasources:
+      GATEWAY_DB:
+        url: ${GATEWAY_SQL_DB_URL:}      # empty = the gateway's own database
+        read-only: ${GATEWAY_SQL_DB_READ_ONLY:true}
+      REPORTING:                         # any other database: its own small connection pool
+        url: jdbc:postgresql://reporting-db:5432/reports
+        username: ${REPORTING_DB_USER}
+        password: ${REPORTING_DB_PASSWORD}
+        max-pool-size: 5
+        read-only: true
+```
+
+`read-only: true` allows only `SELECT` / `WITH` (checked at reload) and runs each query in a read-only transaction, so the database itself refuses writes. Set it to `false` for `INSERT` / `UPDATE` / `DELETE`. The JDBC driver must be on the classpath (PostgreSQL and Oracle are).
+
+**2. The step**: `target_system` = the datasource, `sql_text` = the statement, no `http_method` / `path_template`.
+
+```sql
+INSERT INTO gw_flow_step (flow_id, name, step_order, target_system, sql_text, success_expr)
+SELECT id, 'user', 1, 'GATEWAY_DB',
+       'SELECT id, username, full_name AS "fullName", email, phone, status, created_at AS "createdAt"
+        FROM tbl_ms_user
+        WHERE id = :id',
+       '${steps.user.body.rowCount} > 0'
+FROM gw_flow WHERE code = 'SQL_USER_DETAIL';
+```
+
+**3. The parameters**: one `BODY` rule per `:name`, writing `$.name`. The value is **bound** (`?`), never pasted into the SQL, so request data cannot change the statement:
+
+| target_path | source_path | converter | default |
+|---|---|---|---|
+| `$.id` | `$.request.path.id` | `TO_NUMBER` | |
+| `$.q` | `$.request.query.q` | | |
+| `$.status` | `$.request.query.status` | `UPPER` | |
+| `$.limit` | `$.request.query.limit` | `TO_NUMBER` | `10` |
+
+Path and query values are text: add `TO_NUMBER` when the column is a number (PostgreSQL refuses to compare text with a number). A missing value is bound as `NULL`, so optional filters read `COALESCE(:status, status)`. An array binds each element, for `IN (:ids)`. Every `:name` must have a rule; the reload says which one is missing.
+
+**4. The result** is the step's body:
+
+```json
+{"rows": [{"id": 1, "username": "budi.santoso", "fullName": "Budi Santoso", ...}], "rowCount": 1, "truncated": false}
+```
+
+and `{"updated": 1}` for `INSERT` / `UPDATE` / `DELETE`. Numbers stay numbers, dates and times become ISO-8601 text (`2026-10-09T14:14:15.305862`), PostgreSQL `json`/`jsonb` columns become JSON. Unquoted column names come back in lower case on both PostgreSQL and Oracle; use a quoted alias (`AS "fullName"`) for any other spelling.
+
+**5. Map it for the client** with `FLOW_RESPONSE` rules, as for any step: `$.user ← $.steps.user.body.rows[0]` for one row, `$.items[*].name ← $.steps.users.body.rows[*].fullName` for a list, `$.count ← $.steps.users.body.rowCount`, plus converters and lookups.
+
+The demo flows (`103-dev-demo-sql-flows.xml`, dev profile) do exactly this:
+
+```bash
+curl -s localhost:8080/api/v1/sql/users/1
+{"user":{"id":1,"username":"budi.santoso","fullName":"Budi Santoso","email":"budi.santoso@example.com","phone":"081200000001","status":"ACTIVE","createdAt":"2026-10-09T14:14:15.305862"}}
+
+curl -s 'localhost:8080/api/v1/sql/users?status=active&limit=5'
+{"items":[{"id":1,"username":"budi.santoso","name":"Budi Santoso","active":true},{"id":2,"username":"siti.aminah","name":"Siti Aminah","active":true}],"count":2}
+
+curl -s localhost:8080/api/v1/sql/users/999      # no row: success_expr is false
+{"errorCode":"GW-422-BUSINESS","errorMessage":"Downstream reported a business error","correlationId":"…","step":"user"}
+
+curl -s localhost:8080/api/v1/sql/users/abc      # TO_NUMBER on the path value fails: the client's fault
+{"errorCode":"GW-400-MAPPING","errorMessage":"Message mapping failed","correlationId":"…","step":"user","details":["mapping rule 28 ($.request.path.id -> $.id): Not a number: 'abc'"]}
+```
+
+When the database fails:
+
+| What happened | Error |
+|---|---|
+| Query timeout (`timeout_ms`, else `gateway.default-step-timeout-ms`) | `504 GW-504-DOWNSTREAM` (or `GW-504-FLOW` when the flow's time ran out first) |
+| Database unreachable | `502 GW-502-CONNECTION` |
+| Anything else: constraint, syntax, permission, … | `502 GW-502-DATABASE` |
+
+The client gets only the standard message; the database's own error (SQL state, vendor code, message) is in the log and in the audit trail's step response, so table and column names never reach the client. Condition, success expression, response schema, request/response handlers, `on_failure`, parallel groups and the audit trail work as for HTTP steps (the audit row shows method `SQL` and `DATASOURCE: SELECT …` as the URL; the parameters are the request payload, the result the response payload).
+
+In Gateway Studio: drag **Query GATEWAY_DB** (palette, *Database query*) onto the pipeline. The inspector has the datasource, an SQL editor with syntax highlighting, and the list of `:parameters` with the rule that sets each one; **+ Add rule for :x** creates the missing rules (source guessed from a path variable of the same name, else the query string or body; `TO_NUMBER` for id-like names). The Mapping tab's *Parameters of …* shows the bound values live, and the context tree offers the selected columns (`$.steps.<step>.body.rows[*].<column>`) for the response mapping.
+
+### 4.18 File uploads, local storage and S3
+
+**What the gateway accepts.** Besides JSON, a flow can receive:
+
+| Request `Content-Type` | `$.request.body` | `$.request.files` |
+|---|---|---|
+| `application/json` (or none) | the JSON | |
+| `multipart/form-data` | the text fields | one entry per file field: `$.request.files.<field>` |
+| `application/x-www-form-urlencoded` | the form fields (not the query string's) | |
+| a binary type: `application/pdf`, `image/*`, `audio/*`, `video/*`, `application/octet-stream`, `application/zip`, `text/csv`, Word / Excel | `{}` | the whole body as `$.request.files.body`; its name from `Content-Disposition: …; filename=…` or `X-File-Name` |
+
+A file entry describes the upload; the content itself stays in the gateway (custom Java code reads it with `ctx.file("<field>")`):
+
+```json
+{"field": "file", "filename": "Q3 report.pdf", "contentType": "application/pdf", "size": 24680, "sha256": "3a0104d0…"}
+```
+
+so rules can read `$.request.files.file.filename`, `.size` and so on. Limits: `gateway.files.max-size` (default 20MB, env `GATEWAY_FILES_MAX_SIZE`) per file or raw body and `gateway.files.max-request-size` (25MB) per multipart request; more → `413 GW-413-FILE` before any flow runs. Request schemas validate `$.request.body` (the text fields).
+
+**Storages** are configured like target systems: in the database (`gw_storage`, Gateway Studio → **Storages**), and optionally in `application.yml` (`gateway.storages`). An enabled database row wins over an `application.yml` storage of the same code; a disabled row hides it. Database storages apply on **Save & reload** (or `POST /admin/config/reload`), with no restart.
+
+`gw_storage`:
+
+| Column | Meaning |
+|---|---|
+| `code` | What a step's `target_system` names, e.g. `S3_FILES` |
+| `storage_type` | `LOCAL` or `S3` |
+| `base_dir` | LOCAL: a directory on the gateway host (created by the first upload) |
+| `bucket`, `key_prefix`, `region` | S3 |
+| `endpoint`, `path_style` | S3-compatible servers (MinIO, …): their URL and `true`; empty = AWS |
+| `access_key`, `secret_key` | S3 credentials; empty = the default AWS chain (environment, profile, instance role) |
+| `allowed_types` | Comma-separated, `image/*` style; empty = any. Otherwise `415 GW-415-FILE` |
+| `max_size` | `10MB`, `512KB`, …; empty = only the upload limit. Otherwise `413 GW-413-FILE` |
+| `enabled` | `false` = not available (and hides an `application.yml` storage of the same code) |
+
+Every text value may be a `${ENV_VAR}` / `${ENV_VAR:default}` placeholder, resolved by the gateway on every reload, so buckets and keys stay in the environment, not in the table (an unresolvable placeholder in an enabled storage is a validation error and the reload is refused). The dev data has `S3_FILES`, disabled, pointing at `${S3_BUCKET}`, `${S3_ACCESS_KEY:}` and so on.
+
+```sql
+INSERT INTO gw_storage (code, storage_type, bucket, key_prefix, region, access_key, secret_key, allowed_types, max_size)
+VALUES ('S3_FILES', 'S3', '${S3_BUCKET}', 'uploads/', 'ap-southeast-1', '${S3_ACCESS_KEY}', '${S3_SECRET_KEY}',
+        'image/*,application/pdf', '10MB');
+```
+
+The same in `application.yml` (`LOCAL_FILES`, `./data/files`, is there by default):
+
+```yaml
+gateway:
+  storages:
+    LOCAL_FILES:
+      type: local
+      base-dir: ${GATEWAY_FILES_DIR:./data/files}
+      allowed-types: image/*,application/pdf,text/csv,text/plain,application/octet-stream
+      max-size: 10MB
+    S3_ARCHIVE:
+      type: s3
+      bucket: ${S3_BUCKET}
+      prefix: uploads/
+      region: ap-southeast-1
+      endpoint: ${S3_ENDPOINT:}
+      path-style: false
+      access-key: ${S3_ACCESS_KEY:}
+      secret-key: ${S3_SECRET_KEY:}
+```
+
+**The step.** A step whose `target_system` is a storage is a **file storage step**:
+
+```sql
+INSERT INTO gw_flow_step (flow_id, name, step_order, target_system, http_method, path_template)
+SELECT id, 'store', 1, 'LOCAL_FILES', 'PUT', '/{yyyy}/{MM}/{uuid}-{filename}'
+FROM gw_flow WHERE code = 'FILE_UPLOAD';
+-- which file: BODY $.file <- the upload
+INSERT INTO gw_mapping_rule (flow_id, step_id, phase, seq, target_type, target_path, source_path, required)
+SELECT f.id, s.id, 'STEP_REQUEST', 1, 'BODY', '$.file', '$.request.files.file', true
+FROM gw_flow f JOIN gw_flow_step s ON s.flow_id = f.id WHERE f.code = 'FILE_UPLOAD' AND s.name = 'store';
+```
+
+- `http_method`: `PUT` stores, `DELETE` deletes the object at the key.
+- `path_template` is the **object key**. Its `{variables}` are PATH rules of the step or built in: `{uuid}` `{correlationId}` `{filename}` `{name}` (without extension) `{ext}` `{field}` `{yyyy}` `{MM}` `{dd}` `{HH}` `{mm}` `{ss}`; a rule wins over a built-in. Every value is made safe for a key (letters, digits, `. _ -`; anything else becomes `_`; never `..` or `/`), so a client's file name `../../etc/passwd` is stored as `…-passwd` inside the storage. Local keys are resolved under `base-dir` and checked to stay there; S3 keys get the storage's `prefix`.
+- BODY `$.file` ← `$.request.files.<field>` is required for `PUT`; an optional BODY `$.contentType` overrides the upload's content type.
+- A missing upload is the client's fault: with `required` on the rule → `400 GW-400-MAPPING`.
+
+The step's result (`$.steps.<step>.body`), for the response mapping:
+
+```json
+{"storage": "LOCAL_FILES", "key": "2026/10/a5ac2518-…-demo.pdf", "location": "file:///…/data/files/2026/10/a5ac2518-…-demo.pdf",
+ "filename": "demo.pdf", "contentType": "application/pdf", "size": 13, "sha256": "3a0104d0…", "etag": "…(S3 only)"}
+```
+
+and `{"storage", "key", "deleted"}` for `DELETE`. S3 objects get the content type and user metadata `filename` and `sha256`. Writing fails → `502 GW-502-STORAGE` (details in the log and audit trail only); a timeout → `504`. The audit trail shows the step with method `PUT`/`DELETE`, the location as its URL, the file's description as the request (never the content).
+
+**The demo flows** (`104-dev-demo-file-flows.xml`, dev profile):
+
+```bash
+curl -s -F "file=@invoice.pdf;type=application/pdf" -F "description=Invoice October" localhost:8080/api/v1/files
+{"fileId":"2026/10/a5ac2518-6212-4783-9a94-a8f917b30e4c-demo.pdf","filename":"demo.pdf","contentType":"application/pdf","size":13,"sha256":"3a0104d0…","description":"Invoice October"}
+
+curl -s -H "Content-Type: image/png" -H "X-File-Name: logo.png" --data-binary @logo.png localhost:8080/api/v1/documents
+{"fileId":"documents/5a2f3e9c-4d29-4c7d-90d8-753f95a4f2fd-logo.png","filename":"logo.png","contentType":"image/png","size":13}
+
+curl -s -X DELETE localhost:8080/api/v1/files/2026/10/a5ac2518-6212-4783-9a94-a8f917b30e4c-demo.pdf
+{"fileId":"2026/10/a5ac2518-6212-4783-9a94-a8f917b30e4c-demo.pdf","deleted":true}
+```
+
+**To S3 instead**: in Studio → **Storages**, fill in `S3_FILES` (bucket, region, keys, or keep the `${S3_…}` placeholders and set those environment variables), **Test connection** (it checks the bucket with these settings, unsaved ones too, and writes nothing), switch it on, then select it as the step's storage and **Save & reload**. For MinIO and other S3-compatible servers set the endpoint (e.g. `http://localhost:9000`) and path-style addressing. The API docs (`/docs`) describe upload flows as `multipart/form-data` (or a binary body), so Swagger UI's *Try it out* can send files.
+
+In Gateway Studio, **Storages** lists the database storages (add with **+ Local storage** / **+ S3 storage**; a literal key gets a "stored as plain text" warning) and, read-only, those of `application.yml` (**Override in database** copies one into the table). Drag **Store file · LOCAL_FILES** (palette, *File storage*, which lists both kinds) onto the pipeline. The inspector has the storage (with its location, allowed types and limit), the operation, the form field of the upload, the object key, and the key's variables with **+ Add rule for {x}** for the ones that are neither built in nor set. The live preview shows the key, location and file the step would use. The flow's **Tests** tab sends JSON only, so generated cases for upload flows have no file; test them with curl, `http/gateway.http` or Swagger UI.
 
 ---
 

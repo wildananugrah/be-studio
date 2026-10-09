@@ -283,7 +283,10 @@ public class StudioAssistant {
                 t.headers().stream().map(h -> new StudioConfig.Header(h.name(), secret(h.value()))).toList(),
                 new StudioConfig.Tls(t.tls().mode(), store(t.tls().trustStore()), secret(t.tls().trustStorePassword()),
                         store(t.tls().keyStore()), secret(t.tls().keyStorePassword())))).toList();
-        return new StudioConfig(c.version(), c.flows(), targets, c.lookups(), c.schemas());
+        List<StudioConfig.Storage> storages = c.storages().stream().map(s -> new StudioConfig.Storage(s.code(), s.type(),
+                s.baseDir(), s.bucket(), s.prefix(), s.region(), s.endpoint(), s.pathStyle(), secret(s.accessKey()),
+                secret(s.secretKey()), s.allowedTypes(), s.maxSize(), s.enabled())).toList();
+        return new StudioConfig(c.version(), c.flows(), targets, c.lookups(), c.schemas(), storages);
     }
 
     /** Placeholders show where a secret comes from; literal secrets are masked. */

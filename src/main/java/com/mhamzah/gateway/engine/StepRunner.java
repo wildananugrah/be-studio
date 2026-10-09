@@ -9,6 +9,7 @@ import com.mhamzah.gateway.extension.BodyCodec;
 import com.mhamzah.gateway.extension.ErrorType;
 import com.mhamzah.gateway.extension.ExecutionContext;
 import com.mhamzah.gateway.extension.GatewayError;
+import com.mhamzah.gateway.extension.InboundFile;
 import com.mhamzah.gateway.extension.MessageView;
 import com.mhamzah.gateway.invoke.DownstreamClient;
 import com.mhamzah.gateway.invoke.DownstreamException;
@@ -17,7 +18,11 @@ import com.mhamzah.gateway.invoke.DownstreamResponse;
 import com.mhamzah.gateway.invoke.TlsContexts;
 import com.mhamzah.gateway.mapping.MappedMessage;
 import com.mhamzah.gateway.mapping.MappingEngine;
+import com.mhamzah.gateway.storage.FileStore;
+import com.mhamzah.gateway.storage.StorageKeys;
 import java.nio.charset.StandardCharsets;
+import java.sql.SQLException;
+import java.sql.SQLTimeoutException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -28,7 +33,11 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.http.HttpMethod;
+import org.springframework.jdbc.CannotGetJdbcConnectionException;
 import org.springframework.web.util.UriUtils;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.JsonNodeFactory;
@@ -76,6 +85,14 @@ final class StepRunner {
     }
 
     private void call(StepDefinition step, ExecutionContext ctx, long deadlineNanos, Attempt a) {
+        if (step.isSql()) {
+            query(step, ctx, deadlineNanos, a);
+            return;
+        }
+        if (step.isStorage()) {
+            store(step, ctx, deadlineNanos, a);
+            return;
+        }
         GatewayProperties.TargetSystem target = step.targetSystem();
         MappedMessage mapped = withStep(step, () -> mapping.apply(step.requestRules(), ctx));
 
@@ -161,6 +178,178 @@ final class StepRunner {
             throw GatewayError.of(ErrorType.DOWNSTREAM_BUSINESS_ERROR).step(step.name())
                     .message("success_expr of step '" + step.name() + "' is false")
                     .downstream(resp.status(), a.headers, response.body()).build();
+        }
+    }
+
+    /**
+     * A database query step: the request mapping builds the parameters ({@code :name} = top-level field
+     * {@code name} of the mapped body), the request handler may still change them, and the result
+     * ({@code {rows, rowCount, truncated}} or {@code {updated}}) is the step's response body.
+     */
+    private void query(StepDefinition step, ExecutionContext ctx, long deadlineNanos, Attempt a) {
+        MappedMessage mapped = withStep(step, () -> mapping.apply(step.requestRules(), ctx));
+        MessageView request = new MessageView(new LinkedHashMap<>(), mapped.body() == null ? F.objectNode() : mapped.body());
+        if (step.requestHandler() != null) {
+            FlowExecutor.invoke(step.requestHandler(), request, ctx, "request_handler of step '" + step.name() + "'", false);
+        }
+        a.requestPayload = request.body();
+        a.url = step.sql().describe();
+
+        long remainingNanos = deadlineNanos - System.nanoTime();
+        if (remainingNanos <= 0) {
+            throw GatewayError.of(ErrorType.FLOW_TIMEOUT).step(step.name()).build();
+        }
+        boolean cappedByFlow = remainingNanos < step.timeout().toNanos();
+        long timeoutMs = cappedByFlow ? remainingNanos / 1_000_000 : step.timeout().toMillis();
+        JsonNode result;
+        try {
+            result = step.sql().execute(request.body(), (int) Math.max(1, (timeoutMs + 999) / 1000));
+        } catch (DataAccessException e) {
+            Throwable root = e.getMostSpecificCause();
+            ObjectNode detail = F.objectNode();
+            if (root instanceof SQLException sql) {
+                detail.put("sqlState", sql.getSQLState());
+                detail.put("vendorCode", sql.getErrorCode());
+            }
+            detail.put("message", String.valueOf(root.getMessage()));
+            a.responsePayload = detail;
+            boolean timedOut = e instanceof QueryTimeoutException || root instanceof SQLTimeoutException;
+            boolean unreachable = e instanceof CannotGetJdbcConnectionException
+                    || e instanceof DataAccessResourceFailureException;
+            a.outcome = timedOut ? "TIMEOUT" : "FAILED";
+            ErrorType type = timedOut ? (cappedByFlow ? ErrorType.FLOW_TIMEOUT : ErrorType.DOWNSTREAM_TIMEOUT)
+                    : unreachable ? ErrorType.DOWNSTREAM_CONNECTION : ErrorType.DATABASE_ERROR;
+            log.warn("Query of step '{}' on {} failed: {}", step.name(), step.targetSystemName(), root.getMessage());
+            throw GatewayError.of(type).step(step.name()).message("Query failed: " + root.getMessage()).cause(e).build();
+        } finally {
+            a.finishCall();
+        }
+        MessageView response = new MessageView(new LinkedHashMap<>(), result);
+        if (step.responseHandler() != null) {
+            FlowExecutor.invoke(step.responseHandler(), response, ctx, "response_handler of step '" + step.name() + "'", false);
+        }
+        a.responsePayload = response.body();
+        if (step.responseSchema() != null) {
+            List<String> errors = step.responseSchema().validate(response.body());
+            if (!errors.isEmpty()) {
+                throw GatewayError.of(ErrorType.DOWNSTREAM_INVALID_RESPONSE).step(step.name())
+                        .message("Query result failed schema " + step.responseSchema().code())
+                        .details(errors).build();
+            }
+        }
+        a.outcome = "SUCCESS";
+        ctx.putStepResult(step.name(), a.result(null));
+        if (step.success() != null && !withStep(step, () -> step.success().evaluate(ctx))) {
+            a.outcome = "FAILED";
+            throw GatewayError.of(ErrorType.DOWNSTREAM_BUSINESS_ERROR).step(step.name())
+                    .message("success_expr of step '" + step.name() + "' is false").build();
+        }
+    }
+
+    /**
+     * A file storage step. The request mapping builds {@code {file, contentType?}}: {@code file} is an uploaded
+     * file's description ({@code $.request.files.<field>}) or just its field name; the PATH rules fill the key
+     * template. PUT stores, DELETE removes; the result is the step's response body:
+     * {@code {storage, key, location, filename, contentType, size, sha256, etag}} or {@code {storage, key, deleted}}.
+     */
+    private void store(StepDefinition step, ExecutionContext ctx, long deadlineNanos, Attempt a) {
+        FileStore store = step.fileStore();
+        MappedMessage mapped = withStep(step, () -> mapping.apply(step.requestRules(), ctx));
+        MessageView request = new MessageView(new LinkedHashMap<>(), mapped.body() == null ? F.objectNode() : mapped.body());
+        if (step.requestHandler() != null) {
+            FlowExecutor.invoke(step.requestHandler(), request, ctx, "request_handler of step '" + step.name() + "'", false);
+        }
+        JsonNode body = request.body() == null ? F.objectNode() : request.body();
+        boolean put = step.method() == HttpMethod.PUT;
+        InboundFile file = null;
+        if (put) {
+            JsonNode ref = body.get("file");
+            String field = ref == null ? null : ref.isObject() ? ref.path("field").asString(null) : ref.asString(null);
+            file = ctx.file(field);
+            if (file == null) {
+                throw GatewayError.of(ErrorType.FILE_REJECTED).step(step.name()).clientError(true)
+                        .message("no uploaded file" + (field == null ? "" : " in field '" + field + "'"))
+                        .details(List.of("no uploaded file" + (field == null ? "" : " in field '" + field + "'"))).build();
+            }
+        }
+        String contentType = put ? body.path("contentType").asString(file.contentType()) : null;
+        String key = StorageKeys.build(step.pathTemplate(), mapped.pathVariables(), file, ctx.correlationId());
+        a.url = store.location() + key;
+        ObjectNode sent = F.objectNode();
+        sent.put("key", key);
+        if (file != null) {
+            sent.setAll(file.describe());
+            sent.put("contentType", contentType);
+        }
+        a.requestPayload = sent;
+        if (put) {
+            if (!store.accepts(contentType)) {
+                throw GatewayError.of(ErrorType.FILE_REJECTED).step(step.name()).clientError(true)
+                        .message("content type " + contentType + " is not allowed by storage " + store.name())
+                        .details(List.of("content type " + contentType + " is not one of " + store.allowedTypes())).build();
+            }
+            if (store.maxSize() > 0 && file.size() > store.maxSize()) {
+                throw GatewayError.of(ErrorType.FILE_TOO_LARGE).step(step.name()).clientError(true)
+                        .message(file.size() + " bytes is over the " + store.maxSize() + " of storage " + store.name())
+                        .details(List.of("maximum " + store.maxSize() + " bytes")).build();
+            }
+        }
+
+        long remainingNanos = deadlineNanos - System.nanoTime();
+        if (remainingNanos <= 0) {
+            throw GatewayError.of(ErrorType.FLOW_TIMEOUT).step(step.name()).build();
+        }
+        boolean cappedByFlow = remainingNanos < step.timeout().toNanos();
+        Duration timeout = cappedByFlow ? Duration.ofNanos(remainingNanos) : step.timeout();
+        ObjectNode result = F.objectNode();
+        result.put("storage", store.name());
+        try {
+            if (put) {
+                FileStore.Stored stored = store.put(key, file.bytes(), contentType, file.filename(), file.sha256(), timeout);
+                result.put("key", stored.key());
+                result.put("location", stored.location());
+                result.put("filename", file.filename());
+                result.put("contentType", contentType);
+                result.put("size", file.size());
+                result.put("sha256", file.sha256());
+                if (stored.etag() != null) {
+                    result.put("etag", stored.etag());
+                }
+            } else {
+                result.put("key", key);
+                result.put("deleted", store.delete(key, timeout));
+            }
+        } catch (FileStore.StorageException e) {
+            a.outcome = e.timeout() ? "TIMEOUT" : "FAILED";
+            ObjectNode detail = F.objectNode();
+            detail.put("message", e.getMessage());
+            a.responsePayload = detail;
+            log.warn("Storage step '{}' on {} failed: {}", step.name(), store.name(), e.getMessage());
+            ErrorType type = e.timeout() ? (cappedByFlow ? ErrorType.FLOW_TIMEOUT : ErrorType.DOWNSTREAM_TIMEOUT)
+                    : ErrorType.STORAGE_ERROR;
+            throw GatewayError.of(type).step(step.name()).message(e.getMessage()).cause(e).build();
+        } finally {
+            a.finishCall();
+        }
+        MessageView response = new MessageView(new LinkedHashMap<>(), result);
+        if (step.responseHandler() != null) {
+            FlowExecutor.invoke(step.responseHandler(), response, ctx, "response_handler of step '" + step.name() + "'", false);
+        }
+        a.responsePayload = response.body();
+        if (step.responseSchema() != null) {
+            List<String> errors = step.responseSchema().validate(response.body());
+            if (!errors.isEmpty()) {
+                throw GatewayError.of(ErrorType.DOWNSTREAM_INVALID_RESPONSE).step(step.name())
+                        .message("Storage result failed schema " + step.responseSchema().code())
+                        .details(errors).build();
+            }
+        }
+        a.outcome = "SUCCESS";
+        ctx.putStepResult(step.name(), a.result(null));
+        if (step.success() != null && !withStep(step, () -> step.success().evaluate(ctx))) {
+            a.outcome = "FAILED";
+            throw GatewayError.of(ErrorType.DOWNSTREAM_BUSINESS_ERROR).step(step.name())
+                    .message("success_expr of step '" + step.name() + "' is false").build();
         }
     }
 
@@ -284,8 +473,8 @@ final class StepRunner {
                 finishCall();
             }
             log.info("step={} target={} {} {} status={} outcome={} {}ms", step.name(), step.targetSystemName(),
-                    step.method(), url, status, outcome, durationMs);
-            StepRecord record = new StepRecord(step.name(), step.targetSystemName(), step.method().name(), url,
+                    step.methodName(), url, status, outcome, durationMs);
+            StepRecord record = new StepRecord(step.name(), step.targetSystemName(), step.methodName(), url,
                     status, outcome, requestPayload, responsePayload, startedAt, durationMs);
             return new StepOutcome(step, error, record);
         }

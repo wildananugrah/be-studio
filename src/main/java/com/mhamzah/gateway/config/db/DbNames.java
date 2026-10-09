@@ -37,6 +37,7 @@ public final class DbNames {
         names.put("gateway.db.tables.audit-step", db.tables().auditStep());
         names.put("gateway.db.tables.target-system", db.tables().targetSystem());
         names.put("gateway.db.tables.target-system-header", db.tables().targetSystemHeader());
+        names.put("gateway.db.tables.storage", db.tables().storage());
         names.forEach((key, value) -> check(key, value, MAX_TABLE, errors));
         check("gateway.db.liquibase-tables.changelog", db.liquibaseTables().changelog(), MAX_IDENTIFIER, errors);
         check("gateway.db.liquibase-tables.changelog-lock", db.liquibaseTables().changelogLock(), MAX_IDENTIFIER, errors);

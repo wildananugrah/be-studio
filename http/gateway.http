@@ -256,3 +256,45 @@ Content-Type: application/json
 
 ### Delete (DELETE) - expect 204 (run "Create" first and use its id)
 DELETE {{baseUrl}}/api/v1/users/4
+
+### ---------------------------------------------------------------------------
+### Database query steps (103-dev-demo-sql-flows.xml): SQL on GATEWAY_DB, parameters from the request
+### ---------------------------------------------------------------------------
+
+### One user: :id <- path id (TO_NUMBER); no row -> 422 GW-422-BUSINESS
+GET {{baseUrl}}/api/v1/sql/users/1
+
+### Search: :q, :status (UPPER), :limit (TO_NUMBER, default 10) <- query string
+GET {{baseUrl}}/api/v1/sql/users?q=budi&status=active&limit=5
+
+### Values are bound, not pasted into the SQL: this finds nothing
+GET {{baseUrl}}/api/v1/sql/users?q=%27%20OR%20%271%27%3D%271
+
+### ---------------------------------------------------------------------------
+### File uploads (104-dev-demo-file-flows.xml): stored in LOCAL_FILES (./data/files)
+### ---------------------------------------------------------------------------
+
+### Multipart: field "file" (required) + "description"; returns fileId (the key)
+POST {{baseUrl}}/api/v1/files
+Content-Type: multipart/form-data; boundary=gw
+
+--gw
+Content-Disposition: form-data; name="description"
+
+Invoice October
+--gw
+Content-Disposition: form-data; name="file"; filename="invoice.txt"
+Content-Type: text/plain
+
+Total: 150000
+--gw--
+
+### Raw body: the whole body is the file; its name from X-File-Name
+POST {{baseUrl}}/api/v1/documents
+Content-Type: application/octet-stream
+X-File-Name: notes.txt
+
+hello from a raw upload
+
+### Delete: the fileId of an upload, e.g. 2026/10/<uuid>-invoice.txt
+DELETE {{baseUrl}}/api/v1/files/2026/10/replace-with-uuid-invoice.txt

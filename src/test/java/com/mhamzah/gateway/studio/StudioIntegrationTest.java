@@ -125,6 +125,30 @@ class StudioIntegrationTest {
     }
 
     @Test
+    void converterEditorTriesTheRealConverter() throws Exception {
+        JsonNode date = call("POST", "/studio/api/converters/try", "studio-token", JsonValues.MAPPER.readTree(
+                "{\"spec\":\"DATE_FORMAT:ddMMyyyy:yyyy-MM-dd HH\\\\:mm\",\"value\":\"09102026\"}")).json();
+        assertThat(date.get("error").asString()).contains("Unsupported field: HourOfDay");
+        JsonNode us = call("POST", "/studio/api/converters/try", "studio-token", JsonValues.MAPPER.readTree(
+                "{\"spec\":\"DATE_FORMAT:MMddyyyy:dd/MM/yyyy\",\"value\":\"10092026\"}")).json();
+        assertThat(us.get("result").asString()).isEqualTo("09/10/2026");
+        JsonNode pad = call("POST", "/studio/api/converters/try", "studio-token", JsonValues.MAPPER.readTree(
+                "{\"spec\":\"PAD_LEFT:6: \",\"value\":\"42\"}")).json();
+        assertThat(pad.get("result").asString()).isEqualTo("    42");
+        assertThat(call("POST", "/studio/api/converters/try", "studio-token",
+                JsonValues.MAPPER.readTree("{\"spec\":\"SUBSTRING:x\",\"value\":\"abc\"}")).json().get("error").asString())
+                .contains("SUBSTRING argument must be an integer");
+        assertThat(call("POST", "/studio/api/converters/try", null,
+                JsonValues.MAPPER.readTree("{\"spec\":\"TRIM\",\"value\":\"a\"}")).status()).isEqualTo(401);
+    }
+
+    @Test
+    void catalogListsTheSqlDatasourcesWithoutConnectionDetails() throws Exception {
+        JsonNode ds = call("GET", "/studio/api/catalog", "studio-token", null).json().get("sqlDatasources");
+        assertThat(ds.toString()).contains("\"name\":\"GATEWAY_DB\"", "\"readOnly\":true").doesNotContain("url", "password");
+    }
+
+    @Test
     void previewRunsTheRealRulesAgainstASample() throws Exception {
         ObjectNode body = JsonValues.MAPPER.createObjectNode();
         body.set("config", config());
@@ -189,6 +213,26 @@ class StudioIntegrationTest {
         Response restored = call("PUT", "/studio/api/config", "studio-token", save(reread.get("version").asString(), original));
         assertThat(restored.status()).as(restored.text()).isEqualTo(200);
         assertThat(restored.json().get("version").asString()).isEqualTo(original.get("version").asString());
+    }
+
+    @Test
+    void addsANewFlowTheWayTheUiDoes() throws Exception {
+        ObjectNode original = config();
+        ObjectNode changed = original.deepCopy();
+        // exactly what "+ New flow" sends: no steps, no rules, every optional column null
+        ((ArrayNode) changed.get("flows")).add(JsonValues.MAPPER.readTree("""
+                {"code":"NEW_FLOW_1","name":"New flow","method":"GET","path":"/v1/new-1","requestSchema":null,
+                 "responseSchema":null,"requestHandler":null,"responseHandler":null,"errorHandler":null,
+                 "successStatus":200,"timeoutMs":null,"auditMode":"INHERIT","enabled":true,"steps":[],"response":[]}"""));
+
+        Response saved = call("PUT", "/studio/api/config", "studio-token", save(original.get("version").asString(), changed));
+        assertThat(saved.status()).as(saved.text()).isEqualTo(200);
+        ObjectNode reread = config();
+        assertThat(flow(reread, "NEW_FLOW_1").get("path").asString()).isEqualTo("/v1/new-1");
+        assertThat(call("GET", "/api/v1/new-1", null, null).status()).isEqualTo(200);
+
+        Response restored = call("PUT", "/studio/api/config", "studio-token", save(reread.get("version").asString(), original));
+        assertThat(restored.status()).as(restored.text()).isEqualTo(200);
     }
 
     @Test

@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Example: database query steps over tbl_ms_user (102-dev-demo-ms-user.xml), on datasource GATEWAY_DB (the
+    gateway's own database, gateway.sql.datasources). Loaded only with Liquibase context "dev".
+
+      GET /api/v1/sql/users/{id}                        one user          200 | 422 GW-422-BUSINESS (no such user)
+      GET /api/v1/sql/users?q=budi&status=ACTIVE&limit=10   search        200
+
+    The step's request mapping builds the SQL parameters (:id from the path, :q / :status / :limit from the query
+    string, with converters and defaults); the response mapping turns $.steps.<step>.body.rows into the reply.
+-->
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="103-demo-sql-flows" author="json-gateway" context="dev">
+        <!-- GET /v1/sql/users/{id} -->
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="SQL_USER_DETAIL"/>
+            <column name="name" value="User by id (database query)"/>
+            <column name="http_method" value="GET"/>
+            <column name="path_pattern" value="/v1/sql/users/{id}"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SQL_USER_DETAIL')"/>
+            <column name="name" value="user"/>
+            <column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="GATEWAY_DB"/>
+            <column name="sql_text" value="SELECT id, username, full_name AS &quot;fullName&quot;, email, phone, status, created_at AS &quot;createdAt&quot;
+FROM tbl_ms_user
+WHERE id = :id"/>
+            <column name="success_expr" value="${steps.user.body.rowCount} > 0"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SQL_USER_DETAIL')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'SQL_USER_DETAIL' AND s.name = 'user')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.id"/>
+            <column name="source_path" value="$.request.path.id"/><column name="converter" value="TO_NUMBER"/>
+            <column name="required" valueBoolean="true"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SQL_USER_DETAIL')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="BODY"/>
+            <column name="target_path" value="$.user"/><column name="source_path" value="$.steps.user.body.rows[0]"/>
+        </insert>
+
+        <!-- GET /v1/sql/users?q=&status=&limit= -->
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="SQL_USER_SEARCH"/>
+            <column name="name" value="Search users (database query)"/>
+            <column name="http_method" value="GET"/>
+            <column name="path_pattern" value="/v1/sql/users"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SQL_USER_SEARCH')"/>
+            <column name="name" value="users"/>
+            <column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="GATEWAY_DB"/>
+            <column name="sql_text" value="SELECT id, username, full_name AS &quot;fullName&quot;, status
+FROM tbl_ms_user
+WHERE LOWER(full_name) LIKE '%' || LOWER(COALESCE(:q, '')) || '%'
+  AND status = COALESCE(:status, status)
+ORDER BY id
+FETCH FIRST :limit ROWS ONLY"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SQL_USER_SEARCH')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'SQL_USER_SEARCH' AND s.name = 'users')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.q"/>
+            <column name="source_path" value="$.request.query.q"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SQL_USER_SEARCH')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'SQL_USER_SEARCH' AND s.name = 'users')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="2"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.status"/>
+            <column name="source_path" value="$.request.query.status"/><column name="converter" value="UPPER"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SQL_USER_SEARCH')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'SQL_USER_SEARCH' AND s.name = 'users')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="3"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.limit"/>
+            <column name="source_path" value="$.request.query.limit"/><column name="default_value" value="10"/>
+            <column name="converter" value="TO_NUMBER"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SQL_USER_SEARCH')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="BODY"/>
+            <column name="target_path" value="$.items[*].id"/><column name="source_path" value="$.steps.users.body.rows[*].id"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SQL_USER_SEARCH')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_type" value="BODY"/>
+            <column name="target_path" value="$.items[*].username"/><column name="source_path" value="$.steps.users.body.rows[*].username"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SQL_USER_SEARCH')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="3"/>
+            <column name="target_type" value="BODY"/>
+            <column name="target_path" value="$.items[*].name"/><column name="source_path" value="$.steps.users.body.rows[*].fullName"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SQL_USER_SEARCH')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="4"/>
+            <column name="target_type" value="BODY"/>
+            <column name="target_path" value="$.items[*].active"/><column name="source_path" value="$.steps.users.body.rows[*].status"/>
+            <column name="lookup_code" value="MS_USER_ACTIVE"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SQL_USER_SEARCH')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="5"/>
+            <column name="target_type" value="BODY"/>
+            <column name="target_path" value="$.count"/><column name="source_path" value="$.steps.users.body.rowCount"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="MS_USER_ACTIVE"/><column name="source_value" value="ACTIVE"/><column name="target_value" value="true"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="MS_USER_ACTIVE"/><column name="source_value" value="*"/><column name="target_value" value="false"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

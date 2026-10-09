@@ -21,6 +21,11 @@ spring:
       keepalive-time: 300000
       leak-detection-threshold: ${DB_POOL_LEAK_DETECTION_MS:0}
       register-mbeans: true
+  # uploads (multipart/form-data): limits come from gateway.files.max-size
+  servlet:
+    multipart:
+      max-file-size: ${gateway.files.max-size}
+      max-request-size: ${gateway.files.max-request-size}
   jpa:
     open-in-view: false
     hibernate:
@@ -92,9 +97,56 @@ gateway:
       json-schema: gw_json_schema
       audit-transaction: gw_audit_transaction
       audit-step: gw_audit_step
+      storage: gw_storage
     liquibase-tables:
       changelog: gw_db_changelog
       changelog-lock: gw_db_changelog_lock
+  # Databases for database query steps (a step with sql_text; its target_system names one of these). The SQL uses
+  # :name parameters, bound from the step's request mapping (BODY rules writing $.name); the result is the step's
+  # body: {rows: [...], rowCount, truncated} for a query, {updated: n} otherwise. Values are always bound, never
+  # pasted into the SQL. A datasource without url is the gateway's own database.
+  #   read-only: true  - only SELECT / WITH, run in a read-only transaction (the database refuses writes)
+  #   max-rows         - more rows than this are cut off and reported as truncated: true
+  sql:
+    max-rows: 1000
+    datasources:
+      GATEWAY_DB:
+        url: ${GATEWAY_SQL_DB_URL:}         # empty = the gateway's own database
+        read-only: ${GATEWAY_SQL_DB_READ_ONLY:true}
+      # REPORTING:
+      #   url: jdbc:postgresql://reporting-db:5432/reports
+      #   username: ${REPORTING_DB_USER}
+      #   password: ${REPORTING_DB_PASSWORD}
+      #   max-pool-size: 5
+      #   read-only: true
+  # Uploads. Besides JSON the gateway accepts multipart/form-data (text fields -> $.request.body, files ->
+  # $.request.files.<field>), application/x-www-form-urlencoded (fields -> $.request.body) and raw binary bodies
+  # (PDF, images, Office files, zip, octet-stream -> $.request.files.body). Larger uploads get 413 GW-413-FILE.
+  files:
+    max-size: ${GATEWAY_FILES_MAX_SIZE:20MB}            # one file (or one raw body)
+    max-request-size: ${GATEWAY_FILES_MAX_REQUEST_SIZE:25MB}
+  # Where file storage steps put files, besides the storages in the database (Studio > Storages, gw_storage, which
+  # win on the same name). A step whose target_system is one of these is a file storage step (http_method PUT stores,
+  # DELETE removes; path_template is the object key, e.g. /{yyyy}/{MM}/{uuid}-{filename}).
+  #   type: local - a directory (base-dir); type: s3 - a bucket (AWS, or S3-compatible such as MinIO via endpoint)
+  #   allowed-types / max-size - checked before storing (415 GW-415-FILE / 413 GW-413-FILE)
+  storages:
+    LOCAL_FILES:
+      type: local
+      base-dir: ${GATEWAY_FILES_DIR:./data/files}
+      allowed-types: image/*,application/pdf,text/csv,text/plain,application/octet-stream
+      max-size: 10MB
+    # S3 storages are usually configured in Gateway Studio > Storages (table gw_storage; database rows win over
+    # these). They can also live here, e.g.:
+    # S3_ARCHIVE:
+    #   type: s3
+    #   bucket: ${S3_BUCKET}
+    #   prefix: uploads/
+    #   region: ap-southeast-1
+    #   endpoint: ${S3_ENDPOINT:}          # S3-compatible servers (MinIO, ...); with path-style: true
+    #   path-style: false
+    #   access-key: ${S3_ACCESS_KEY:}      # empty = default AWS credentials (env, profile, instance role)
+    #   secret-key: ${S3_SECRET_KEY:}
   # Downstream systems, per environment. Example:
   # target-systems:
   #   CORE_BANKING:

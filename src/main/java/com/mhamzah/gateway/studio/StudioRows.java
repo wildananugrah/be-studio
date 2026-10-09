@@ -7,6 +7,7 @@ import com.mhamzah.gateway.config.ConfigRows.RuleRow;
 import com.mhamzah.gateway.config.ConfigRows.SchemaRow;
 import com.mhamzah.gateway.config.ConfigRows.StepRow;
 import com.mhamzah.gateway.config.ConfigRows.TargetHeaderRow;
+import com.mhamzah.gateway.config.ConfigRows.StorageRow;
 import com.mhamzah.gateway.config.ConfigRows.TargetRow;
 import com.mhamzah.gateway.mapping.LookupTable;
 import com.mhamzah.gateway.studio.StudioConfig.Entry;
@@ -59,7 +60,7 @@ final class StudioRows {
                                         s.pathTemplate(), s.conditionExpr(), s.successExpr(), s.onFailure(),
                                         s.timeoutMs(), s.responseSchemaCode(), s.requestHandler(),
                                         s.responseHandler(), s.bodyCodec(), s.enabled(),
-                                        rules(rulesByStep.getOrDefault(s.id(), List.of()))))
+                                        rules(rulesByStep.getOrDefault(s.id(), List.of())), s.sqlText()))
                                 .toList(),
                         rules(responseByFlow.getOrDefault(f.id(), List.of()))))
                 .toList();
@@ -90,7 +91,13 @@ final class StudioRows {
                 .map(x -> new Schema(x.code(), schemaDescriptions.get(x.code()), x.schemaText()))
                 .toList();
 
-        return new StudioConfig(null, flows, targets, lookups, schemas);
+        List<StudioConfig.Storage> storages = rows.storages().stream()
+                .sorted(Comparator.comparing(StorageRow::code, Comparator.nullsFirst(Comparator.naturalOrder())))
+                .map(s -> new StudioConfig.Storage(s.code(), s.storageType(), s.baseDir(), s.bucket(), s.keyPrefix(),
+                        s.region(), s.endpoint(), s.pathStyle(), s.accessKey(), s.secretKey(), s.allowedTypes(),
+                        s.maxSize(), s.enabled()))
+                .toList();
+        return new StudioConfig(null, flows, targets, lookups, schemas, storages);
     }
 
     private static List<Rule> rules(List<RuleRow> rows) {
@@ -122,10 +129,13 @@ final class StudioRows {
                     or(f.auditMode(), "INHERIT"), f.enabled()));
             for (Step s : f.steps()) {
                 stepId++;
+                // a database query step has no HTTP method, path or wire format
+                boolean sql = text(s.sql()) != null;
                 steps.add(new StepRow(stepId, flowId, text(s.name()), s.order(), text(s.targetSystem()),
-                        text(s.method()), text(s.path()), text(s.condition()), text(s.success()),
-                        or(s.onFailure(), "STOP"), s.timeoutMs(), text(s.responseSchema()), text(s.requestHandler()),
-                        text(s.responseHandler()), text(s.bodyCodec()), s.enabled()));
+                        sql ? null : text(s.method()), sql ? null : text(s.path()), text(s.condition()),
+                        text(s.success()), or(s.onFailure(), "STOP"), s.timeoutMs(), text(s.responseSchema()),
+                        text(s.requestHandler()), text(s.responseHandler()), sql ? null : text(s.bodyCodec()),
+                        s.enabled(), sql ? s.sql().strip() : null));
                 addRules(rules, s.rules(), flowId, stepId, STEP_REQUEST);
             }
             addRules(rules, f.response(), flowId, null, FLOW_RESPONSE);
@@ -160,7 +170,17 @@ final class StudioRows {
         for (Schema x : config.schemas()) {
             schemas.add(new SchemaRow(++schemaId, text(x.code()), x.text()));
         }
-        return new ConfigRows(flows, steps, rules, lookups, schemas, targets, headers);
+        List<StorageRow> storages = new ArrayList<>();
+        long storageId = 0;
+        for (StudioConfig.Storage s : config.storages()) {
+            String type = text(s.type()) == null ? "LOCAL" : s.type().strip().toUpperCase(java.util.Locale.ROOT);
+            boolean s3 = "S3".equals(type);
+            storages.add(new StorageRow(++storageId, text(s.code()), type, s3 ? null : text(s.baseDir()),
+                    s3 ? text(s.bucket()) : null, s3 ? text(s.prefix()) : null, s3 ? text(s.region()) : null,
+                    s3 ? text(s.endpoint()) : null, s3 && s.pathStyle(), s3 ? text(s.accessKey()) : null,
+                    s3 ? text(s.secretKey()) : null, text(s.allowedTypes()), text(s.maxSize()), s.enabled()));
+        }
+        return new ConfigRows(flows, steps, rules, lookups, schemas, targets, headers, storages);
     }
 
     private static void addRules(List<RuleRow> out, List<Rule> rules, long flowId, Long stepId, String phase) {
@@ -203,10 +223,10 @@ final class StudioRows {
             if (s.targetSystem() == null) {
                 errors.add(where + ": target_system is required");
             }
-            if (s.httpMethod() == null) {
+            if (s.httpMethod() == null && !s.isSql()) {
                 errors.add(where + ": http_method is required");
             }
-            if (s.pathTemplate() == null) {
+            if (s.pathTemplate() == null && !s.isSql()) {
                 errors.add(where + ": path_template is required");
             }
         }
@@ -215,6 +235,13 @@ final class StudioRows {
                 errors.add("mapping rule " + r.seq() + " of " + (r.stepId() == null
                         ? "flow '" + flowCodes.get(r.flowId()) + "'" : stepWhere.get(r.stepId()))
                         + ": target_path is required");
+            }
+        }
+        for (StorageRow s : rows.storages()) {
+            if (s.code() == null) {
+                errors.add("storage '': every storage needs a code");
+            } else if (rows.targets().stream().anyMatch(t -> s.code().equals(t.code()))) {
+                errors.add("storage '" + s.code() + "': a target system has the same code");
             }
         }
         Set<String> targetCodes = new HashSet<>();

@@ -21,6 +21,12 @@ import com.mhamzah.gateway.mapping.JsonValues;
 import com.mhamzah.gateway.mapping.LookupTable;
 import com.mhamzah.gateway.mapping.TargetType;
 import com.mhamzah.gateway.schema.CompiledSchema;
+import com.mhamzah.gateway.sql.SqlDatasources;
+import com.mhamzah.gateway.sql.SqlStatement;
+import com.mhamzah.gateway.sql.SqlText;
+import com.mhamzah.gateway.storage.FileStore;
+import com.mhamzah.gateway.storage.FileStores;
+import com.mhamzah.gateway.storage.StorageKeys;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.time.Duration;
@@ -71,6 +77,8 @@ public class ConfigCompiler {
     private final UnaryOperator<String> placeholders;
     private final Duration defaultFlowTimeout;
     private final Duration defaultStepTimeout;
+    private final SqlDatasources sqlDatasources;
+    private final FileStores fileStores;
 
     /**
      * @param configTargets target systems from application.yml ({@code gateway.target-systems}); database rows win
@@ -79,6 +87,16 @@ public class ConfigCompiler {
      */
     public ConfigCompiler(HandlerLookup handlers, Map<String, GatewayProperties.TargetSystem> configTargets,
             UnaryOperator<String> placeholders, Duration defaultFlowTimeout, Duration defaultStepTimeout) {
+        this(handlers, configTargets, placeholders, defaultFlowTimeout, defaultStepTimeout, SqlDatasources.none(),
+                FileStores.none());
+    }
+
+    /** @param sqlDatasources the databases database query steps may use ({@code gateway.sql.datasources}) */
+    public ConfigCompiler(HandlerLookup handlers, Map<String, GatewayProperties.TargetSystem> configTargets,
+            UnaryOperator<String> placeholders, Duration defaultFlowTimeout, Duration defaultStepTimeout,
+            SqlDatasources sqlDatasources, FileStores fileStores) {
+        this.sqlDatasources = sqlDatasources;
+        this.fileStores = fileStores;
         this.handlers = handlers;
         this.configTargets = configTargets;
         this.placeholders = placeholders;
@@ -97,6 +115,7 @@ public class ConfigCompiler {
         private Map<String, CompiledSchema> schemas;
         private Map<String, LookupTable> lookups;
         private Map<String, ResolvedTarget> targets;
+        private Map<String, FileStore> storages;
         /** Body codec of each target system that sets one (a missing bean is reported once, for the target). */
         private final Map<String, BodyCodec> targetCodecs = new HashMap<>();
 
@@ -108,6 +127,7 @@ public class ConfigCompiler {
             schemas = compileSchemas(rows.schemas());
             lookups = buildLookups(rows.lookups());
             targets = resolveTargets();
+            storages = resolveStorages();
             checkFlowCodes();
 
             Map<Long, List<StepRow>> stepsByFlow = rows.steps().stream()
@@ -232,6 +252,90 @@ public class ConfigCompiler {
                 return placeholders.apply(text);
             } catch (IllegalArgumentException e) {
                 errors.add(where + ": " + e.getMessage());
+                return null;
+            }
+        }
+
+        /**
+         * application.yml storages, replaced by enabled {@code gw_storage} rows of the same code and extended by the
+         * other enabled rows. Placeholders are resolved now; a row that cannot be built is reported.
+         */
+        private Map<String, FileStore> resolveStorages() {
+            Map<String, FileStore> out = new HashMap<>(fileStores.configured());
+            Set<String> seen = new HashSet<>();
+            for (ConfigRows.StorageRow r : rows.storages()) {
+                String where = "storage '" + r.code() + "'";
+                if (r.code() == null || !STEP_NAME.matcher(r.code()).matches()) {
+                    errors.add(where + ": code must match " + STEP_NAME.pattern());
+                    continue;
+                }
+                if (!seen.add(r.code())) {
+                    errors.add(where + ": duplicate code");
+                    continue;
+                }
+                if (!r.enabled()) {
+                    out.remove(r.code());
+                    continue;
+                }
+                String type = r.storageType() == null ? "LOCAL" : r.storageType().strip().toUpperCase(Locale.ROOT);
+                if (!type.equals("LOCAL") && !type.equals("S3")) {
+                    errors.add(where + ": storage_type must be LOCAL or S3, not " + r.storageType());
+                    continue;
+                }
+                org.springframework.util.unit.DataSize max = null;
+                if (r.maxSize() != null && !r.maxSize().isBlank()) {
+                    try {
+                        max = org.springframework.util.unit.DataSize.parse(r.maxSize().strip().toUpperCase(Locale.ROOT));
+                    } catch (IllegalArgumentException e) {
+                        errors.add(where + ": max_size '" + r.maxSize() + "' is not a size such as 10MB or 512KB");
+                        continue;
+                    }
+                }
+                int before = errors.size();
+                GatewayProperties.FileStorage cfg = new GatewayProperties.FileStorage(type.toLowerCase(Locale.ROOT),
+                        setting(r.baseDir(), where, "base_dir"), setting(r.bucket(), where, "bucket"),
+                        setting(r.keyPrefix(), where, "key_prefix"), setting(r.region(), where, "region"),
+                        setting(r.endpoint(), where, "endpoint"),
+                        setting(r.accessKey(), where, "access_key"), setting(r.secretKey(), where, "secret_key"),
+                        r.pathStyle(),
+                        r.allowedTypes() == null ? List.of() : List.of(r.allowedTypes().split(",")), max);
+                if (errors.size() > before) {
+                    continue;
+                }
+                if (type.equals("LOCAL") && cfg.baseDir() == null) {
+                    errors.add(where + ": base_dir is required for a LOCAL storage");
+                    continue;
+                }
+                if (cfg.endpoint() != null) {
+                    try {
+                        URI u = new URI(cfg.endpoint());
+                        if (!"http".equalsIgnoreCase(u.getScheme()) && !"https".equalsIgnoreCase(u.getScheme())) {
+                            throw new URISyntaxException(cfg.endpoint(), "not http(s)");
+                        }
+                    } catch (URISyntaxException e) {
+                        errors.add(where + ": endpoint must be an http(s) URL, e.g. http://minio:9000");
+                        continue;
+                    }
+                }
+                try {
+                    out.put(r.code(), fileStores.build(r.code(), cfg));
+                } catch (RuntimeException e) {
+                    errors.add(where + ": " + e.getMessage());
+                }
+            }
+            return out;
+        }
+
+        /** A storage setting with placeholders resolved; null when blank or unresolvable (reported). */
+        private String setting(String text, String where, String column) {
+            if (text == null || text.isBlank()) {
+                return null;
+            }
+            try {
+                String v = placeholders.apply(text.strip());
+                return v == null || v.isBlank() ? null : v;
+            } catch (IllegalArgumentException e) {
+                errors.add(where + ": " + column + ": " + e.getMessage());
                 return null;
             }
         }
@@ -436,6 +540,12 @@ public class ConfigCompiler {
 
         private StepDefinition step(StepRow s, String flowWhere, List<RuleRow> ruleRows, Map<String, Integer> orders) {
             String where = flowWhere + " step '" + s.name() + "'";
+            if (s.isSql()) {
+                return sqlStep(s, where, ruleRows, orders);
+            }
+            if (storages.containsKey(s.targetSystem())) {
+                return storageStep(s, where, ruleRows, orders);
+            }
             ResolvedTarget resolved = targets.get(s.targetSystem());
             GatewayProperties.TargetSystem target = resolved == null ? null : resolved.system();
             if (target == null) {
@@ -492,7 +602,139 @@ public class ConfigCompiler {
             }
             return new StepDefinition(s.name(), s.stepOrder(), s.targetSystem(), target, method, s.pathTemplate(),
                     condition, success, onFailure, timeout, responseSchema, requestHandler, responseHandler, codec, codecName,
-                    rules);
+                    rules, null, null);
+        }
+
+        /**
+         * A file storage step: {@code target_system} names a storage of {@code gateway.storages}; {@code http_method}
+         * PUT stores the file of the BODY rule writing {@code $.file} ({@code $.request.files.<field>}), DELETE
+         * removes; {@code path_template} is the object key, its {@code {vars}} PATH rules or built-ins
+         * ({@link StorageKeys#BUILT_INS}).
+         */
+        private StepDefinition storageStep(StepRow s, String where, List<RuleRow> ruleRows, Map<String, Integer> orders) {
+            FileStore store = storages.get(s.targetSystem());
+            if (targets.containsKey(s.targetSystem())) {
+                errors.add(where + ": '" + s.targetSystem() + "' is both a target system and a file storage; rename one");
+            }
+            HttpMethod method = s.httpMethod() == null ? null : HttpMethod.valueOf(s.httpMethod().strip().toUpperCase(Locale.ROOT));
+            if (method != HttpMethod.PUT && method != HttpMethod.DELETE) {
+                errors.add(where + ": a file storage step's http_method is PUT (store the file) or DELETE, not "
+                        + s.httpMethod());
+            }
+            String keyProblem = StorageKeys.check(s.pathTemplate());
+            if (keyProblem != null) {
+                errors.add(where + ": " + keyProblem);
+            }
+            Condition condition = condition(s.conditionExpr(), where, "condition_expr");
+            if (condition != null) {
+                condition.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), null, where + " condition_expr"));
+            }
+            Condition success = condition(s.successExpr(), where, "success_expr");
+            if (success != null) {
+                success.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), s.name(), where + " success_expr"));
+            }
+            OnFailure onFailure = enumValue(OnFailure.class, s.onFailure() == null ? "STOP" : s.onFailure(), where, "on_failure");
+            Duration timeout = timeout(s.timeoutMs(), defaultStepTimeout, where);
+            CompiledSchema responseSchema = schema(s.responseSchemaCode(), where, "response_schema_code");
+            MessageHandler requestHandler = handler(s.requestHandler(), MessageHandler.class, where, "request_handler");
+            MessageHandler responseHandler = handler(s.responseHandler(), MessageHandler.class, where, "response_handler");
+
+            List<CompiledRule> rules = new ArrayList<>();
+            Set<String> pathTargets = new HashSet<>();
+            boolean setsFile = false;
+            for (RuleRow r : ruleRows) {
+                String rw = "mapping rule " + r.id() + " of " + where;
+                CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.PATH), "a file storage step (BODY $.file / $.contentType, PATH key variables)");
+                if (rule != null) {
+                    checkStepRefs(rule.source(), orders, s.stepOrder(), null, rw);
+                    rules.add(rule);
+                    if (rule.targetType() == TargetType.PATH) {
+                        pathTargets.add(rule.targetName());
+                    } else if (rule.targetPath() != null && List.of("file").equals(rule.targetPath().fieldNames())) {
+                        setsFile = true;
+                    }
+                }
+            }
+            if (keyProblem == null) {
+                for (String v : StorageKeys.variables(s.pathTemplate())) {
+                    if (!pathTargets.contains(v) && !StorageKeys.BUILT_INS.contains(v)) {
+                        errors.add(where + ": key variable {" + v + "} has no PATH mapping rule and is not one of "
+                                + new java.util.TreeSet<>(StorageKeys.BUILT_INS));
+                    }
+                }
+            }
+            if (method == HttpMethod.PUT && !setsFile && requestHandler == null) {
+                errors.add(where + ": a PUT file storage step needs a BODY rule writing $.file (e.g. from $.request.files.file)");
+            }
+            if (method == null) {
+                return null;
+            }
+            return new StepDefinition(s.name(), s.stepOrder(), s.targetSystem(), null, method, s.pathTemplate(),
+                    condition, success, onFailure, timeout, responseSchema, requestHandler, responseHandler,
+                    JsonCodec.INSTANCE, JsonCodec.BEAN_NAME, rules, null, store);
+        }
+
+        /**
+         * A database query step: {@code target_system} names a datasource, {@code sql_text} is one statement, and
+         * every {@code :name} in it needs a BODY rule writing {@code $.name} (the step's request mapping builds the
+         * parameters). http_method, path_template and body_codec do not apply.
+         */
+        private StepDefinition sqlStep(StepRow s, String where, List<RuleRow> ruleRows, Map<String, Integer> orders) {
+            SqlDatasources.Entry ds = sqlDatasources.find(s.targetSystem());
+            if (ds == null) {
+                errors.add(where + ": target_system '" + s.targetSystem()
+                        + "' is not a SQL datasource (gateway.sql.datasources)");
+            }
+            SqlText sql = null;
+            try {
+                sql = SqlText.parse(s.sqlText());
+            } catch (IllegalArgumentException e) {
+                errors.add(where + ": sql_text: " + e.getMessage());
+            }
+            if (sql != null && ds != null && ds.readOnly() && !sql.isQuery()) {
+                errors.add(where + ": datasource '" + ds.name() + "' is read-only: sql_text must be a SELECT or WITH"
+                        + " query, not " + sql.firstKeyword());
+            }
+            Condition condition = condition(s.conditionExpr(), where, "condition_expr");
+            if (condition != null) {
+                condition.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), null, where + " condition_expr"));
+            }
+            Condition success = condition(s.successExpr(), where, "success_expr");
+            if (success != null) {
+                success.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), s.name(), where + " success_expr"));
+            }
+            OnFailure onFailure = enumValue(OnFailure.class, s.onFailure() == null ? "STOP" : s.onFailure(), where, "on_failure");
+            Duration timeout = timeout(s.timeoutMs(), defaultStepTimeout, where);
+            CompiledSchema responseSchema = schema(s.responseSchemaCode(), where, "response_schema_code");
+            MessageHandler requestHandler = handler(s.requestHandler(), MessageHandler.class, where, "request_handler");
+            MessageHandler responseHandler = handler(s.responseHandler(), MessageHandler.class, where, "response_handler");
+
+            List<CompiledRule> rules = new ArrayList<>();
+            Set<String> provided = new HashSet<>();
+            for (RuleRow r : ruleRows) {
+                String rw = "mapping rule " + r.id() + " of " + where;
+                CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY), "a database query step (its rules set :parameters)");
+                if (rule != null) {
+                    checkStepRefs(rule.source(), orders, s.stepOrder(), null, rw);
+                    rules.add(rule);
+                    if (rule.targetPath() != null && !rule.targetPath().fieldNames().isEmpty()) {
+                        provided.add(rule.targetPath().fieldNames().getFirst());
+                    }
+                }
+            }
+            if (sql != null && requestHandler == null) {
+                for (String p : sql.parameterNames()) {
+                    if (!provided.contains(p)) {
+                        errors.add(where + ": SQL parameter :" + p + " has no mapping rule (a BODY rule writing $." + p + ")");
+                    }
+                }
+            }
+            if (ds == null || sql == null) {
+                return null;
+            }
+            return new StepDefinition(s.name(), s.stepOrder(), s.targetSystem(), null, null, null, condition, success,
+                    onFailure, timeout, responseSchema, requestHandler, responseHandler, JsonCodec.INSTANCE,
+                    JsonCodec.BEAN_NAME, rules, new SqlStatement(sql, ds, sqlDatasources.maxRows()), null);
         }
 
         private CompiledRule rule(RuleRow r, String where, Set<TargetType> allowedTargets, String phase) {

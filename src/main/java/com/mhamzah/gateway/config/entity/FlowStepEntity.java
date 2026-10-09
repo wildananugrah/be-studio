@@ -27,12 +27,14 @@ public class FlowStepEntity {
     private String responseHandler;
     private String bodyCodec;
     private boolean enabled;
+    /** CLOB (Oracle) / text (PostgreSQL), read with {@code getString} like {@code schema_text}. */
+    private String sqlText;
 
     protected FlowStepEntity() {}
 
     public StepRow toRow() {
         return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                 successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                bodyCodec, enabled);
+                bodyCodec, enabled, sqlText);
     }
 }

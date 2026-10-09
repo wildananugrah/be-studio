@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Example: uploads stored by file storage steps on LOCAL_FILES (gateway.storages, ./data/files by default).
+    Loaded only with Liquibase context "dev". Switch a step to S3 by setting its target_system to S3_FILES (and
+    S3_BUCKET etc. in the environment).
+
+      POST   /api/v1/files            multipart/form-data: file (required) + description    201
+      POST   /api/v1/documents        raw body (application/pdf, image/png, ...), name from X-File-Name   201
+      DELETE /api/v1/files/{yyyy}/{MM}/{name}   delete what an upload returned as fileId         200
+
+    The key template /{yyyy}/{MM}/{uuid}-{filename} uses built-in variables; the client's file name is made safe
+    for a key (no '/', no '..').
+-->
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="104-demo-file-flows" author="json-gateway" context="dev">
+        <!-- POST /v1/files (multipart/form-data: file + description) -->
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="FILE_UPLOAD"/>
+            <column name="name" value="Upload a file (multipart) to local storage"/>
+            <column name="http_method" value="POST"/>
+            <column name="path_pattern" value="/v1/files"/>
+            <column name="success_status" valueNumeric="201"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_UPLOAD')"/>
+            <column name="name" value="store"/>
+            <column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="LOCAL_FILES"/>
+            <column name="http_method" value="PUT"/>
+            <column name="path_template" value="/{yyyy}/{MM}/{uuid}-{filename}"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_UPLOAD')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'FILE_UPLOAD' AND s.name = 'store')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.file"/>
+            <column name="source_path" value="$.request.files.file"/>
+            <column name="required" valueBoolean="true"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_UPLOAD')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.fileId"/>
+            <column name="source_path" value="$.steps.store.body.key"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_UPLOAD')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.filename"/>
+            <column name="source_path" value="$.steps.store.body.filename"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_UPLOAD')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="3"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.contentType"/>
+            <column name="source_path" value="$.steps.store.body.contentType"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_UPLOAD')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="4"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.size"/>
+            <column name="source_path" value="$.steps.store.body.size"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_UPLOAD')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="5"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.sha256"/>
+            <column name="source_path" value="$.steps.store.body.sha256"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_UPLOAD')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="6"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.description"/>
+            <column name="source_path" value="$.request.body.description"/>
+        </insert>
+
+        <!-- POST /v1/documents (raw body, e.g. Content-Type: application/pdf, X-File-Name: report.pdf) -->
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="FILE_UPLOAD_RAW"/>
+            <column name="name" value="Upload a raw document body to local storage"/>
+            <column name="http_method" value="POST"/>
+            <column name="path_pattern" value="/v1/documents"/>
+            <column name="success_status" valueNumeric="201"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_UPLOAD_RAW')"/>
+            <column name="name" value="store"/>
+            <column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="LOCAL_FILES"/>
+            <column name="http_method" value="PUT"/>
+            <column name="path_template" value="/documents/{uuid}-{filename}"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_UPLOAD_RAW')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'FILE_UPLOAD_RAW' AND s.name = 'store')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.file"/>
+            <column name="source_path" value="$.request.files.body"/>
+            <column name="required" valueBoolean="true"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_UPLOAD_RAW')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.fileId"/>
+            <column name="source_path" value="$.steps.store.body.key"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_UPLOAD_RAW')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.filename"/>
+            <column name="source_path" value="$.steps.store.body.filename"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_UPLOAD_RAW')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="3"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.contentType"/>
+            <column name="source_path" value="$.steps.store.body.contentType"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_UPLOAD_RAW')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="4"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.size"/>
+            <column name="source_path" value="$.steps.store.body.size"/>
+        </insert>
+
+        <!-- DELETE /v1/files/{yyyy}/{MM}/{name}: the fileId of an upload, split into its three parts -->
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="FILE_DELETE"/>
+            <column name="name" value="Delete an uploaded file from local storage"/>
+            <column name="http_method" value="DELETE"/>
+            <column name="path_pattern" value="/v1/files/{yyyy}/{MM}/{name}"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_DELETE')"/>
+            <column name="name" value="remove"/>
+            <column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="LOCAL_FILES"/>
+            <column name="http_method" value="DELETE"/>
+            <column name="path_template" value="/{yyyy}/{MM}/{name}"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_DELETE')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'FILE_DELETE' AND s.name = 'remove')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="PATH"/><column name="target_path" value="yyyy"/>
+            <column name="source_path" value="$.request.path.yyyy"/>
+            <column name="required" valueBoolean="true"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_DELETE')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'FILE_DELETE' AND s.name = 'remove')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="2"/>
+            <column name="target_type" value="PATH"/><column name="target_path" value="MM"/>
+            <column name="source_path" value="$.request.path.MM"/>
+            <column name="required" valueBoolean="true"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_DELETE')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'FILE_DELETE' AND s.name = 'remove')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="3"/>
+            <column name="target_type" value="PATH"/><column name="target_path" value="name"/>
+            <column name="source_path" value="$.request.path.name"/>
+            <column name="required" valueBoolean="true"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_DELETE')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.fileId"/>
+            <column name="source_path" value="$.steps.remove.body.key"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'FILE_DELETE')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_type" value="BODY"/><column name="target_path" value="$.deleted"/>
+            <column name="source_path" value="$.steps.remove.body.deleted"/>
+        </insert>
+    </changeSet>
+
+    <!--
+        (The ${...} placeholders are built as '$' || '{...}' so Liquibase stores them literally instead of substituting
+        its own parameters or environment variables: the gateway resolves them on every reload.)
+        An S3 storage configured in the database (Studio > Storages), disabled until it is filled in: set the bucket,
+        region and keys there (or the S3_* environment variables), Test connection, enable, Save & reload. Then point
+        a step at S3_FILES.
+    -->
+    <changeSet id="104-demo-s3-storage" author="json-gateway" context="dev">
+        <insert tableName="${tbl.storage}">
+            <column name="code" value="S3_FILES"/>
+            <column name="storage_type" value="S3"/>
+            <column name="bucket" valueComputed="'$' || '{S3_BUCKET}'"/>
+            <column name="key_prefix" value="uploads/"/>
+            <column name="region" valueComputed="'$' || '{S3_REGION:ap-southeast-1}'"/>
+            <column name="endpoint" valueComputed="'$' || '{S3_ENDPOINT:}'"/>
+            <column name="path_style" valueBoolean="false"/>
+            <column name="access_key" valueComputed="'$' || '{S3_ACCESS_KEY:}'"/>
+            <column name="secret_key" valueComputed="'$' || '{S3_SECRET_KEY:}'"/>
+            <column name="allowed_types" value="image/*,application/pdf,text/csv,text/plain,application/octet-stream"/>
+            <column name="max_size" value="10MB"/>
+            <column name="enabled" valueBoolean="false"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

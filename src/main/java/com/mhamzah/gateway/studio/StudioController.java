@@ -3,8 +3,11 @@ package com.mhamzah.gateway.studio;
 import com.mhamzah.gateway.config.ConfigValidationException;
 import com.mhamzah.gateway.config.GatewayProperties;
 import com.mhamzah.gateway.logging.SkipBodyLogging;
+import com.mhamzah.gateway.mapping.ConversionException;
+import com.mhamzah.gateway.mapping.Converters;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -21,6 +24,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.JsonNodeFactory;
 
 /**
  * API behind Gateway Studio ({@code /studio}), only registered when {@code gateway.studio.enabled=true}. Every
@@ -62,6 +66,9 @@ public class StudioController {
 
     public record PreviewRequest(StudioConfig config, String flow, String step, JsonNode sample) {}
 
+    /** A converter spec ({@code DATE_FORMAT:ddMMyyyy:yyyy-MM-dd}) and a value to run it on. */
+    public record ConverterTry(String spec, JsonNode value) {}
+
     @GetMapping("/config")
     public ResponseEntity<Object> config(@RequestHeader(name = "X-Admin-Token", required = false) String supplied) {
         return authorized(supplied) ? ResponseEntity.ok(studio.load()) : UNAUTHORIZED;
@@ -76,6 +83,33 @@ public class StudioController {
     public ResponseEntity<Object> validate(@RequestHeader(name = "X-Admin-Token", required = false) String supplied,
             @RequestBody StudioConfig config) {
         return authorized(supplied) ? ResponseEntity.ok(Map.of("errors", studio.validate(config))) : UNAUTHORIZED;
+    }
+
+    /**
+     * Runs one converter on one value with the real {@link Converters}, for Studio's converter editor:
+     * {@code {result}} or {@code {error}} (an invalid spec or a value it cannot convert). Changes nothing.
+     */
+    @PostMapping("/converters/try")
+    public ResponseEntity<Object> tryConverter(@RequestHeader(name = "X-Admin-Token", required = false) String supplied,
+            @RequestBody ConverterTry request) {
+        if (!authorized(supplied)) {
+            return UNAUTHORIZED;
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        try {
+            JsonNode value = request.value() == null ? JsonNodeFactory.instance.nullNode() : request.value();
+            out.put("result", Converters.parse(request.spec()).apply(value));
+        } catch (IllegalArgumentException | ConversionException e) {
+            out.put("error", e.getMessage());
+        }
+        return ResponseEntity.ok(out);
+    }
+
+    /** Tries a storage's settings ({@code {ok, location, message}}); writes nothing, also in view-only mode. */
+    @PostMapping("/storages/check")
+    public ResponseEntity<Object> checkStorage(@RequestHeader(name = "X-Admin-Token", required = false) String supplied,
+            @RequestBody StudioConfig.Storage storage) {
+        return authorized(supplied) ? ResponseEntity.ok(studio.checkStorage(storage)) : UNAUTHORIZED;
     }
 
     @PostMapping("/preview")

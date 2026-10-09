@@ -11,9 +11,16 @@ import java.util.List;
  * meantime. It is ignored on input.
  */
 public record StudioConfig(
-        String version, List<Flow> flows, List<Target> targets, List<Lookup> lookups, List<Schema> schemas) {
+        String version, List<Flow> flows, List<Target> targets, List<Lookup> lookups, List<Schema> schemas,
+        List<Storage> storages) {
+
+    public StudioConfig(String version, List<Flow> flows, List<Target> targets, List<Lookup> lookups,
+            List<Schema> schemas) {
+        this(version, flows, targets, lookups, schemas, List.of());
+    }
 
     public StudioConfig {
+        storages = storages == null ? List.of() : List.copyOf(storages);
         flows = flows == null ? List.of() : List.copyOf(flows);
         targets = targets == null ? List.of() : List.copyOf(targets);
         lookups = lookups == null ? List.of() : List.copyOf(lookups);
@@ -21,7 +28,34 @@ public record StudioConfig(
     }
 
     public StudioConfig withVersion(String value) {
-        return new StudioConfig(value, flows, targets, lookups, schemas);
+        return new StudioConfig(value, flows, targets, lookups, schemas, storages);
+    }
+
+    /**
+     * {@code gw_storage}: where file storage steps put files. {@code type} LOCAL ({@code baseDir}) or S3
+     * ({@code bucket}, {@code prefix}, {@code region}, {@code endpoint}, {@code pathStyle}, {@code accessKey},
+     * {@code secretKey}); values may use {@code ${ENV}} placeholders. {@code allowedTypes} comma-separated,
+     * {@code maxSize} like {@code 10MB}.
+     */
+    public record Storage(
+            String code,
+            String type,
+            String baseDir,
+            String bucket,
+            String prefix,
+            String region,
+            String endpoint,
+            Boolean pathStyle,
+            String accessKey,
+            String secretKey,
+            String allowedTypes,
+            String maxSize,
+            Boolean enabled) {
+
+        public Storage {
+            enabled = enabled == null || enabled;
+            pathStyle = pathStyle != null && pathStyle;
+        }
     }
 
     /** {@code gw_flow} plus its steps and its {@code FLOW_RESPONSE} rules. */
@@ -65,11 +99,20 @@ public record StudioConfig(
             String responseHandler,
             String bodyCodec,
             Boolean enabled,
-            List<Rule> rules) {
+            List<Rule> rules,
+            String sql) {
 
         public Step {
             enabled = enabled == null || enabled;
             rules = rules == null ? List.of() : List.copyOf(rules);
+        }
+
+        /** An HTTP step. */
+        public Step(String name, int order, String targetSystem, String method, String path, String condition,
+                String success, String onFailure, Integer timeoutMs, String responseSchema, String requestHandler,
+                String responseHandler, String bodyCodec, Boolean enabled, List<Rule> rules) {
+            this(name, order, targetSystem, method, path, condition, success, onFailure, timeoutMs, responseSchema,
+                    requestHandler, responseHandler, bodyCodec, enabled, rules, null);
         }
     }
 

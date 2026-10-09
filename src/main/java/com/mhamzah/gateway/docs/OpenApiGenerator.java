@@ -99,7 +99,34 @@ public final class OpenApiGenerator {
                 .put("description", "Optional; generated when absent and echoed in the response")
                 .putObject("schema").put("type", "string").put("pattern", "^[A-Za-z0-9._:\\-]{1,64}$");
 
-        if (!NO_BODY.contains(flow.method())) {
+        if (!NO_BODY.contains(flow.method()) && inputs.files.keySet().equals(java.util.Set.of("body"))) {
+            // a raw upload: the whole body is the file
+            parameter(params, "X-File-Name", "header", false);
+            ObjectNode body = op.putObject("requestBody");
+            body.put("required", true);
+            body.putObject("content").putObject("application/octet-stream").putObject("schema")
+                    .put("type", "string").put("format", "binary");
+        } else if (!NO_BODY.contains(flow.method()) && !inputs.files.isEmpty()) {
+            // multipart/form-data: the text fields the flow reads plus one binary property per file field
+            ObjectNode body = op.putObject("requestBody");
+            body.put("required", true);
+            ObjectNode schema = inputs.body.deepCopy();
+            schema.put("type", "object");
+            ObjectNode props = schema.has("properties") ? (ObjectNode) schema.get("properties") : schema.putObject("properties");
+            // form fields arrive as text
+            props.properties().forEach(e -> {
+                if (e.getValue() instanceof ObjectNode o && !o.has("type")) {
+                    o.put("type", "string");
+                }
+            });
+            inputs.files.forEach((field, required) -> {
+                props.putObject(field).put("type", "string").put("format", "binary");
+                if (required) {
+                    (schema.has("required") ? (ArrayNode) schema.get("required") : schema.putArray("required")).add(field);
+                }
+            });
+            body.putObject("content").putObject("multipart/form-data").set("schema", schema);
+        } else if (!NO_BODY.contains(flow.method())) {
             ObjectNode body = op.putObject("requestBody");
             JsonNode schema = flow.requestSchema() != null ? ref(flow.requestSchema(), schemas) : inputs.body;
             body.put("required", flow.requestSchema() != null || inputs.body.has("required"));
@@ -133,10 +160,11 @@ public final class OpenApiGenerator {
     }
 
     /** What a flow reads from the request: query parameters, headers (name to required) and a body skeleton. */
-    private record Inputs(Map<String, Boolean> query, Map<String, Boolean> headers, ObjectNode body) {}
+    private record Inputs(Map<String, Boolean> query, Map<String, Boolean> headers, ObjectNode body,
+            Map<String, Boolean> files) {}
 
     private static Inputs inputs(FlowDefinition flow) {
-        Inputs in = new Inputs(new LinkedHashMap<>(), new LinkedHashMap<>(), objectSchema());
+        Inputs in = new Inputs(new LinkedHashMap<>(), new LinkedHashMap<>(), objectSchema(), new LinkedHashMap<>());
         List<CompiledRule> rules = new ArrayList<>(flow.responseRules());
         List<Condition> conditions = new ArrayList<>();
         for (StepDefinition s : flow.allSteps()) {
@@ -157,6 +185,8 @@ public final class OpenApiGenerator {
         String part = names.get(1);
         if ("body".equals(part)) {
             addPath(in.body, names.subList(2, names.size()), required);
+        } else if ("files".equals(part) && names.size() > 2 && names.get(2) != null) {
+            in.files.merge(names.get(2), required, Boolean::logicalOr);
         } else if (names.size() > 2 && names.get(2) != null && ("query".equals(part) || "headers".equals(part))) {
             String name = names.get(2);
             if ("headers".equals(part) && name.equalsIgnoreCase(CORRELATION_HEADER)) {

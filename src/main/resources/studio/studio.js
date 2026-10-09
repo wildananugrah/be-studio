@@ -2,7 +2,7 @@
 // through /studio/api (StudioController). Everything is edited in memory; "Save & reload" writes it in one go.
 import { html, render, Component } from './vendor/htm-preact.js';
 
-const C = { in: 'oklch(0.56 0.13 255)', call: 'oklch(0.62 0.17 42)', step: 'oklch(0.53 0.15 300)', out: 'oklch(0.55 0.12 160)', err: 'oklch(0.57 0.19 25)', flow: 'oklch(0.45 0.02 260)', java: 'oklch(0.7 0.13 85)' };
+const C = { in: 'oklch(0.56 0.13 255)', call: 'oklch(0.62 0.17 42)', step: 'oklch(0.53 0.15 300)', out: 'oklch(0.55 0.12 160)', err: 'oklch(0.57 0.19 25)', flow: 'oklch(0.45 0.02 260)', java: 'oklch(0.7 0.13 85)', sql: 'oklch(0.52 0.12 200)', file: 'oklch(0.55 0.14 135)' };
 const MC = { GET: 'oklch(0.52 0.11 160)', POST: 'oklch(0.6 0.17 42)', PUT: 'oklch(0.52 0.13 255)', PATCH: 'oklch(0.5 0.15 300)', DELETE: 'oklch(0.55 0.19 25)' };
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 const MONO = "'Geist Mono',ui-monospace,Menlo,monospace";
@@ -33,14 +33,96 @@ function fromApi(c) {
       timeout: str(f.timeoutMs), audit: f.auditMode || 'INHERIT', enabled: f.enabled,
       steps: f.steps.map(s => ({ id: uid('s'), name: str(s.name), order: s.order, target: str(s.targetSystem), method: s.method || 'GET', path: str(s.path), onFailure: s.onFailure || 'STOP',
         timeout: str(s.timeoutMs), condition: str(s.condition), success: str(s.success), reqHandler: str(s.requestHandler), respHandler: str(s.responseHandler),
-        respSchema: str(s.responseSchema), bodyCodec: str(s.bodyCodec), enabled: s.enabled, rules: s.rules.map(ruleIn) })),
+        respSchema: str(s.responseSchema), bodyCodec: str(s.bodyCodec), enabled: s.enabled, rules: s.rules.map(ruleIn), sql: s.sql == null ? null : String(s.sql) })),
       response: f.response.map(ruleIn)
     })),
     targets: c.targets.map(t => ({ code: str(t.code), base: str(t.baseUrl), connect: str(t.connectTimeoutMs), read: str(t.readTimeoutMs), bodyCodec: str(t.bodyCodec), enabled: t.enabled, headers: t.headers.map(h => ({ n: str(h.name), v: str(h.value) })),
       tls: { mode: (t.tls && t.tls.mode) || 'VERIFY', trust: str(t.tls && t.tls.trustStore), trustPw: str(t.tls && t.tls.trustStorePassword), key: str(t.tls && t.tls.keyStore), keyPw: str(t.tls && t.tls.keyStorePassword) } })),
     lookups,
-    schemas: (c.schemas || []).map(x => ({ code: str(x.code), desc: str(x.description), text: str(x.text) }))
+    schemas: (c.schemas || []).map(x => ({ code: str(x.code), desc: str(x.description), text: str(x.text) })),
+    storages: (c.storages || []).map(x => ({ code: str(x.code), type: (x.type || 'LOCAL').toUpperCase(), baseDir: str(x.baseDir), bucket: str(x.bucket), prefix: str(x.prefix), region: str(x.region), endpoint: str(x.endpoint),
+      pathStyle: !!x.pathStyle, accessKey: str(x.accessKey), secretKey: str(x.secretKey), allowedTypes: str(x.allowedTypes), maxSize: str(x.maxSize), enabled: x.enabled !== false }))
   };
+}
+
+/** Names of gateway.storages (from the catalog): a step whose target is one of them is a file storage step. */
+let STORE_NAMES = new Set();
+const isStore = s => !isSql(s) && STORE_NAMES.has(s.target);
+/** What a sample upload looks like at $.request.files.<field>. */
+const fileSample = field => ({ field, filename: 'sample.pdf', contentType: 'application/pdf', size: 24680, sha256: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08' });
+/** The form field of a step's file rule ($.file <- $.request.files.<field>). */
+const fileField = st => { const r = st.rules.find(x => x.type === 'BODY' && x.target === '$.file'); const m = r && /^\$\.request\.files\.([A-Za-z0-9_-]+)$/.exec(r.source || ''); return m ? m[1] : ''; };
+
+/** A database query step (it has SQL; may be empty while being written). */
+const isSql = s => s.sql != null;
+/** The distinct :name parameters of a SQL text, skipping literals, quoted names, comments and :: casts (like the server). */
+function sqlParams(sql) {
+  const out = []; const re = /'(?:[^']|'')*'|"(?:[^"]|"")*"|--[^\n]*|\/\*[\s\S]*?\*\/|::|:([A-Za-z_]\w*)/g; let m;
+  while ((m = re.exec(String(sql || '')))) if (m[1] && !out.includes(m[1])) out.push(m[1]);
+  return out;
+}
+
+/** Column names of the first SELECT list (alias, quoted alias, or the column itself); '*' and expressions without an alias are skipped. */
+function sqlColumns(sql) {
+  const s = String(sql || '').replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, ' ');
+  const m = /\bselect\s+(?:distinct\s+)?([\s\S]*?)\bfrom\b/i.exec(s); if (!m) return [];
+  const items = []; let depth = 0, cur = '', q = null;
+  for (const ch of m[1]) {
+    if (q) { cur += ch; if (ch === q) q = null; continue; }
+    if (ch === "'" || ch === '"') { q = ch; cur += ch; continue; }
+    if (ch === '(') depth++; if (ch === ')') depth--;
+    if (ch === ',' && depth === 0) { items.push(cur); cur = ''; } else cur += ch;
+  }
+  items.push(cur);
+  const cols = [];
+  items.map(x => x.trim()).forEach(x => {
+    const a = /\bas\s+"([^"]+)"\s*$/i.exec(x) || /\bas\s+([A-Za-z_]\w*)\s*$/i.exec(x) || /\s"([^"]+)"\s*$/.exec(x) || /(?:^|\.)([A-Za-z_]\w*)\s*$/.exec(x);
+    // unquoted names come back lower case (PostgreSQL folds them; Oracle's upper case is lowered by the gateway)
+    const name = a && (/"/.test(a[0]) ? a[1] : a[1].toLowerCase());
+    if (name && !cols.includes(name)) cols.push(name);
+  });
+  return cols;
+}
+/** Parameters that usually hold numbers: path/query values are text, and PostgreSQL will not compare text with a number column. */
+const numericParam = p => /(^id$|Id$|_id$|^(limit|offset|page|size|count|amount|year|month|day)$)/i.test(p);
+
+// ---------- converters: spec <-> fields ----------
+/** Splits a converter spec on ':' honouring the \\: escape (like the server). */
+function convSplit(spec) {
+  const parts = []; let cur = ''; const s = String(spec || '');
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '\\' && s[i + 1] === ':') { cur += ':'; i++; } else if (s[i] === ':') { parts.push(cur); cur = ''; } else cur += s[i];
+  }
+  parts.push(cur); return parts;
+}
+/** Builds a spec, escaping ':' inside arguments (HH:mm:ss) and dropping empty optional trailing ones. */
+function convJoin(name, args) {
+  const a = [...args]; while (a.length && a[a.length - 1] === '' && (CONV[name] || { args: [] }).args[a.length - 1]?.optional) a.pop();
+  return [name, ...a.map(x => String(x).replace(/:/g, '\\:'))].join(':');
+}
+const CONV = {
+  TO_STRING: { label: 'To text', args: [], sample: '123' },
+  TO_NUMBER: { label: 'To number', args: [], sample: '00123' },
+  TO_BOOLEAN: { label: 'To true / false', args: [], sample: 'Y', hint: 'TRUE, Y, YES, 1 → true; FALSE, N, NO, 0 → false' },
+  TRIM: { label: 'Trim spaces', args: [], sample: '  abc  ' },
+  UPPER: { label: 'Upper case', args: [], sample: 'abc' },
+  LOWER: { label: 'Lower case', args: [], sample: 'ABC' },
+  PAD_LEFT: { label: 'Pad left', args: [{ label: 'Total length', kind: 'int', def: '12' }, { label: 'Pad character', kind: 'char', def: '0' }], sample: '12345', hint: 'Longer values are left as they are.' },
+  PAD_RIGHT: { label: 'Pad right', args: [{ label: 'Total length', kind: 'int', def: '12' }, { label: 'Pad character', kind: 'char', def: ' ' }], sample: 'ABC', hint: 'Longer values are left as they are.' },
+  SUBSTRING: { label: 'Part of the text', args: [{ label: 'From position (0 = first character)', kind: 'int', def: '0' }, { label: 'To position (not included; empty = to the end)', kind: 'int', def: '6', optional: true }], sample: '1234567890', hint: 'Positions start at 0: SUBSTRING 0..6 keeps the first 6 characters.' },
+  DATE_FORMAT: { label: 'Date / time format', args: [{ label: 'From format (what comes in)', kind: 'date', def: 'yyyyMMdd' }, { label: 'To format (what goes out)', kind: 'date', def: 'dd/MM/yyyy' }], sample: '20261009' },
+  DECIMAL_SCALE: { label: 'Decimal places', args: [{ label: 'Decimal places (rounded half up)', kind: 'int', def: '2' }], sample: '1500.456' }
+};
+const DATE_PRESETS = [['yyyyMMdd', '20261009'], ['ddMMyyyy', '09102026'], ['MMddyyyy', '10092026'], ['yyyy-MM-dd', '2026-10-09'], ['dd/MM/yyyy', '09/10/2026'], ['MM/dd/yyyy', '10/09/2026'], ['dd-MM-yyyy', '09-10-2026'],
+  ['dd MMM yyyy', '09 Oct 2026'], ['yyMMdd', '261009'], ['yyyyMMddHHmmss', '20261009143005'], ['yyyy-MM-dd HH:mm:ss', '2026-10-09 14:30:05'], ["yyyy-MM-dd'T'HH:mm:ss", '2026-10-09T14:30:05'], ['dd/MM/yyyy HH:mm', '09/10/2026 14:30'], ['HHmmss', '143005'], ['HH:mm:ss', '14:30:05']];
+/** Short readable form for the chip on a rule. */
+function convLabel(spec) {
+  const [n, ...a] = convSplit(spec); const name = n.trim().toUpperCase();
+  if (name === 'DATE_FORMAT') return 'DATE ' + (a[0] || '?') + ' → ' + (a[1] || '?');
+  if (name === 'PAD_LEFT' || name === 'PAD_RIGHT') return name + ' ' + (a[0] || '?') + " · '" + (a[1] ?? '') + "'";
+  if (name === 'SUBSTRING') return 'SUBSTRING ' + (a[0] || '0') + '..' + (a[1] || 'end');
+  if (name === 'DECIMAL_SCALE') return 'DECIMAL ' + (a[0] || '?') + ' places';
+  return spec;
 }
 
 function toApi(cfg) {
@@ -48,7 +130,7 @@ function toApi(cfg) {
     flows: cfg.flows.map(f => ({
       code: f.code, name: nn(f.name), method: f.method, path: f.path, requestSchema: nn(f.reqSchema), responseSchema: nn(f.respSchema), requestHandler: nn(f.reqHandler),
       responseHandler: nn(f.respHandler), errorHandler: nn(f.errorHandler), successStatus: int(f.successStatus) || 200, timeoutMs: int(f.timeout), auditMode: f.audit, enabled: f.enabled,
-      steps: [...f.steps].sort((a, b) => a.order - b.order).map(s => ({ name: s.name, order: s.order, targetSystem: s.target, method: s.method, path: s.path, condition: nn(s.condition), success: nn(s.success),
+      steps: [...f.steps].sort((a, b) => a.order - b.order).map(s => ({ name: s.name, order: s.order, targetSystem: s.target, method: isSql(s) ? null : s.method, path: isSql(s) ? null : s.path, sql: isSql(s) ? s.sql : null, condition: nn(s.condition), success: nn(s.success),
         onFailure: s.onFailure, timeoutMs: int(s.timeout), responseSchema: nn(s.respSchema), requestHandler: nn(s.reqHandler), responseHandler: nn(s.respHandler), bodyCodec: nn(s.bodyCodec),
         enabled: s.enabled, rules: s.rules.map(ruleOut) })),
       response: f.response.map(ruleOut)
@@ -56,7 +138,9 @@ function toApi(cfg) {
     targets: cfg.targets.map(t => ({ code: t.code, baseUrl: t.base, connectTimeoutMs: int(t.connect), readTimeoutMs: int(t.read), bodyCodec: nn(t.bodyCodec), enabled: t.enabled !== false, headers: t.headers.map(h => ({ name: h.n, value: h.v })),
       tls: tlsOut(t.tls) })),
     lookups: Object.keys(cfg.lookups).map(code => ({ code, entries: cfg.lookups[code].map(r => ({ source: r.src, target: r.tgt })) })),
-    schemas: cfg.schemas.map(x => ({ code: x.code, description: nn(x.desc), text: x.text }))
+    schemas: cfg.schemas.map(x => ({ code: x.code, description: nn(x.desc), text: x.text })),
+    storages: (cfg.storages || []).map(x => ({ code: x.code, type: x.type, baseDir: nn(x.baseDir), bucket: nn(x.bucket), prefix: nn(x.prefix), region: nn(x.region), endpoint: nn(x.endpoint), pathStyle: !!x.pathStyle,
+      accessKey: nn(x.accessKey), secretKey: nn(x.secretKey), allowedTypes: nn(x.allowedTypes), maxSize: nn(x.maxSize), enabled: x.enabled !== false }))
   };
 }
 
@@ -89,6 +173,7 @@ function datefmt(pattern) {
 function guess(key, rule, lookups) {
   const conv = rule && rule.conv || '';
   if (/^DATE_FORMAT:/.test(conv)) return datefmt(conv.split(/(?<!\\):/)[1] || 'yyyyMMdd');
+  if (/^TO_NUMBER/.test(conv) && /(^id$|Id$|_id$|^(limit|offset|page|size|count)$)/i.test(key)) return /^(limit|size|count)$/i.test(key) ? '10' : '1';
   if (/^(TO_NUMBER|DECIMAL_SCALE)/.test(conv)) return '1500.00';
   if (/^TO_BOOLEAN/.test(conv)) return 'Y';
   if (rule && rule.lookup && lookups[rule.lookup]) { const e = lookups[rule.lookup].find(r => r.src !== '*'); if (e) return e.src; }
@@ -98,20 +183,70 @@ function guess(key, rule, lookups) {
   if (/^ref|ref(no)?$/i.test(key)) return 'REF' + datefmt('yyyyMMdd') + '0001';
   if (/(responsecode|rc)$/i.test(key)) return '00';
   if (/acc(t|ount)?(no|number)?$/i.test(key)) return '1001';
+  if (/(^id$|Id$|_id$)/.test(key)) return '1';
+  if (/^(limit|size|count)$/i.test(key)) return '10';
   return 'sample-' + key;
 }
 /** A context with a value at every path the flow's rules and expressions read. */
 function synthSample(f, lookups) {
   const ctx = { request: { headers: {}, path: {}, query: {}, body: {} }, steps: {} };
-  (f.path.match(/\{([^}]+)\}/g) || []).forEach(v => { const k = v.slice(1, -1); ctx.request.path[k] = guess(k, null, lookups); });
-  f.steps.forEach(s => { ctx.steps[s.name] = { outcome: 'SUCCESS', status: 200, headers: {}, body: {} }; });
+  // a path variable gets the sample its rule expects (e.g. a number when the rule converts it with TO_NUMBER)
+  const allRules = [...f.steps.flatMap(s => s.rules), ...f.response];
+  (f.path.match(/\{([^}]+)\}/g) || []).forEach(v => { const k = v.slice(1, -1); ctx.request.path[k] = guess(k, allRules.find(r => r.source === '$.request.path.' + k) || null, lookups); });
+  f.steps.forEach(s => {
+    if (isStore(s)) { ctx.steps[s.name] = { outcome: 'SUCCESS', headers: {}, body: s.method === 'DELETE' ? { storage: s.target, key: '2026/10/sample.pdf', deleted: true } : { storage: s.target, key: '2026/10/0b6c-sample.pdf', location: 'file:/data/files/2026/10/0b6c-sample.pdf', filename: 'sample.pdf', contentType: 'application/pdf', size: 24680, sha256: fileSample('x').sha256 } }; return; }
+    if (!isSql(s)) { ctx.steps[s.name] = { outcome: 'SUCCESS', status: 200, headers: {}, body: {} }; return; }
+    const row = {}; sqlColumns(s.sql).forEach(c => { row[c] = guess(c, null, lookups); });
+    ctx.steps[s.name] = { outcome: 'SUCCESS', headers: {}, body: { rows: Object.keys(row).length ? [row] : [], rowCount: 1, truncated: false } };
+  });
   const all = [...f.steps.flatMap(s => s.rules), ...f.response];
+  // an uploaded file is an object (filename, contentType, size, sha256), not a leaf value
+  const files = () => all.forEach(r => { const m = /^\$\.request\.files\.([A-Za-z0-9_-]+)/.exec(r.source || ''); if (m) { ctx.request.files = ctx.request.files || {}; ctx.request.files[m[1]] = fileSample(m[1]); } });
   all.forEach(r => { if (r.source) { const t = toks(r.source).filter(x => typeof x === 'string' && x !== '*'); place(ctx, r.source, guess(t[t.length - 1] || 'value', r, lookups)); } });
   f.steps.forEach(s => [s.condition, s.success].forEach(e => (String(e || '').match(/\$\{([^}]+)\}/g) || []).forEach(x => { const p = '$.' + x.slice(2, -1); const t = toks(p); place(ctx, p, guess(String(t[t.length - 1]), null, lookups)); })));
+  files();
   return ctx;
 }
 const resolveEnv = b => String(b).replace(/\$\{([^}:]+)(?::([^}]*))?\}/g, (m, k, d) => (d !== undefined ? d : '<' + k + '>'));
 const pretty = v => JSON.stringify(v, null, 2);
+
+// ---------- syntax highlighting (spans, never innerHTML, so payload text stays text) ----------
+const HL = {
+  sql: [[/--[^\n]*|\/\*[\s\S]*?\*\//, 'com'], [/'(?:[^']|'')*'/, 'str'], [/"(?:[^"]|"")*"/, 'key'], [/::/, 'pun'], [/(?<![\w:]):[A-Za-z_]\w*/, 'par'], [/\b\d+(?:\.\d+)?\b/, 'num'],
+    [/\b(?:INSERT|INTO|VALUES|SELECT|FROM|WHERE|AND|OR|NOT|JOIN|INNER|LEFT|RIGHT|FULL|OUTER|CROSS|ON|AS|IN|IS|NULL|TRUE|FALSE|UPDATE|SET|DELETE|MERGE|USING|MATCHED|ORDER|BY|GROUP|HAVING|WITH|DISTINCT|LIKE|ILIKE|BETWEEN|EXISTS|CASE|WHEN|THEN|ELSE|END|UNION|ALL|ASC|DESC|NULLS|LIMIT|OFFSET|FETCH|FIRST|NEXT|ROWS?|ONLY|RETURNING|CAST)\b/i, 'kw'],
+    [/\b(?:COALESCE|NVL|LOWER|UPPER|TRIM|COUNT|SUM|AVG|MIN|MAX|CONCAT|SUBSTR|SUBSTRING|TO_CHAR|TO_DATE|TO_NUMBER|NOW|CURRENT_TIMESTAMP|CURRENT_DATE|ROUND)\b/i, 'fn'],
+    [/(?<=\b(?:INTO|FROM|JOIN|UPDATE)\s+)[A-Za-z_][\w.]*/, 'tbl']],
+  json: [[/"(?:[^"\\\n]|\\.)*"(?=\s*:)/, 'key'], [/"(?:[^"\\\n]|\\.)*"/, 'str'], [/-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/, 'num'],
+    [/\b(?:true|false|null)\b/, 'kw']],
+  log: [[/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+/m, 'com'], [/\b(?:ERROR|WARN)\b/, 'err'], [/\b(?:INFO|DEBUG|TRACE)\b/, 'kw'],
+    [/\[[^\]\n]{1,40}\]/, 'com'], [/"(?:[^"\\\n]|\\.)*"/, 'str'], [/\b\d{3}\b/, 'num']],
+  // HTTP message: start line and headers, then a JSON (or other) body after the blank line
+  http: [[/^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \S+|^HTTP \d+/m, 'kw'], [/^[A-Za-z0-9-]+(?=: )/m, 'key']]
+};
+const hlRegex = {};
+function tokens(text, lang) {
+  const rules = HL[lang]; if (!rules) return [text];
+  const re = hlRegex[lang] || (hlRegex[lang] = new RegExp(rules.map(r => '(' + r[0].source + ')').join('|'), 'g' + (lang === 'sql' ? 'i' : '') + (lang === 'log' || lang === 'http' ? 'm' : '')));
+  const out = []; let last = 0; re.lastIndex = 0; let m;
+  while ((m = re.exec(text))) {
+    if (m[0] === '') { re.lastIndex++; continue; }
+    if (m.index > last) out.push(text.slice(last, m.index));
+    const g = m.findIndex((x, i) => i > 0 && x !== undefined);
+    out.push(html`<span class=${'t-' + rules[g - 1][1]}>${m[0]}</span>`);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+/** Highlighted children for a <pre>: lang sql | json | log | http (an HTTP message whose body is JSON). */
+const hl = (text, lang) => {
+  if (text == null || text === '') return text;
+  const t = String(text);
+  if (t.length > 200000) return t; // too big to be worth it
+  if (lang === 'http') { const i = t.indexOf('\n\n'); return i < 0 ? tokens(t, 'http') : [...tokens(t.slice(0, i + 2), 'http'), ...tokens(t.slice(i + 2), 'json')]; }
+  if (lang === 'auto') { const s = t.trimStart(); return tokens(t, s.startsWith('{') || s.startsWith('[') ? 'json' : 'plain'); }
+  return tokens(t, lang);
+};
 
 // ---------- JSON schemas ----------
 const SCHEMA_TEMPLATE = pretty({ $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', required: [], properties: {} });
@@ -145,9 +280,10 @@ function flowSql(f, lookupsUsed) {
   out.push('-- ' + (f.name || f.code) + '\nINSERT INTO gw_flow (' + fc.join(', ') + ')\nVALUES (' + fv.join(', ') + ');');
   const steps = [...f.steps].sort((a, b) => a.order - b.order);
   steps.forEach(st => {
-    const c = ['flow_id', 'name', 'step_order', 'target_system', 'http_method', 'path_template'], v = ['id', q(st.name), st.order, q(st.target), q(st.method), q(st.path)];
+    const c = isSql(st) ? ['flow_id', 'name', 'step_order', 'target_system', 'sql_text'] : ['flow_id', 'name', 'step_order', 'target_system', 'http_method', 'path_template'];
+    const v = isSql(st) ? ['id', q(st.name), st.order, q(st.target), q(st.sql)] : ['id', q(st.name), st.order, q(st.target), q(st.method), q(st.path)];
     opt('condition_expr', st.condition, 0, c, v); opt('success_expr', st.success, 0, c, v); if (st.onFailure !== 'STOP') opt('on_failure', st.onFailure, 0, c, v); opt('timeout_ms', st.timeout, 1, c, v);
-    opt('response_schema_code', st.respSchema, 0, c, v); opt('request_handler', st.reqHandler, 0, c, v); opt('response_handler', st.respHandler, 0, c, v); opt('body_codec', st.bodyCodec, 0, c, v); if (!st.enabled) opt('enabled', 'false', 1, c, v);
+    opt('response_schema_code', st.respSchema, 0, c, v); opt('request_handler', st.reqHandler, 0, c, v); opt('response_handler', st.respHandler, 0, c, v); if (!isSql(st)) opt('body_codec', st.bodyCodec, 0, c, v); if (!st.enabled) opt('enabled', 'false', 1, c, v);
     out.push('INSERT INTO gw_flow_step (' + c.join(', ') + ')\nSELECT ' + v.join(', ') + '\nFROM gw_flow WHERE code = ' + q(f.code) + ';');
   });
   const ruleSql = (r, i, st) => {
@@ -250,7 +386,7 @@ class App extends Component {
     super();
     this.state = { token: storage.get(TOKEN_KEY) || '', phase: storage.get(TOKEN_KEY) ? 'loading' : 'login', loginError: '', tokenInput: '',
       screen: 'flows', tab: 'pipeline', cur: 0, sel: { kind: 'flow' }, scope: 'resp', drag: null, over: null, toast: null, copied: false,
-      cfg: null, baseJson: '', version: null, catalog: null, problems: [], samples: {}, preview: null, saving: false, discardArm: false };
+      cfg: null, baseJson: '', version: null, catalog: null, problems: [], samples: {}, preview: null, saving: false, confirm: null };
     this.timers = {};
     this.reqSeq = { validate: 0, preview: 0 };
   }
@@ -258,6 +394,12 @@ class App extends Component {
   componentDidMount() {
     if (this.state.token) this.load();
     document.addEventListener('keydown', e => {
+      if (this.state.confirm) { // modal: Esc cancels, Enter confirms, Tab stays between its two buttons
+        if (e.key === 'Escape') { e.preventDefault(); this.setState({ confirm: null }); }
+        else if (e.key === 'Enter') { e.preventDefault(); if (document.activeElement && document.activeElement.id === 'confirm-cancel') this.setState({ confirm: null }); else this.confirmed(); }
+        else if (e.key === 'Tab') { e.preventDefault(); const next = document.activeElement && document.activeElement.id === 'confirm-ok' ? 'confirm-cancel' : 'confirm-ok'; const el = document.getElementById(next); if (el) el.focus(); }
+        return;
+      }
       const t = e.target; const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
       if (e.key === '/' && !typing && !e.metaKey && !e.ctrlKey) {
         const el = document.getElementById('palette-search');
@@ -342,9 +484,19 @@ class App extends Component {
     } catch (e) { this.setState({ saving: false }); }
   }
 
+  /**
+   * Every delete goes through here: a modal names what goes and runs go() only on confirm. Deletes change the
+   * draft only; nothing reaches the database until Save & reload. View-only: nothing to delete.
+   */
+  ask(title, body, go, ok = 'Delete') {
+    if (this.ro) return;
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    this.setState({ confirm: { title, body, go, ok } }, () => { const el = document.getElementById('confirm-ok'); if (el) el.focus(); });
+  }
+  confirmed() { const c = this.state.confirm; this.setState({ confirm: null }); if (c) c.go(); }
+
   discard() {
-    if (!this.state.discardArm) { this.setState({ discardArm: true }); clearTimeout(this.timers.d); this.timers.d = setTimeout(() => this.setState({ discardArm: false }), 3000); return; }
-    this.setState({ discardArm: false, samples: {} }); this.load();
+    this.ask('Discard unsaved changes?', 'Every change since the last load or save is thrown away and the stored configuration is loaded again.', () => { this.setState({ samples: {} }); this.load(); }, 'Discard changes');
   }
 
   // ---------- state ops ----------
@@ -370,19 +522,32 @@ class App extends Component {
     const yml = (s.catalog.configTargets || []).filter(t => !db.some(d => d.code === t.code)).map(t => ({ code: t.code, base: t.baseUrl || '', headers: (t.headers || []).map(n => ({ n, v: '<application.yml>' })), source: 'yml' }));
     return [...db, ...yml];
   }
-  newStep(f, target, order) {
-    const base = String(target).toLowerCase().split('_')[0] || 'call';
+  newStep(f, target, order, sql, store) {
+    const base = sql ? 'query' : store ? 'store' : String(target).toLowerCase().split('_')[0] || 'call';
     let name = base, i = 2; while (f.steps.some(x => x.name === name)) name = base + (i++);
-    return { id: uid('s'), name, order, target, method: 'GET', path: '/', onFailure: 'STOP', timeout: '', condition: '', success: '', reqHandler: '', respHandler: '', respSchema: '', bodyCodec: '', enabled: true, rules: [] };
+    return { id: uid('s'), name, order, target, method: 'GET', path: '/', onFailure: 'STOP', timeout: '', condition: '', success: '', reqHandler: '', respHandler: '', respSchema: '', bodyCodec: '', enabled: true, rules: [],
+      sql: sql ? 'SELECT *\nFROM my_table\nWHERE id = :id' : null,
+      ...(store ? { method: 'PUT', path: '/{yyyy}/{MM}/{uuid}-{filename}', rules: [ruleIn({ type: 'BODY', target: '$.file', source: '$.request.files.file', required: true })] } : {}) };
   }
   place(d, order, insert) {
     this.mut(f => {
       if (insert) f.steps.forEach(x => { if (x.order >= order) x.order++; });
       let id;
-      if (d.kind === 'call') { const st = this.newStep(f, d.target, order); f.steps.push(st); id = st.id; } else { const st = f.steps.find(x => x.id === d.id); if (st) st.order = order; id = d.id; }
+      if (d.kind === 'call') { const st = this.newStep(f, d.target, order, d.sql, d.store); f.steps.push(st); id = st.id; } else { const st = f.steps.find(x => x.id === d.id); if (st) st.order = order; id = d.id; }
       this.norm(f);
       return { sel: { kind: 'step', id } };
     });
+  }
+
+  /** Database storages (Studio > Storages) plus application.yml ones not overridden; disabled ones are left out. */
+  allStorages() {
+    const s = this.state; const db = (s.cfg.storages || []);
+    const size = v => { const m = /^\s*(\d+)\s*(B|KB|MB|GB)?\s*$/i.exec(v || ''); return m ? +m[1] * ({ B: 1, KB: 1024, MB: 1048576, GB: 1073741824 }[(m[2] || 'B').toUpperCase()]) : 0; };
+    const fromDb = db.filter(x => x.enabled !== false && x.code).map(x => ({ name: x.code, type: x.type === 'S3' ? 's3' : 'local', source: 'db',
+      location: x.type === 'S3' ? 's3://' + resolveEnv(x.bucket || '?') + '/' + resolveEnv(x.prefix || '') : resolveEnv(x.baseDir || '?'),
+      allowedTypes: String(x.allowedTypes || '').split(',').map(v => v.trim()).filter(Boolean), maxSize: size(x.maxSize) }));
+    const yml = ((s.catalog && s.catalog.configStorages) || []).filter(y => !db.some(x => x.code === y.name)).map(y => ({ ...y, source: 'yml' }));
+    return [...fromDb, ...yml];
   }
 
   palette() {
@@ -393,14 +558,16 @@ class App extends Component {
         ...this.schemaCodes().map(sc => ({ label: 'Validate · ' + sc, sub: 'request_schema_code', zone: 'in', apply: f => { f.reqSchema = sc; } })),
         ...cat.messageHandlers.map(h => ({ label: h, sub: 'request_handler', java: true, zone: 'in', apply: f => { f.reqHandler = h; } }))] },
       { cat: 'Downstream call', color: C.call, items: this.allTargets().map(t => ({ label: 'Call ' + t.code, sub: resolveEnv(t.base).replace(/^https?:\/\//, ''), kind: 'call', target: t.code })) },
+      { cat: 'File storage', color: C.file, items: this.allStorages().map(d => ({ label: 'Store file · ' + d.name, sub: d.type + ' · ' + d.location.replace(/^file:/, ''), kind: 'call', target: d.name, store: true })) },
+      { cat: 'Database query', color: C.sql, items: (cat.sqlDatasources || []).map(d => ({ label: 'Query ' + d.name, sub: (d.gatewayDatabase ? 'gateway database' : 'datasource') + (d.readOnly ? ' · read-only' : ''), kind: 'call', target: d.name, sql: true })) },
       { cat: 'Step policy', color: C.step, items: [
         { label: 'Run only if…', sub: 'condition_expr', zone: 'step', apply: (st, f) => { const p = prevName(st, f); st.condition = p ? '${steps.' + p + ".status} == 200" : '${request.body.amount} > 0'; } },
-        { label: 'Success check', sub: 'success_expr', zone: 'step', apply: st => { st.success = '${steps.' + st.name + ".body.responseCode} == '00'"; } },
+        { label: 'Success check', sub: 'success_expr', zone: 'step', apply: st => { st.success = isSql(st) ? '${steps.' + st.name + '.body.rowCount} > 0' : '${steps.' + st.name + ".body.responseCode} == '00'"; } },
         { label: 'Continue on failure', sub: 'on_failure = CONTINUE', zone: 'step', apply: st => { st.onFailure = 'CONTINUE'; } },
         { label: 'Step timeout 3s', sub: 'timeout_ms = 3000', zone: 'step', apply: st => { st.timeout = '3000'; } },
         ...this.schemaCodes().map(sc => ({ label: 'Validate · ' + sc, sub: 'response_schema_code', zone: 'step', apply: st => { st.respSchema = sc; } })),
         ...cat.messageHandlers.map(h => ({ label: h, sub: 'request_handler', java: true, zone: 'step', apply: st => { st.reqHandler = h; } })),
-        ...cat.bodyCodecs.map(h => ({ label: h, sub: 'body_codec', java: true, zone: 'step', apply: st => { st.bodyCodec = h; } }))] },
+        ...cat.bodyCodecs.map(h => ({ label: h, sub: 'body_codec', java: true, zone: 'step', apply: st => { if (!isSql(st)) st.bodyCodec = h; } }))] },
       { cat: 'Client response', color: C.out, items: [
         ...this.schemaCodes().map(sc => ({ label: 'Validate · ' + sc, sub: 'response_schema_code', zone: 'out', apply: f => { f.respSchema = sc; } })),
         { label: 'Respond 201 Created', sub: 'success_status = 201', zone: 'out', apply: f => { f.successStatus = '201'; } },
@@ -450,6 +617,7 @@ class App extends Component {
   // ---------- render ----------
   render(_, s) {
     if (s.phase === 'login' || s.phase === 'error') return this.renderLogin();
+    if (s.cfg && s.catalog) STORE_NAMES = new Set(this.allStorages().map(x => x.name));
     if (s.phase === 'loading' || !s.cfg) return html`<div style="height:100vh;display:grid;place-items:center;color:#6A6D75">Loading configuration…</div>`;
     const f = s.screen === 'flow' ? s.cfg.flows[s.cur] : null;
     return html`
@@ -460,8 +628,10 @@ class App extends Component {
         ${s.screen === 'targets' && this.renderTargets()}
         ${s.screen === 'lookups' && this.renderLookups()}
         ${s.screen === 'schemas' && this.renderSchemas()}
+        ${s.screen === 'storages' && this.renderStorages()}
         ${s.screen === 'audit' && this.renderAudit()}
         ${s.toast && this.renderToast()}
+        ${s.confirm && this.renderConfirm()}
         ${s.catalog.assistantEnabled && s.assistant && s.assistant.open && this.renderAssistant()}
       </div>`;
   }
@@ -486,7 +656,7 @@ class App extends Component {
 
   renderHeader() {
     const s = this.state; const dirty = this.dirty();
-    const nav = [['Flows', 'flows'], ['Target systems', 'targets'], ['Lookups', 'lookups'], ['Schemas', 'schemas'], ['Audit trail', 'audit']].map(([label, k]) => {
+    const nav = [['Flows', 'flows'], ['Target systems', 'targets'], ['Lookups', 'lookups'], ['Schemas', 'schemas'], ['Storages', 'storages'], ['Audit trail', 'audit']].map(([label, k]) => {
       const on = s.screen === k || (k === 'flows' && s.screen === 'flow');
       return html`<button onClick=${() => this.setState({ screen: k }, () => { if (k === 'audit') this.loadAudit(); })} style=${`border:0;background:${on ? '#2B2D33' : 'transparent'};color:${on ? '#FFFFFF' : '#A4A6AC'};padding:6px 11px;border-radius:6px;cursor:pointer;font-weight:500`}>${label}</button>`;
     });
@@ -501,7 +671,7 @@ class App extends Component {
         <div style="flex:1"></div>
         ${this.ro && html`<span title="gateway.studio.mode=view-only: browse only; saving and test runs are disabled" style=${`font:600 11px ${MONO};letter-spacing:.06em;color:#17181C;background:oklch(0.85 0.1 85);padding:4px 9px;border-radius:6px`}>VIEW ONLY</span>`}
         ${dirty && html`<span style=${`font:12px ${MONO};color:oklch(0.8 0.12 75)`}>unsaved changes</span>`}
-        ${dirty && html`<button onClick=${() => this.discard()} style="border:1px solid #3A3C43;background:none;color:#C9CBD1;padding:6px 11px;border-radius:7px;cursor:pointer">${s.discardArm ? 'Click again to discard' : 'Discard'}</button>`}
+        ${dirty && html`<button onClick=${() => this.discard()} style="border:1px solid #3A3C43;background:none;color:#C9CBD1;padding:6px 11px;border-radius:7px;cursor:pointer">Discard</button>`}
         <div style=${`font:12px ${MONO};color:#8E9097`}>${location.host}</div>
         ${s.catalog.assistantEnabled && html`<button onClick=${() => this.toggleAssistant()} title="Ask the project assistant" style=${`display:flex;align-items:center;gap:7px;border:1px solid #3A3C43;background:${s.assistant && s.assistant.open ? '#2B2D33' : 'none'};color:#E9E7E1;padding:6px 11px;border-radius:7px;cursor:pointer;font-weight:500`}><span style=${`font:600 11px ${MONO};color:${C.call}`}>?</span>Ask</button>`}
         <button class="btn-acc ro-hide" disabled=${s.saving} onClick=${() => this.save()} title=${n ? n + ' problem(s): the save would be rejected' : 'Write to the database and reload'} style=${`display:flex;align-items:center;gap:8px;border:0;background:${C.call};color:#17181C;padding:7px 12px;border-radius:7px;cursor:pointer;font-weight:600`}>
@@ -509,6 +679,26 @@ class App extends Component {
           ${n > 0 && html`<span style=${`font:600 10px ${MONO};background:#17181C;color:#fff;border-radius:9px;padding:2px 6px`}>${n}</span>`}
         </button>
       </header>`;
+  }
+
+  renderConfirm() {
+    const c = this.state.confirm;
+    return html`
+      <div onClick=${() => this.setState({ confirm: null })} style="position:fixed;inset:0;z-index:50;background:rgba(23,24,28,.45);display:grid;place-items:center;padding:16px">
+        <div role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" onClick=${e => e.stopPropagation()} style="width:min(420px,100%);background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden">
+          <div style="padding:18px 20px 6px;display:flex;gap:12px;align-items:flex-start">
+            <div style=${`width:30px;height:30px;flex:none;border-radius:8px;background:oklch(0.95 0.04 25);color:${C.err};display:grid;place-items:center;font:700 15px ${MONO}`}>!</div>
+            <div style="min-width:0">
+              <div id="confirm-title" style="font-size:15px;font-weight:600;letter-spacing:-0.01em;word-break:break-word">${c.title}</div>
+              <div style="margin-top:6px;font-size:12.5px;color:#6A6D75;line-height:1.5;word-break:break-word">${c.body}</div>
+            </div>
+          </div>
+          <div style="padding:16px 20px 18px;display:flex;justify-content:flex-end;gap:8px">
+            <button id="confirm-cancel" class="btn-line" onClick=${() => this.setState({ confirm: null })} style="border:1px solid #E4E1D8;background:#fff;border-radius:7px;padding:8px 14px;cursor:pointer;font-weight:500">Cancel</button>
+            <button id="confirm-ok" onClick=${() => this.confirmed()} style=${`border:0;background:${C.err};color:#fff;border-radius:7px;padding:8px 14px;cursor:pointer;font-weight:600`}>${c.ok}</button>
+          </div>
+        </div>
+      </div>`;
   }
 
   renderToast() {
@@ -531,12 +721,12 @@ class App extends Component {
     const s = this.state; const base = s.catalog.apiBasePath;
     const open = i => () => this.setState({ screen: 'flow', tab: 'pipeline', cur: i, sel: { kind: 'flow' }, scope: 'resp', preview: null });
     const newFlow = () => this.mutCfg((cfg, st) => {
-      let k = 1; while (cfg.flows.some(x => x.code === 'NEW_FLOW_' + k)) k++;
+      let k = 1; while (cfg.flows.some(x => x.code === 'NEW_FLOW_' + k || x.path === '/v1/new-' + k)) k++;
       cfg.flows.push({ code: 'NEW_FLOW_' + k, name: 'New flow', method: 'GET', path: '/v1/new-' + k, reqSchema: '', respSchema: '', reqHandler: '', respHandler: '', errorHandler: '', successStatus: '200', timeout: '', audit: 'INHERIT', enabled: true, steps: [], response: [] });
       setTimeout(() => this.setState({ cur: cfg.flows.length - 1, screen: 'flow', tab: 'pipeline', sel: { kind: 'flow' }, scope: 'resp' }), 0);
     });
     const grid = 'display:grid;grid-template-columns:minmax(0,2.4fr) minmax(0,1.4fr) 70px minmax(0,1.5fr) 80px 90px;gap:12px';
-    const other = s.problems.filter(m => !s.cfg.flows.some(f => m.includes(`flow '${f.code}'`)) && !/^(target system|lookup|json schema) '/.test(m));
+    const other = s.problems.filter(m => !s.cfg.flows.some(f => m.includes(`flow '${f.code}'`)) && !/^(target system|lookup|json schema|storage) '/.test(m));
     return html`
       <div style="flex:1;min-height:0;overflow:auto;padding:28px 32px 60px">
         <div style="max-width:1080px;margin:0 auto">
@@ -617,13 +807,13 @@ class App extends Component {
                     <div style="display:flex;gap:6px;align-items:center">
                       <input class="inp" value=${h.n} onInput=${e => { const v = val(e); T(i, x => { x.headers[j].n = v; }); }} placeholder="X-Api-Key" style=${inputStyle(28, 11.5) + ';width:40%'}/>
                       <input class="inp" value=${h.v} onInput=${e => { const v = val(e); T(i, x => { x.headers[j].v = v; }); }} placeholder="\${API_KEY}" style=${inputStyle(28, 11.5) + ';flex:1'}/>
-                      <button class="del" onClick=${() => T(i, x => { x.headers.splice(j, 1); })} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:14px;padding:0 4px">×</button>
+                      <button class="del" onClick=${() => this.ask(`Delete header ${h.n || '(unnamed)'}?`, `Target system ${t.code} stops sending this fixed header (gw_target_system_header). Nothing changes in the database until Save & reload.`, () => T(i, x => { x.headers.splice(j, 1); }))} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:14px;padding:0 4px">×</button>
                     </div>`)}
                   <button class="ro-hide" onClick=${() => T(i, x => { x.headers.push({ n: '', v: '' }); })} style="align-self:flex-start;border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">+ Header</button>
                 </div>
                 ${errList(errs)}
                 <div style="display:flex;justify-content:flex-end">
-                  <button class="del" onClick=${() => this.mutCfg(cfg => { cfg.targets.splice(i, 1); })} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px;padding:2px 0">Delete target</button>
+                  <button class="del" onClick=${() => { const n = s.cfg.flows.reduce((a, fl) => a + fl.steps.filter(x => x.target === t.code).length, 0); this.ask(`Delete target system ${t.code || '(unnamed)'}?`, `Removes it with its ${t.headers.length} fixed header(s).` + (n ? ` ${n} step(s) still call it: the save will be rejected until they point elsewhere (unless application.yml also defines it).` : '') + ` Nothing changes in the database until Save & reload.`, () => this.mutCfg(cfg => { cfg.targets.splice(i, 1); })); }} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px;padding:2px 0">Delete target</button>
                 </div>
               </div>`;
             })}
@@ -710,14 +900,14 @@ class App extends Component {
                       <input class="inp" value=${r.src} onInput=${e => { const v = val(e); upd(code, x => { x[j].src = v; }); }} style=${inputStyle(28, 11.5) + `;border-color:${!r.src || dupe(r.src) ? 'oklch(0.75 0.12 25)' : '#E4E1D8'}`}/>
                       <span style="color:#ADA99E;text-align:center">→</span>
                       <input class="inp" value=${r.tgt} onInput=${e => { const v = val(e); upd(code, x => { x[j].tgt = v; }); }} style=${inputStyle(28, 11.5)}/>
-                      <button class="del" onClick=${() => upd(code, x => { x.splice(j, 1); })} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:14px;padding:0">×</button>
+                      <button class="del" onClick=${() => this.ask(`Delete entry ${r.src || '(empty)'} → ${r.tgt || '(empty)'}?`, `Removes this row from lookup ${code}. Nothing changes in the database until Save & reload.`, () => upd(code, x => { x.splice(j, 1); }))} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:14px;padding:0">×</button>
                     </div>`)}
                 </div>
                 <div style="display:flex;gap:6px">
                   <button class="ro-hide" onClick=${() => upd(code, x => { const star = x.findIndex(r => r.src === '*'); const row = { src: '', tgt: '' }; if (star >= 0) x.splice(star, 0, row); else x.push(row); })} style="border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">+ Row</button>
                   ${!rows.some(r => r.src === '*') && html`<button class="ro-hide" onClick=${() => upd(code, x => { x.push({ src: '*', tgt: 'UNKNOWN' }); })} style="border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">+ Fallback *</button>`}
                   <span style="flex:1"></span>
-                  <button class="del" onClick=${() => this.mutCfg(cfg => { delete cfg.lookups[code]; })} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px">Delete lookup</button>
+                  <button class="del" onClick=${() => this.ask(`Delete lookup ${code}?`, `Removes all ${rows.length} entr${rows.length === 1 ? 'y' : 'ies'}.` + (usedBy(code) ? ` ${usedBy(code)} mapping rule(s) still use it: the save will be rejected until they no longer do.` : '') + ` Nothing changes in the database until Save & reload.`, () => this.mutCfg(cfg => { delete cfg.lookups[code]; }))} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px">Delete lookup</button>
                 </div>
                 ${errList(errs)}
               </div>`;
@@ -772,7 +962,7 @@ class App extends Component {
     const block = (title, text, hint) => html`
       <div style="min-width:0;display:flex;flex-direction:column;gap:4px">
         <div style=${`font:600 10px ${MONO};letter-spacing:.06em;color:#6A6D75;text-transform:uppercase`}>${title}</div>
-        ${text != null ? html`<pre style=${`margin:0;padding:9px 11px;background:#22242A;color:#E9E7E1;border-radius:7px;font:11px/1.5 ${MONO};white-space:pre-wrap;word-break:break-all;max-height:300px;overflow:auto`}>${text}</pre>`
+        ${text != null ? html`<pre class="code-dark" style=${`margin:0;padding:9px 11px;background:#22242A;color:#E9E7E1;border-radius:7px;font:11px/1.5 ${MONO};white-space:pre-wrap;word-break:break-all;max-height:300px;overflow:auto`}>${hl(text, 'auto')}</pre>`
           : html`<div style="font-size:11.5px;color:#9A9CA2;padding:6px 0">${hint || 'No payload.'}</div>`}
       </div>`;
     const noPayload = st.storePayloads === false ? 'Not stored (gateway.audit.store-payloads=false).' : 'No body.';
@@ -878,7 +1068,7 @@ class App extends Component {
 
                 <div style="display:flex;flex-direction:column;gap:6px">
                   <div style="font-weight:600;font-size:13px">Logs</div>
-                  ${d.logs.length ? html`<pre style=${`margin:0;padding:9px 11px;background:#22242A;color:#E9E7E1;border-radius:7px;font:10.5px/1.55 ${MONO};white-space:pre-wrap;word-break:break-all;max-height:320px;overflow:auto`}>${d.logs.map(l => html`<div style=${`color:${/ ERROR /.test(l) ? 'oklch(0.75 0.14 25)' : / WARN /.test(l) ? 'oklch(0.82 0.12 85)' : '#E9E7E1'}`}>${l}</div>`)}</pre>`
+                  ${d.logs.length ? html`<pre class="code-dark" style=${`margin:0;padding:9px 11px;background:#22242A;color:#E9E7E1;border-radius:7px;font:10.5px/1.55 ${MONO};white-space:pre-wrap;word-break:break-all;max-height:320px;overflow:auto`}>${d.logs.map(l => html`<div style=${`color:${/ ERROR /.test(l) ? 'oklch(0.75 0.14 25)' : / WARN /.test(l) ? 'oklch(0.82 0.12 85)' : '#E9E7E1'}`}>${hl(l, 'log')}</div>`)}</pre>`
                     : html`<div style="font-size:11.5px;color:#9A9CA2;line-height:1.45">No log lines kept for this call. Studio keeps recent log lines in memory on this instance only (gateway.studio.log-buffer); for calls from before a restart, or handled by another instance, search the log output for the correlation ID.</div>`}
                 </div>
               </div>`}
@@ -888,6 +1078,96 @@ class App extends Component {
   }
 
   // ---------- JSON schemas ----------
+  // ---------- storages ----------
+  renderStorages() {
+    const s = this.state; const cat = s.catalog;
+    const used = code => s.cfg.flows.reduce((a, x) => a + x.steps.filter(y => y.target === code && !isSql(y)).length, 0);
+    const S = (i, fn) => this.mutCfg(cfg => fn(cfg.storages[i], cfg));
+    const val = e => e.currentTarget.value;
+    const blank = (code, type) => ({ code, type, baseDir: type === 'LOCAL' ? './data/' + code.toLowerCase() : '', bucket: type === 'S3' ? '${' + code + '_BUCKET}' : '', prefix: type === 'S3' ? 'uploads/' : '', region: type === 'S3' ? '${' + code + '_REGION:ap-southeast-1}' : '',
+      endpoint: '', pathStyle: false, accessKey: type === 'S3' ? '${' + code + '_ACCESS_KEY:}' : '', secretKey: type === 'S3' ? '${' + code + '_SECRET_KEY:}' : '', allowedTypes: 'image/*,application/pdf', maxSize: '10MB', enabled: true });
+    const add = type => this.mutCfg(cfg => { cfg.storages = cfg.storages || []; let k = 1; const base = type === 'S3' ? 'S3_STORAGE_' : 'FILES_'; while (cfg.storages.some(x => x.code === base + k)) k++; cfg.storages.push(blank(base + k, type)); });
+    const yml = ((cat.configStorages) || []).filter(y => !(s.cfg.storages || []).some(x => x.code === y.name));
+    const checks = s.storageChecks || {};
+    const check = async (st, i) => {
+      this.setState(x => ({ storageChecks: { ...(x.storageChecks || {}), [i]: { busy: true } } }));
+      try { const r = await this.api('POST', 'storages/check', toApi({ ...s.cfg, storages: [st] }).storages[0]); this.setState(x => ({ storageChecks: { ...(x.storageChecks || {}), [i]: r.json } })); } catch (e) { /* unauthorized */ }
+    };
+    const field = (label, value, onSet, extra = {}) => html`
+      <label style="display:flex;flex-direction:column;gap:5px">
+        ${label10(label)}
+        <input class="inp" value=${value} onInput=${e => onSet(val(e))} placeholder=${extra.placeholder || ''} spellcheck="false" style=${inputStyle()}/>
+        ${extra.resolved !== false && /\$\{/.test(value || '') && html`<span style=${`font:11px ${MONO};color:oklch(0.5 0.12 160);word-break:break-all`}>→ ${extra.secret ? 'from the environment' : resolveEnv(value) || '(empty)'}</span>`}
+        ${extra.secret && value && !/^\$\{/.test(value) && html`<span style="font-size:11px;color:oklch(0.5 0.17 60)">Stored in the database as plain text: prefer ${mono('${ENV_VAR}')}.</span>`}
+        ${extra.hint && html`<span style="font-size:11px;color:#9A9CA2;line-height:1.4">${extra.hint}</span>`}
+      </label>`;
+    const seg = (i, st) => html`<span style="display:flex;border:1px solid #E4E1D8;border-radius:6px;overflow:hidden">${['LOCAL', 'S3'].map(ty => html`<button class=${st.type === ty ? '' : 'ro-hide'} onClick=${() => S(i, x => { if (x.type !== ty) Object.assign(x, blank(x.code, ty), { code: x.code, enabled: x.enabled, allowedTypes: x.allowedTypes, maxSize: x.maxSize }); })} style=${`border:0;padding:4px 10px;cursor:pointer;font:600 11px ${MONO};background:${st.type === ty ? '#17181C' : '#fff'};color:${st.type === ty ? '#fff' : '#6A6D75'}`}>${ty}</button>`)}</span>`;
+    return html`
+      <div style="flex:1;min-height:0;overflow:auto;padding:28px 32px 60px">
+        <div style="max-width:1080px;margin:0 auto">
+          <div style="display:flex;align-items:flex-end;gap:16px">
+            <div style="flex:1">
+              <div style="font-size:22px;font-weight:600;letter-spacing:-0.02em">Storages</div>
+              <div style="margin-top:4px;font-size:12.5px;color:#6A6D75;line-height:1.45">Where file storage steps put uploads: a local directory or an S3 bucket (AWS, or S3-compatible such as MinIO via the endpoint). Rows in ${mono('gw_storage')}; a change takes effect on save, no restart. Use ${mono('${ENV:default}')} for buckets and keys: placeholders resolve on the server, so secrets stay out of the database.</div>
+            </div>
+            <button class="btn-line ro-hide" onClick=${() => add('LOCAL')} style="border:1px solid #E4E1D8;background:#fff;border-radius:7px;padding:9px 14px;cursor:pointer;font-weight:500">+ Local storage</button>
+            <button class="btn-dark ro-hide" onClick=${() => add('S3')} style="border:0;background:#17181C;color:#fff;border-radius:7px;padding:9px 14px;cursor:pointer;font-weight:500">+ S3 storage</button>
+          </div>
+          ${(s.cfg.storages || []).length === 0 && html`<div style="margin-top:20px;padding:22px 16px;background:#fff;border:1px dashed #C9C6BC;border-radius:10px;color:#6A6D75">No storages in the database yet. Add one, or use those of application.yml below.</div>`}
+          <div style="margin-top:20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(420px,100%),1fr));gap:14px">
+            ${(s.cfg.storages || []).map((st, i) => {
+              const errs = s.problems.filter(m => m.includes(`storage '${st.code}'`));
+              const ck = checks[i];
+              return html`
+              <div style=${`background:#fff;border:1px solid ${errs.length ? 'oklch(0.85 0.06 25)' : '#E4E1D8'};border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px`}>
+                <div style="display:flex;align-items:center;gap:10px">
+                  <input class="inp inp-ghost" value=${st.code} onInput=${e => { const v = val(e).toUpperCase().replace(/[^A-Z0-9_]/g, '_'); S(i, (x, cfg) => { cfg.flows.forEach(f2 => f2.steps.forEach(y => { if (y.target === x.code && !isSql(y)) y.target = v; })); x.code = v; }); }} title="Code (steps refer to it as their target)" style=${`flex:1;min-width:0;height:32px;border:1px solid transparent;border-radius:6px;padding:0 8px;margin-left:-8px;font:600 13px ${MONO};background:transparent`}/>
+                  ${seg(i, st)}
+                  <span style=${`font:11px ${MONO};color:#9A9CA2;white-space:nowrap`}>${used(st.code)} steps</span>
+                  ${toggle(st.enabled !== false, () => S(i, x => { x.enabled = x.enabled === false; }), 34, 20)}
+                </div>
+                ${st.type === 'S3' ? html`
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                    ${field('BUCKET', st.bucket, v => S(i, x => { x.bucket = v; }), { placeholder: 'my-bucket or ${S3_BUCKET}' })}
+                    ${field('KEY_PREFIX', st.prefix, v => S(i, x => { x.prefix = v; }), { placeholder: 'uploads/' })}
+                    ${field('REGION', st.region, v => S(i, x => { x.region = v; }), { placeholder: 'ap-southeast-1' })}
+                    ${field('ENDPOINT', st.endpoint, v => S(i, x => { x.endpoint = v; }), { placeholder: 'empty = AWS; http://minio:9000', hint: 'Only for S3-compatible servers.' })}
+                  </div>
+                  <label style="display:flex;align-items:center;gap:8px;font-size:12px">${toggle(!!st.pathStyle, () => S(i, x => { x.pathStyle = !x.pathStyle; }), 30, 18)} Path-style addressing <span style="color:#9A9CA2">(MinIO and most S3-compatible servers)</span></label>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                    ${field('ACCESS_KEY', st.accessKey, v => S(i, x => { x.accessKey = v; }), { placeholder: '${S3_ACCESS_KEY}', secret: true, hint: 'Empty = the default AWS credentials (env, profile, instance role).' })}
+                    ${field('SECRET_KEY', st.secretKey, v => S(i, x => { x.secretKey = v; }), { placeholder: '${S3_SECRET_KEY}', secret: true })}
+                  </div>`
+                : field('BASE_DIR', st.baseDir, v => S(i, x => { x.baseDir = v; }), { placeholder: './data/files or ${FILES_DIR}', hint: 'A directory on the gateway host; created by the first upload.' })}
+                <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">
+                  ${field('ALLOWED_TYPES', st.allowedTypes, v => S(i, x => { x.allowedTypes = v; }), { placeholder: 'empty = any', hint: 'Comma-separated: image/*, application/pdf, text/csv … (else 415)', resolved: false })}
+                  ${field('MAX_SIZE', st.maxSize, v => S(i, x => { x.maxSize = v.toUpperCase().replace(/[^0-9KMGB]/g, ''); }), { placeholder: '10MB', hint: 'Else 413', resolved: false })}
+                </div>
+                ${errs.length > 0 && html`<div style="display:flex;flex-direction:column;gap:4px">${errs.map(m => html`<div style=${`font:11px/1.45 ${MONO};color:oklch(0.5 0.18 25)`}>${m}</div>`)}</div>`}
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:10px;border-top:1px solid #EFEDE6">
+                  <button class="btn-line" disabled=${ck && ck.busy} onClick=${() => check(st, i)} title="Checks the directory or the bucket with these settings (unsaved too); writes nothing" style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:5px 11px;cursor:pointer;font-size:12px">${ck && ck.busy ? 'Checking…' : 'Test connection'}</button>
+                  ${ck && !ck.busy && html`<span style=${`font:11.5px ${MONO};color:${ck.ok ? 'oklch(0.45 0.13 155)' : 'oklch(0.5 0.18 25)'};flex:1;min-width:0;word-break:break-word`}>${ck.ok ? '✓ ' : '✗ '}${ck.message}</span>`}
+                  <span style="flex:1"></span>
+                  <button class="del" onClick=${() => this.ask(`Delete storage ${st.code || '(unnamed)'}?`, (!used(st.code) ? 'No step uses it.' : (cat.configStorages || []).some(y => y.name === st.code) ? `${used(st.code)} step(s) use it; the application.yml storage of the same name takes over.` : `${used(st.code)} step(s) still use it: the save will be rejected until they point elsewhere.`) + ' Stored files are not touched. Nothing changes in the database until Save & reload.', () => this.mutCfg(cfg => { cfg.storages.splice(i, 1); }))} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px">Delete storage</button>
+                </div>
+              </div>`;
+            })}
+          </div>
+          ${yml.length > 0 && html`
+            <div style="margin-top:26px;font:600 10px ${MONO};letter-spacing:.06em;color:#9A9CA2">FROM APPLICATION.YML · gateway.storages · read-only here</div>
+            <div style="margin-top:8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(420px,100%),1fr));gap:14px">
+              ${yml.map(y => html`
+                <div style="background:#FAF9F6;border:1px solid #E4E1D8;border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:6px">
+                  <div style="display:flex;align-items:center;gap:10px"><span style=${`font:600 13px ${MONO};flex:1`}>${y.name}</span><span style=${`font:600 10px ${MONO};color:#fff;background:${C.file};padding:2px 6px;border-radius:4px`}>${y.type.toUpperCase()}</span><span style=${`font:11px ${MONO};color:#9A9CA2`}>${used(y.name)} steps</span></div>
+                  <div style=${`font:11.5px ${MONO};color:#3E4047;word-break:break-all`}>${y.location}</div>
+                  <div style="font-size:11.5px;color:#6A6D75">${y.allowedTypes.length ? 'allows ' + y.allowedTypes.join(', ') : 'any type'}${y.maxSize ? ' · max ' + Math.round(y.maxSize / 1048576 * 10) / 10 + ' MB' : ''}</div>
+                  <div><button class="btn-line ro-hide" onClick=${() => this.mutCfg(cfg => { cfg.storages = cfg.storages || []; cfg.storages.push({ ...blank(y.name, y.type === 's3' ? 'S3' : 'LOCAL'), ...(y.type === 's3' ? {} : { baseDir: y.location.replace(/^file:\/\//, '').replace(/\/$/, '') }), allowedTypes: y.allowedTypes.join(','), maxSize: y.maxSize ? Math.round(y.maxSize / 1048576) + 'MB' : '' }); })} title="Copies it into the database, where it can be edited; the database row then wins" style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px">Override in database</button></div>
+                </div>`)}
+            </div>`}
+        </div>
+      </div>`;
+  }
+
   renderSchemas() {
     const s = this.state;
     const val = e => e.currentTarget.value;
@@ -933,7 +1213,7 @@ class App extends Component {
                   <button class="ro-hide" disabled=${!!parseErr} onClick=${() => upd(i, y => { y.text = pretty(JSON.parse(y.text)); })} style="border:1px solid #E4E1D8;background:#fff;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#3E4047">Format</button>
                   ${!exOpen && html`<button class="ro-hide" onClick=${() => this.setState({ example: { i, text: '' } })} style="border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">Generate from example JSON…</button>`}
                   <span style="flex:1"></span>
-                  <button class="del" onClick=${() => this.mutCfg(cfg => { cfg.schemas.splice(i, 1); })} title=${uses.length ? 'Still used: the save will be rejected until the references are removed' : ''} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px">Delete schema</button>
+                  <button class="del" onClick=${() => this.ask(`Delete schema ${x.code || '(unnamed)'}?`, (uses.length ? `Still used by ${uses.join(', ')}: the save will be rejected until those references are removed.` : 'No flow or step uses it.') + ` Nothing changes in the database until Save & reload.`, () => this.mutCfg(cfg => { cfg.schemas.splice(i, 1); }))} title=${uses.length ? 'Still used: the save will be rejected until the references are removed' : ''} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px">Delete schema</button>
                 </div>
               </div>`;
             })}
@@ -974,7 +1254,7 @@ class App extends Component {
     const select = k => e => { if (e) e.stopPropagation(); this.setState({ sel: k }); };
     const isPal = z => d => d.kind === 'pal' && d.item.zone === z;
     const applyFlow = z => d => { this.mut(fl => { d.item.apply(fl); return { sel: { kind: z } }; }); };
-    const chip = (label, color, clear) => ({ label, color, onRemove: e => { e.stopPropagation(); this.mut(clear); } });
+    const chip = (label, color, clear) => ({ label, color, onRemove: e => { e.stopPropagation(); this.ask(`Remove ${label}?`, 'Takes this policy off the pipeline (its column is cleared). Nothing changes in the database until Save & reload.', () => this.mut(clear), 'Remove'); } });
     const P = this.flowProblems(f);
     // palette search: every word must appear in the label, the column/bean (sub) or the category
     const palQ = s.palQ || '';
@@ -1045,7 +1325,7 @@ class App extends Component {
               <div style=${`display:flex;align-items:center;gap:7px;margin:0 4px 7px;font:600 10px ${MONO};letter-spacing:.08em;text-transform:uppercase;color:#6A6D75`}><span style=${`width:7px;height:7px;border-radius:2px;background:${c.color}`}></span>${c.cat}</div>
               <div style="display:flex;flex-direction:column;gap:4px">
                 ${c.items.map(it => html`
-                  <div class="pal" draggable="true" onDragStart=${this.ds(it.kind === 'call' ? { kind: 'call', target: it.target } : { kind: 'pal', item: it })} onDragEnd=${this.dragEnd} style="display:flex;align-items:center;gap:9px;padding:7px 8px 7px 9px;border:1px solid #E4E1D8;border-radius:7px;background:#FAF9F6;cursor:grab">
+                  <div class="pal" draggable="true" onDragStart=${this.ds(it.kind === 'call' ? { kind: 'call', target: it.target, sql: !!it.sql, store: !!it.store } : { kind: 'pal', item: it })} onDragEnd=${this.dragEnd} style="display:flex;align-items:center;gap:9px;padding:7px 8px 7px 9px;border:1px solid #E4E1D8;border-radius:7px;background:#FAF9F6;cursor:grab">
                     <span style=${`width:8px;height:8px;border-radius:50%;flex:none;border:2px solid ${c.color}`}></span>
                     <div style="flex:1;min-width:0">
                       <div style="font-weight:500">${it.label}</div>
@@ -1071,7 +1351,7 @@ class App extends Component {
               </div>
 
               <div style="display:flex;align-items:flex-start">
-                <div style="width:156px;flex:none;padding:12px 13px;border-radius:9px;background:#17181C;color:#F4F3EF">
+                <div onClick=${select({ kind: 'in' })} title="Method and path" style="width:156px;flex:none;padding:12px 13px;border-radius:9px;background:#17181C;color:#F4F3EF;cursor:pointer">
                   <div style=${`font:600 10px ${MONO};letter-spacing:.08em;color:#8E9097`}>CLIENT REQUEST</div>
                   <div style=${`margin-top:8px;font:600 12px ${MONO};color:oklch(0.75 0.14 50)`}>${f.method}</div>
                   <div style=${`margin-top:2px;font:11.5px/1.4 ${MONO};word-break:break-all`}>${cat.apiBasePath}${f.path}</div>
@@ -1102,16 +1382,16 @@ class App extends Component {
                       ${g.steps.map(x => html`
                         <div draggable="true" onDragStart=${this.ds({ kind: 'move', id: x.st.id })} onDragEnd=${this.dragEnd} onClick=${select({ kind: 'step', id: x.st.id })} ...${zoneProps(x.zone)} style=${card(x.on, 'padding:10px 12px;opacity:' + (x.st.enabled ? 1 : 0.55))}>
                           <div style="display:flex;align-items:center;gap:7px">
-                            <span style=${`font:600 10px ${MONO};color:#fff;background:${MC[x.st.method] || '#555'};padding:2px 5px;border-radius:4px`}>${x.st.method}</span>
+                            <span style=${`font:600 10px ${MONO};color:#fff;background:${isSql(x.st) ? C.sql : isStore(x.st) ? C.file : MC[x.st.method] || '#555'};padding:2px 5px;border-radius:4px`}>${isSql(x.st) ? 'SQL' : isStore(x.st) ? (x.st.method === 'DELETE' ? 'DELETE FILE' : 'STORE FILE') : x.st.method}</span>
                             <span style="font-weight:600;font-size:13.5px">${x.st.name}</span>
                             <span style="flex:1"></span>
                             ${!x.st.enabled && html`<span style=${`font:10px ${MONO};color:#9A9CA2`}>disabled</span>`}
                             ${x.problem && html`<span style=${`width:16px;height:16px;border-radius:50%;background:${C.err};color:#fff;display:grid;place-items:center;font:700 10px ${MONO}`}>!</span>`}
                           </div>
-                          <div style=${`margin-top:6px;font:11px/1.4 ${MONO};color:#6A6D75;word-break:break-all`}><span style="color:#17181C">${x.st.target}</span> ${x.st.path}</div>
+                          <div style=${`margin-top:6px;font:11px/1.4 ${MONO};color:#6A6D75;word-break:break-all`}><span style="color:#17181C">${x.st.target}</span> ${isSql(x.st) ? html`<span class="code-light" style="display:block;margin-top:3px;max-height:44px;overflow:hidden;word-break:normal;overflow-wrap:anywhere">${hl(x.st.sql.replace(/\s+/g, ' ').slice(0, 140), 'sql')}</span>` : x.st.path}</div>
                           ${x.chips.length > 0 && html`<div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">${x.chips.map(chipView)}</div>`}
                           <div style=${`margin-top:9px;padding-top:8px;border-top:1px solid #EFEDE6;display:flex;justify-content:space-between;font:10.5px ${MONO};color:#9A9CA2`}>
-                            <span>${x.st.rules.length} request rule${x.st.rules.length === 1 ? '' : 's'}</span><span style=${`color:${x.st.onFailure === 'CONTINUE' ? C.out : '#9A9CA2'}`}>${x.st.onFailure}</span>
+                            <span>${isStore(x.st) && fileField(x.st) ? 'file ← ' + fileField(x.st) + ' · ' : ''}${x.st.rules.length} ${isSql(x.st) ? 'parameter' : 'request'} rule${x.st.rules.length === 1 ? '' : 's'}</span><span style=${`color:${x.st.onFailure === 'CONTINUE' ? C.out : '#9A9CA2'}`}>${x.st.onFailure}</span>
                           </div>
                           ${zoneOverlay(x.zone, C.step, 'attach to ' + x.st.name)}
                         </div>`)}
@@ -1127,7 +1407,7 @@ class App extends Component {
                   </div>`}
                 ${f.steps.length === 0 && !endGap.active && html`
                   <div style="display:flex;align-items:flex-start">
-                    <div style="width:200px;padding:18px 14px;border:1.5px dashed #C9C6BC;border-radius:9px;text-align:center;font-size:12px;line-height:1.45;color:#6A6D75">Drag a <b>Call</b> from the palette to add the first downstream step</div>
+                    <div style="width:200px;padding:18px 14px;border:1.5px dashed #C9C6BC;border-radius:9px;text-align:center;font-size:12px;line-height:1.45;color:#6A6D75">Drag a <b>Call</b> or a <b>Query</b> from the palette to add the first step</div>
                     ${connector}
                   </div>`}
 
@@ -1184,6 +1464,167 @@ class App extends Component {
       </div>`;
   }
 
+  // ---------- converter editor ----------
+  openConv(r) {
+    const name = convSplit(r.conv)[0].trim().toUpperCase();
+    const cur = this.state.convEdit;
+    if (cur && cur.id === r.id && !r.fromDrop) { this.setState({ convEdit: null }); return; }
+    this.setState({ convEdit: { id: r.id, sample: (CONV[name] || {}).sample || '', result: undefined, error: '' } }, () => this.tryConv(r.conv));
+  }
+  /** Runs the converter on the sample with the server's real converters (debounced). */
+  tryConv(spec) {
+    clearTimeout(this.timers.conv);
+    this.timers.conv = setTimeout(async () => {
+      const ce = this.state.convEdit; if (!ce) return;
+      try {
+        const r = await this.api('POST', 'converters/try', { spec, value: ce.sample });
+        this.setState(st => (st.convEdit && st.convEdit.id === ce.id ? { convEdit: { ...st.convEdit, result: r.json.result, error: r.json.error || '' } } : {}));
+      } catch (e) { /* unauthorized: handled by api() */ }
+    }, 200);
+  }
+  renderConvEditor(r, updRule) {
+    const ce = this.state.convEdit;
+    const parts = convSplit(r.conv); const name = parts[0].trim().toUpperCase(); const meta = CONV[name];
+    const args = parts.slice(1);
+    const setSpec = spec => { updRule(r.id, x => { x.conv = spec; }); this.tryConv(spec); };
+    const setArg = (k, v) => { const a = meta.args.map((_, i) => args[i] ?? ''); a[k] = v; setSpec(convJoin(name, a)); };
+    const setType = n => { const spec = convJoin(n, CONV[n].args.map(x => x.def)); this.setState({ convEdit: { ...ce, sample: CONV[n].sample || ce.sample, result: undefined, error: '' } }, () => setSpec(spec)); };
+    const lbl = t => html`<span style=${`font:600 10px ${MONO};letter-spacing:.05em;color:#6A6D75;text-transform:uppercase`}>${t}</span>`;
+    const inp = (value, onInput, extra = '') => html`<input class="inp" value=${value} onInput=${e => onInput(e.currentTarget.value)} style=${inputStyle(30, 12) + extra}/>`;
+    const quick = (label, v, k) => html`<button type="button" class="btn-line ro-hide" onClick=${() => setArg(k, v)} style=${`border:1px solid ${args[k] === v ? '#17181C' : '#E4E1D8'};background:#fff;border-radius:5px;padding:2px 8px;cursor:pointer;font:11px ${MONO}`}>${label}</button>`;
+    const argField = (a, k) => {
+      const v = args[k] ?? '';
+      if (a.kind === 'int') return inp(v, x => setArg(k, x.replace(/\D/g, '')), ';width:140px');
+      if (a.kind === 'char') return html`<span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${inp(v, x => setArg(k, x.slice(-1)), ';width:56px;text-align:center')}${quick('0', '0', k)}${quick('space', ' ', k)}${quick('*', '*', k)}${quick('-', '-', k)}</span>`;
+      if (a.kind === 'date') return html`<span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        ${inp(v, x => setArg(k, x), ';flex:1;min-width:160px')}
+        <select class="inp ro-hide" value="" onChange=${e => { if (e.currentTarget.value) setArg(k, e.currentTarget.value); }} style=${inputStyle(30, 12) + ';width:auto;padding:0 6px'}>
+          <option value="">Common formats…</option>
+          ${DATE_PRESETS.map(([f, ex]) => html`<option value=${f}>${f}  ·  ${ex}</option>`)}
+        </select></span>`;
+      return inp(v, x => setArg(k, x));
+    };
+    const why = /Unsupported field/.test(ce.error || '') ? ' (the to format asks for something the from format does not have, e.g. a time from a date-only value)'
+      : /could not be parsed/.test(ce.error || '') ? ' (the value does not match the from format exactly)' : '';
+    const res = ce.error ? html`<span style=${`font:12px ${MONO};color:oklch(0.5 0.18 25)`}>${ce.error}${why}</span>`
+      : ce.result === undefined ? html`<span style="font-size:12px;color:#9A9CA2">…</span>`
+      : html`<span class="code-light" style=${`font:600 12px ${MONO};white-space:pre;background:#fff;border:1px solid #EFEDE6;border-radius:4px;padding:2px 6px`}>${hl(JSON.stringify(ce.result), 'json')}</span>`;
+    return html`
+      <div style="margin:2px 0 2px 26px;padding:12px 14px;border:1px solid oklch(0.88 0.05 300);background:oklch(0.985 0.008 300);border-radius:8px;display:flex;flex-direction:column;gap:11px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="font-weight:600;font-size:13px">Converter</span>
+          <select class="inp" value=${meta ? name : ''} onChange=${e => setType(e.currentTarget.value)} style=${inputStyle(30, 12) + ';width:auto;padding:0 6px'}>
+            ${!meta && html`<option value="">${name} (unknown)</option>`}
+            ${Object.keys(CONV).map(k => html`<option value=${k}>${CONV[k].label} · ${k}</option>`)}
+          </select>
+          <span style="flex:1"></span>
+          <button type="button" class="btn-dark" onClick=${() => this.setState({ convEdit: null })} style="border:0;background:#17181C;color:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:12px">Done</button>
+        </div>
+        ${meta && meta.args.map((a, k) => html`<label style="display:flex;flex-direction:column;gap:5px">${lbl(a.label)}${argField(a, k)}</label>`)}
+        ${name === 'DATE_FORMAT' && html`<div style=${`font:11px/1.6 ${MONO};color:#6A6D75;background:#fff;border:1px solid #EFEDE6;border-radius:6px;padding:7px 9px`}>
+          <b>yyyy</b> 2026 · <b>yy</b> 26 · <b>MM</b> 10 · <b>M</b> 10 (no leading 0) · <b>MMM</b> Oct · <b>dd</b> 09 · <b>d</b> 9 · <b>HH</b> 14 (00-23) · <b>hh</b> 02 (01-12) · <b>a</b> PM · <b>mm</b> 30 · <b>ss</b> 05 · <b>SSS</b> 123 · <b>'T'</b> literal text<br/>
+          Case matters: <b>MM</b> is month, <b>mm</b> is minute. The input must match the from format exactly.</div>`}
+        ${meta && meta.hint && html`<div style="font-size:11.5px;color:#6A6D75">${meta.hint}</div>`}
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:9px;border-top:1px solid #EFEDE6">
+          ${lbl('Try it')}
+          <input class="inp ro-ok" value=${ce.sample} onInput=${e => { const v = e.currentTarget.value; this.setState({ convEdit: { ...ce, sample: v } }, () => this.tryConv(r.conv)); }} placeholder="sample value" style=${inputStyle(30, 12) + ';width:200px'}/>
+          <span style="color:#ADA99E">→</span>
+          ${res}
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          ${lbl('Spec')}
+          <input class="inp" value=${r.conv} onInput=${e => setSpec(e.currentTarget.value)} spellcheck="false" style=${inputStyle(28, 11.5) + ';flex:1;min-width:220px'}/>
+          <span style="font-size:11px;color:#9A9CA2">gw_mapping_rule.converter · ':' in an argument is written \\:</span>
+        </label>
+      </div>`;
+  }
+
+  /**
+   * SQL editor with syntax highlighting: a transparent-text textarea under a highlighted <pre> of the same text and
+   * metrics (the pre ignores the mouse, so typing, selection and the caret are the textarea's). Grows with its text.
+   */
+  sqlEditor(value, onChange) {
+    const v = value || '';
+    const lines = v.split('\n').length;
+    const keys = e => {
+      if (e.key !== 'Tab' || e.shiftKey || this.ro) return;
+      e.preventDefault();
+      const ta = e.currentTarget; const a = ta.selectionStart; const b = ta.selectionEnd;
+      const next = ta.value.slice(0, a) + '  ' + ta.value.slice(b);
+      onChange(next);
+      requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = a + 2; });
+    };
+    // grow to the wrapped height of the text (soft-wrapped long lines included)
+    const fit = el => { if (el) requestAnimationFrame(() => { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }); };
+    const box = `margin:0;padding:9px 10px;font:12px/1.6 ${MONO};white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;tab-size:2`;
+    return html`
+      <div class="sqled" style="position:relative;border:1px solid #E4E1D8;border-radius:6px;background:#FAF9F6">
+        <textarea ref=${fit} class="inp" spellcheck="false" autocapitalize="off" autocomplete="off" value=${v} rows=${Math.max(5, lines + 1)} onInput=${e => onChange(e.currentTarget.value)} onKeyDown=${keys}
+          style=${`${box};display:block;width:100%;border:0;border-radius:6px;background:transparent;color:transparent;caret-color:#17181C;resize:none;overflow:hidden`}></textarea>
+        <pre aria-hidden="true" class="code-light" style=${`${box};position:absolute;inset:0;pointer-events:none;color:#2B2D33;overflow:hidden`}>${hl(v, 'sql')}${'\n'}</pre>
+      </div>`;
+  }
+
+  /** The :parameters of a SQL step and the rule that sets each; adds rules for the missing ones, guessing the source. */
+  renderSqlParams(st, f, toMap) {
+    const params = sqlParams(st.sql);
+    const ruleFor = p => st.rules.find(r => r.type === 'BODY' && (r.target === '$.' + p || r.target === p));
+    const missing = params.filter(p => !ruleFor(p));
+    const pathVars = (f.path.match(/\{([^}]+)\}/g) || []).map(x => x.slice(1, -1));
+    const guessSource = p => {
+      const hit = pathVars.find(v => v.toLowerCase() === p.toLowerCase());
+      if (hit) return '$.request.path.' + hit;
+      return (f.method === 'GET' || f.method === 'DELETE' ? '$.request.query.' : '$.request.body.') + p;
+    };
+    const addMissing = () => this.mut(fl => {
+      const s2 = fl.steps.find(x => x.id === st.id);
+      missing.forEach(p => s2.rules.push(ruleIn({ type: 'BODY', target: '$.' + p, source: guessSource(p), converter: numericParam(p) ? 'TO_NUMBER' : null, required: pathVars.some(v => v.toLowerCase() === p.toLowerCase()) })));
+    });
+    return html`
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <span style="display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:500">Parameters<span style=${`font:10.5px ${MONO};color:#9A9CA2;font-weight:400`}>:name ← rule</span></span>
+        ${params.length === 0 && html`<div style="font-size:11.5px;color:#9A9CA2">No :parameters in the SQL.</div>`}
+        ${params.map(p => { const r = ruleFor(p); return html`
+          <div style=${`display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;background:${r ? '#F4F3EF' : 'oklch(0.96 0.03 25)'};font:11.5px ${MONO}`}>
+            <span style=${`color:${C.sql};font-weight:600`}>:${p}</span>
+            <span style="color:#ADA99E">←</span>
+            <span class="hscroll" style=${`flex:1;min-width:0;color:${r ? '#3E4047' : 'oklch(0.5 0.17 25)'}`}>${r ? (r.source || (r.constant ? "'" + r.constant + "'" : r.fh || '?')) + (r.conv ? ' · ' + r.conv : '') + (r.def ? ' · default ' + r.def : '') : 'no rule: the save will be rejected'}</span>
+          </div>`; })}
+        <span style="display:flex;gap:6px;flex-wrap:wrap">
+          ${missing.length > 0 && html`<button type="button" class="btn-line ro-hide" onClick=${addMissing} title="Guesses the source: a path variable of the same name, else the query string (GET / DELETE) or the request body" style="border:1px solid #E4E1D8;background:#fff;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#3E4047">+ Add rule${missing.length > 1 ? 's' : ''} for ${missing.map(p => ':' + p).join(', ')}</button>`}
+          ${params.length > 0 && html`<button type="button" class="btn-line" onClick=${toMap(st.id)} style="border:1px solid #E4E1D8;background:#fff;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#3E4047">Edit sources, converters, defaults →</button>`}
+        </span>
+        <span style="font-size:11px;color:#9A9CA2;line-height:1.4">Path and query values are text: add a TO_NUMBER converter for numeric columns.</span>
+      </div>`;
+  }
+
+  /** The {variables} of a storage step's key: built-in, set by a PATH rule, or missing (with a button to add rules). */
+  renderKeyVars(st, f, toMap) {
+    const builtIns = this.state.catalog.storageKeyVariables || [];
+    const vars = [...new Set((String(st.path || '').match(/\{([^}/]+)\}/g) || []).map(x => x.slice(1, -1)))];
+    const ruleFor = v => st.rules.find(r => r.type === 'PATH' && r.target === v);
+    const missing = vars.filter(v => !ruleFor(v) && !builtIns.includes(v));
+    const pathVars = (f.path.match(/\{([^}]+)\}/g) || []).map(x => x.slice(1, -1));
+    const add = () => this.mut(fl => {
+      const s2 = fl.steps.find(x => x.id === st.id);
+      missing.forEach(v => { const pv = pathVars.find(x => x.toLowerCase() === v.toLowerCase()); s2.rules.push(ruleIn({ type: 'PATH', target: v, source: pv ? '$.request.path.' + pv : (f.method === 'GET' || f.method === 'DELETE' ? '$.request.query.' : '$.request.body.') + v, required: !!pv })); });
+    });
+    if (!vars.length) return null;
+    return html`
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <span style="display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:500">Key variables<span style=${`font:10.5px ${MONO};color:#9A9CA2;font-weight:400`}>{var} ← rule or built-in</span></span>
+        ${vars.map(v => { const r = ruleFor(v); const bi = builtIns.includes(v); return html`
+          <div style=${`display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;background:${r || bi ? '#F4F3EF' : 'oklch(0.96 0.03 25)'};font:11.5px ${MONO}`}>
+            <span style=${`color:${C.file};font-weight:600`}>{${v}}</span><span style="color:#ADA99E">←</span>
+            <span class="hscroll" style=${`flex:1;min-width:0;color:${r || bi ? '#3E4047' : 'oklch(0.5 0.17 25)'}`}>${r ? (r.source || (r.constant ? "'" + r.constant + "'" : '?')) : bi ? 'built in' : 'no rule: the save will be rejected'}</span>
+          </div>`; })}
+        <span style="display:flex;gap:6px;flex-wrap:wrap">
+          ${missing.length > 0 && html`<button type="button" class="btn-line ro-hide" onClick=${add} title="From a path variable of the same name, else the query string (GET / DELETE) or the request body" style="border:1px solid #E4E1D8;background:#fff;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#3E4047">+ Add rule${missing.length > 1 ? 's' : ''} for ${missing.map(v => '{' + v + '}').join(', ')}</button>`}
+          <button type="button" class="btn-line" onClick=${toMap(st.id)} style="border:1px solid #E4E1D8;background:#fff;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#3E4047">Edit rules →</button>
+        </span>
+      </div>`;
+  }
+
   renderInspector(f, toMap) {
     const s = this.state; const cat = s.catalog; const sel = s.sel || {};
     const none = (arr, l = '— none') => [{ v: '', l }, ...arr.map(v => ({ v, l: v }))];
@@ -1192,7 +1633,55 @@ class App extends Component {
     const withCurrent = (opts, v) => (v && !opts.some(o => o.v === v) ? [...opts, { v, l: v + ' (unknown)' }] : opts);
     let insp;
     const st = sel.kind === 'step' ? f.steps.find(x => x.id === sel.id) : null;
-    if (st) {
+    if (st && isSql(st)) {
+      const S2 = fl => fl.steps.find(x => x.id === st.id);
+      const dss = (cat.sqlDatasources || []).map(d => ({ v: d.name, l: d.name + (d.gatewayDatabase ? ' · gateway database' : '') + (d.readOnly ? ' · read-only' : '') }));
+      const ro = (cat.sqlDatasources || []).find(d => d.name === st.target);
+      insp = { kind: 'Database query', color: C.sql, title: st.name, table: 'gw_flow_step.sql_text', fields: [
+        fld('Name', 'name', st.name, 'text', (fl, v) => { S2(fl).name = v; }, { hint: 'Later rules read the rows as $.steps.' + st.name + '.body.rows' }),
+        fld('Datasource', 'target_system', st.target, 'select', (fl, v) => { S2(fl).target = v; }, { options: withCurrent(dss, st.target), hint: ro && ro.readOnly ? 'Read-only: SELECT / WITH only, in a read-only transaction.' : 'gateway.sql.datasources in application.yml' }),
+        fld('SQL', 'sql_text', st.sql, 'sql', (fl, v) => { S2(fl).sql = v; }, { hint: 'One statement. :name is bound from the parameter rules (never pasted into the SQL). Result: {rows, rowCount, truncated} or {updated} for INSERT / UPDATE / DELETE. Tab indents.' }),
+        { kind: 'params', st, f },
+        fld('Order', 'step_order', st.order, 'text', (fl, v) => { const n = parseInt(v, 10); if (n > 0) S2(fl).order = n; }, { hint: 'Same number = run in parallel' }),
+        fld('If it fails', 'on_failure', st.onFailure, 'select', (fl, v) => { S2(fl).onFailure = v; }, { options: [{ v: 'STOP', l: 'STOP · end with error' }, { v: 'CONTINUE', l: 'CONTINUE · record and carry on' }] }),
+        fld('Run only if', 'condition_expr', st.condition, 'area', (fl, v) => { S2(fl).condition = v; }, { placeholder: "${request.query.id} != null" }),
+        fld('Success when', 'success_expr', st.success, 'area', (fl, v) => { S2(fl).success = v; }, { placeholder: '${steps.' + st.name + '.body.rowCount} > 0', hint: 'False → 422 GW-422-BUSINESS (e.g. no row found)' }),
+        fld('Timeout (ms)', 'timeout_ms', st.timeout, 'text', (fl, v) => { S2(fl).timeout = v.replace(/\D/g, ''); }, { hint: 'Query timeout. Empty = ' + cat.defaultStepTimeoutMs }),
+        fld('Response schema', 'response_schema_code', st.respSchema, 'select', (fl, v) => { S2(fl).respSchema = v; }, { options: withCurrent(none(this.schemaCodes()), st.respSchema) }),
+        fld('Request handler', 'request_handler', st.reqHandler, 'select', (fl, v) => { S2(fl).reqHandler = v; }, { options: withCurrent(none(cat.messageHandlers), st.reqHandler), hint: 'Sees the parameters as the body' }),
+        fld('Response handler', 'response_handler', st.respHandler, 'select', (fl, v) => { S2(fl).respHandler = v; }, { options: withCurrent(none(cat.messageHandlers), st.respHandler), hint: 'Sees the result as the body' }),
+        fld('Enabled', 'enabled', String(st.enabled), 'select', (fl, v) => { S2(fl).enabled = v === 'true'; }, { options: [{ v: 'true', l: 'true' }, { v: 'false', l: 'false · skipped with its rules' }] })
+      ], mapping: { label: 'Edit parameter mapping · ' + st.rules.length + ' rules', go: toMap(st.id) },
+        del: { label: 'Delete step', body: `Step ${st.name} (its SQL and ${st.rules.length} parameter rule(s)) is removed; later steps keep their order. Nothing changes in the database until Save & reload.`, go: () => this.mut(fl => { fl.steps = fl.steps.filter(x => x.id !== st.id); this.norm(fl); return { sel: { kind: 'flow' } }; }) } };
+    } else if (st && isStore(st)) {
+      const S2 = fl => fl.steps.find(x => x.id === st.id);
+      const stores = this.allStorages();
+      const sto = stores.find(x => x.name === st.target) || {};
+      const kb = n => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' bytes');
+      const setField = (fl, v) => {
+        const s2 = S2(fl); const field = v.replace(/[^A-Za-z0-9_-]/g, '');
+        const r = s2.rules.find(x => x.type === 'BODY' && x.target === '$.file');
+        if (r) r.source = field ? '$.request.files.' + field : '';
+        else if (field) s2.rules.unshift(ruleIn({ type: 'BODY', target: '$.file', source: '$.request.files.' + field, required: true }));
+      };
+      insp = { kind: 'File storage', color: C.file, title: st.name, table: 'gw_flow_step', fields: [
+        fld('Name', 'name', st.name, 'text', (fl, v) => { S2(fl).name = v; }, { hint: 'Later rules read the result as $.steps.' + st.name + '.body (key, location, filename, contentType, size, sha256)' }),
+        fld('Storage', 'target_system', st.target, 'select', (fl, v) => { S2(fl).target = v; }, { options: withCurrent(stores.map(x => ({ v: x.name, l: x.name + ' · ' + x.type })), st.target),
+          hint: (sto.location || '') + (sto.allowedTypes && sto.allowedTypes.length ? ' · allows ' + sto.allowedTypes.join(', ') : ' · any type') + (sto.maxSize ? ' · max ' + kb(sto.maxSize) : '') + ' (gateway.storages in application.yml)' }),
+        fld('Operation', 'http_method', st.method, 'select', (fl, v) => { S2(fl).method = v; }, { options: [{ v: 'PUT', l: 'PUT · store the uploaded file' }, { v: 'DELETE', l: 'DELETE · delete the file at the key' }] }),
+        ...(st.method !== 'DELETE' ? [fld('Uploaded file (form field)', '$.file ← $.request.files.…', fileField(st), 'text', setField, { hint: 'The multipart field holding the file, e.g. file or document; "body" for a raw upload (Content-Type: application/pdf, image/png, …).' })] : []),
+        fld('Object key', 'path_template', st.path, 'text', (fl, v) => { S2(fl).path = v; }, { hint: 'Starts with /. {var} = a PATH rule, or built in: ' + (cat.storageKeyVariables || []).map(v => '{' + v + '}').join(' ') + '. Values are made safe (no / or ..).' }),
+        { kind: 'keyvars', st, f },
+        fld('Order', 'step_order', st.order, 'text', (fl, v) => { const n = parseInt(v, 10); if (n > 0) S2(fl).order = n; }, { hint: 'Same number = run in parallel' }),
+        fld('If it fails', 'on_failure', st.onFailure, 'select', (fl, v) => { S2(fl).onFailure = v; }, { options: [{ v: 'STOP', l: 'STOP · end with error' }, { v: 'CONTINUE', l: 'CONTINUE · record and carry on' }] }),
+        fld('Run only if', 'condition_expr', st.condition, 'area', (fl, v) => { S2(fl).condition = v; }, { placeholder: '${request.files.file.size} > 0' }),
+        fld('Timeout (ms)', 'timeout_ms', st.timeout, 'text', (fl, v) => { S2(fl).timeout = v.replace(/\D/g, ''); }, { hint: 'Empty = ' + cat.defaultStepTimeoutMs }),
+        fld('Request handler', 'request_handler', st.reqHandler, 'select', (fl, v) => { S2(fl).reqHandler = v; }, { options: withCurrent(none(cat.messageHandlers), st.reqHandler), hint: 'Sees {file, contentType} as the body; the bytes via ctx.file(field)' }),
+        fld('Response handler', 'response_handler', st.respHandler, 'select', (fl, v) => { S2(fl).respHandler = v; }, { options: withCurrent(none(cat.messageHandlers), st.respHandler) }),
+        fld('Enabled', 'enabled', String(st.enabled), 'select', (fl, v) => { S2(fl).enabled = v === 'true'; }, { options: [{ v: 'true', l: 'true' }, { v: 'false', l: 'false · skipped with its rules' }] })
+      ], mapping: { label: 'Edit file & key mapping · ' + st.rules.length + ' rules', go: toMap(st.id) },
+        del: { label: 'Delete step', body: `Step ${st.name} and its ${st.rules.length} rule(s) are removed; stored files are not touched. Nothing changes in the database until Save & reload.`, go: () => this.mut(fl => { fl.steps = fl.steps.filter(x => x.id !== st.id); this.norm(fl); return { sel: { kind: 'flow' } }; }) } };
+    } else if (st) {
       const S2 = fl => fl.steps.find(x => x.id === st.id);
       const targets = this.allTargets().map(t => t.code);
       insp = { kind: 'Downstream step', color: C.call, title: st.name, table: 'gw_flow_step', fields: [
@@ -1211,7 +1700,7 @@ class App extends Component {
         fld('Wire format', 'body_codec', st.bodyCodec, 'select', (fl, v) => { S2(fl).bodyCodec = v; }, { options: withCurrent(none(cat.bodyCodecs, '— target system default'), st.bodyCodec) }),
         fld('Enabled', 'enabled', String(st.enabled), 'select', (fl, v) => { S2(fl).enabled = v === 'true'; }, { options: [{ v: 'true', l: 'true' }, { v: 'false', l: 'false · skipped with its rules' }] })
       ], mapping: { label: 'Edit request mapping · ' + st.rules.length + ' rules', go: toMap(st.id) },
-        del: { label: 'Delete step', go: () => this.mut(fl => { fl.steps = fl.steps.filter(x => x.id !== st.id); this.norm(fl); return { sel: { kind: 'flow' } }; }) } };
+        del: { label: 'Delete step', body: `Step ${st.name} and its ${st.rules.length} request mapping rule(s) are removed; later steps keep their order. Nothing changes in the database until Save & reload.`, go: () => this.mut(fl => { fl.steps = fl.steps.filter(x => x.id !== st.id); this.norm(fl); return { sel: { kind: 'flow' } }; }) } };
     } else if (sel.kind === 'in') {
       insp = { kind: 'Inbound', color: C.in, title: f.method + ' ' + f.path, table: 'gw_flow', fields: [
         fld('Method', 'http_method', f.method, 'select', (fl, v) => { fl.method = v; }, { options: plain(METHODS) }),
@@ -1233,31 +1722,34 @@ class App extends Component {
       insp = { kind: 'Flow', color: C.flow, title: f.code, table: 'gw_flow', fields: [
         fld('Code', 'code', f.code, 'text', (fl, v) => { fl.code = v.toUpperCase().replace(/[^A-Z0-9_]/g, '_'); }, { hint: 'Appears in logs and audit' }),
         fld('Name', 'name', f.name, 'text', (fl, v) => { fl.name = v; }),
+        fld('Method', 'http_method', f.method, 'select', (fl, v) => { fl.method = v; }, { options: plain(METHODS) }),
+        fld('Path', 'path_pattern', f.path, 'text', (fl, v) => { fl.path = v; }, { hint: 'Relative to ' + cat.apiBasePath + '. {name} → $.request.path.name' }),
         fld('Flow timeout (ms)', 'timeout_ms', f.timeout, 'text', (fl, v) => { fl.timeout = v.replace(/\D/g, ''); }, { hint: 'Empty = ' + cat.defaultFlowTimeoutMs + '. Exceeded → 504' }),
         fld('Audit', 'audit_mode', f.audit, 'select', (fl, v) => { fl.audit = v; }, { options: plain(['INHERIT', 'ON', 'OFF']) }),
         fld('Enabled', 'enabled', String(f.enabled), 'select', (fl, v) => { fl.enabled = v === 'true'; }, { options: [{ v: 'true', l: 'true' }, { v: 'false', l: 'false · not routed' }] })
-      ], del: { label: 'Delete flow', go: () => this.mutCfg((cfg, st2) => { cfg.flows.splice(st2.cur, 1); setTimeout(() => this.setState({ screen: 'flows', cur: 0, sel: { kind: 'flow' } }), 0); }) } };
+      ], del: { label: 'Delete flow', body: `${f.method} ${cat.apiBasePath}${f.path} stops being routed. Its ${f.steps.length} step(s) and ${f.response.length + f.steps.reduce((a, x) => a + x.rules.length, 0)} mapping rule(s) are removed too. Nothing changes in the database until Save & reload.`, go: () => this.mutCfg((cfg, st2) => { cfg.flows.splice(st2.cur, 1); setTimeout(() => this.setState({ screen: 'flows', cur: 0, sel: { kind: 'flow' } }), 0); }) } };
     }
     const onSet = fd => e => { const v = e.currentTarget.value; this.mut(fl => fd.onSet(fl, v)); };
     return html`
-      <aside style="width:316px;flex:none;background:#fff;border-left:1px solid #E4E1D8;overflow:auto">
+      <aside style=${`width:${insp.kind === 'Database query' ? 440 : 316}px;max-width:45vw;flex:none;background:#fff;border-left:1px solid #E4E1D8;overflow:auto`}>
         <div style="padding:14px 16px;border-bottom:1px solid #EFEDE6">
           <div style=${`display:flex;align-items:center;gap:7px;font:600 10px ${MONO};letter-spacing:.08em;text-transform:uppercase;color:#6A6D75`}><span style=${`width:7px;height:7px;border-radius:2px;background:${insp.color}`}></span>${insp.kind}</div>
           <div style="margin-top:6px;font-size:17px;font-weight:600;letter-spacing:-0.01em;word-break:break-all">${insp.title}</div>
           <div style=${`margin-top:3px;font:11px ${MONO};color:#9A9CA2`}>${insp.table}</div>
         </div>
         <div style="padding:14px 16px 28px;display:flex;flex-direction:column;gap:13px">
-          ${insp.fields.map(fd => html`
+          ${insp.fields.map(fd => fd.kind === 'params' ? this.renderSqlParams(fd.st, fd.f, toMap) : fd.kind === 'keyvars' ? this.renderKeyVars(fd.st, fd.f, toMap) : html`
             <label style="display:flex;flex-direction:column;gap:5px">
               <span style="display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:500">${fd.label}<span style=${`font:10.5px ${MONO};color:#9A9CA2;font-weight:400`}>${fd.col}</span></span>
               ${fd.kind === 'text' && html`<input class="inp" value=${fd.value} onInput=${onSet(fd)} style=${inputStyle()}/>`}
               ${fd.kind === 'select' && html`<select class="inp" value=${fd.value} onChange=${onSet(fd)} style=${inputStyle() + ';padding:0 6px'}>${fd.options.map(o => html`<option value=${o.v}>${o.l}</option>`)}</select>`}
+              ${fd.kind === 'sql' && this.sqlEditor(fd.value, v => this.mut(fl => fd.onSet(fl, v)))}
               ${fd.kind === 'area' && html`<textarea class="inp" value=${fd.value} onInput=${onSet(fd)} rows="3" placeholder=${fd.placeholder || ''} style=${`border:1px solid #E4E1D8;border-radius:6px;padding:7px 9px;font:11.5px/1.45 ${MONO};background:#FAF9F6;resize:vertical;width:100%`}></textarea>`}
               ${fd.hint && html`<span style="font-size:11px;color:#9A9CA2;line-height:1.4">${fd.hint}</span>`}
               ${fd.actions && html`<span style="display:flex;gap:6px;flex-wrap:wrap">${fd.actions.map(a => html`<button type="button" class=${'btn-line' + (a.label.startsWith('+') ? ' ro-hide' : '')} onClick=${e => { e.preventDefault(); a.go(); }} title=${a.title || ''} style="border:1px solid #E4E1D8;background:#FAF9F6;border-radius:5px;padding:3px 8px;cursor:pointer;font-size:11.5px;color:#3E4047">${a.label}</button>`)}</span>`}
             </label>`)}
           ${insp.mapping && html`<button class="btn-dark" onClick=${insp.mapping.go} style="margin-top:4px;border:1px solid #17181C;background:#17181C;color:#fff;border-radius:7px;padding:9px 12px;cursor:pointer;font-weight:500;display:flex;justify-content:space-between">${insp.mapping.label}<span>→</span></button>`}
-          ${insp.del && html`<button class="btn-del" onClick=${insp.del.go} style="border:1px solid #E4E1D8;background:#fff;color:oklch(0.5 0.17 25);border-radius:7px;padding:8px 12px;cursor:pointer;font-weight:500">${insp.del.label}</button>`}
+          ${insp.del && html`<button class="btn-del" onClick=${() => this.ask(`${insp.del.label} ${insp.title}?`, insp.del.body, insp.del.go)} style="border:1px solid #E4E1D8;background:#fff;color:oklch(0.5 0.17 25);border-radius:7px;padding:8px 12px;cursor:pointer;font-weight:500">${insp.del.label}</button>`}
         </div>
       </aside>`;
   }
@@ -1291,7 +1783,7 @@ class App extends Component {
     const sorted = [...f.steps].sort((a, b) => a.order - b.order);
     const scopes = [...sorted.map(st => ({ id: st.id, label: st.name, sub: st.order + ' ·' })), { id: 'resp', label: 'Client response', sub: '→' }];
     const ruleAccept = d => ['src', 'conv', 'lookup', 'fh'].includes(d.kind);
-    const types = scopeStep ? cat.targetTypes : ['BODY', 'HEADER'];
+    const types = scopeStep ? (isSql(scopeStep) ? ['BODY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes) : ['BODY', 'HEADER'];
 
     const pv = s.preview && s.preview.key === f.code + '/' + (scopeStep ? scopeStep.name : '') ? s.preview : null;
     const resText = (r, i) => {
@@ -1315,8 +1807,27 @@ class App extends Component {
 
     // preview panel
     const out = pv && pv.output;
-    let line, headers = [], body = '', note;
-    if (scopeStep) {
+    let line, headers = [], body = '', note, bodyLang = 'auto';
+    if (scopeStep && isSql(scopeStep)) {
+      line = 'SQL · ' + scopeStep.target;
+      headers = sqlParams(scopeStep.sql).map(p => ({ n: ':' + p, v: out && out.body && out.body[p] !== undefined ? JSON.stringify(out.body[p]) : 'null' + (scopeStep.rules.some(r => r.target === '$.' + p) ? '' : ' · no rule') }));
+      if (scopeStep.reqHandler) headers.push({ n: '…', v: 'plus whatever ' + scopeStep.reqHandler + ' changes' });
+      body = scopeStep.sql; bodyLang = 'sql';
+      note = 'Bound values, built by the server from the parameter rules with the real converters, lookups and field handlers; the query itself is not run here. Each :name is sent as a bind value, never pasted into the SQL.';
+    } else if (scopeStep && isStore(scopeStep)) {
+      const sto = this.allStorages().find(x => x.name === scopeStep.target) || {};
+      const file = out && out.body && out.body.file;
+      const fname = file && typeof file === 'object' ? String(file.filename || '').split(/[\\/]/).pop() : '';
+      const key = scopeStep.path.replace(/\{([^}]+)\}/g, (m, k) => { const dot = fname.lastIndexOf('.'); const known = { filename: fname, name: dot > 0 ? fname.slice(0, dot) : fname, ext: dot > 0 ? fname.slice(dot + 1).toLowerCase() : '' }; return out && out.path[k] !== undefined ? out.path[k] : fname && known[k] !== undefined ? known[k] : '<' + k + '>'; }).replace(/^\/+/, '');
+      line = (scopeStep.method === 'DELETE' ? 'DELETE · ' : 'STORE · ') + scopeStep.target;
+      headers = [{ n: 'key', v: key }, { n: 'location', v: (sto.location || '') + key }];
+      if (scopeStep.method !== 'DELETE') headers.push({ n: 'file', v: file ? (typeof file === 'object' ? (file.filename + ' · ' + file.contentType + ' · ' + file.size + ' bytes') : String(file)) : '(none: add BODY $.file ← $.request.files.<field>)' });
+      if (out && out.body && out.body.contentType) headers.push({ n: 'contentType', v: out.body.contentType });
+      if (sto.allowedTypes && sto.allowedTypes.length) headers.push({ n: 'allowed', v: sto.allowedTypes.join(', ') });
+      if (sto.maxSize) headers.push({ n: 'max size', v: sto.maxSize + ' bytes' });
+      body = out ? pretty(out.body) : ''; bodyLang = 'json';
+      note = 'Built by the server from the rules; <uuid>, <yyyy> … are filled when the request runs. Nothing is stored by the preview.';
+    } else if (scopeStep) {
       const t = this.allTargets().find(x => x.code === scopeStep.target);
       const baseUrl = t ? resolveEnv(t.base) : '<' + scopeStep.target + '?>';
       const path = scopeStep.path.replace(/\{([^}]+)\}/g, (m, k) => (out && out.path[k] !== undefined ? encodeURIComponent(out.path[k]) : m));
@@ -1362,14 +1873,14 @@ class App extends Component {
             ${scopes.map(x => html`<button onClick=${() => this.setState({ scope: x.id, preview: null }, () => this.changed())} style=${`display:flex;align-items:center;gap:7px;border:1px solid ${x.id === scope ? '#17181C' : '#E4E1D8'};background:${x.id === scope ? '#17181C' : '#fff'};color:${x.id === scope ? '#fff' : '#17181C'};border-radius:7px;padding:6px 10px;cursor:pointer;font-weight:500`}><span style=${`font:10.5px ${MONO};opacity:.7`}>${x.sub}</span>${x.label}</button>`)}
           </div>
           <div style="margin-top:20px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
-            <div style="font-size:18px;font-weight:600;letter-spacing:-0.01em">${scopeStep ? 'What ' + scopeStep.name + ' sends' : 'What the client gets'}</div>
-            <div style=${`font:11.5px ${MONO};color:#9A9CA2`}>${scopeStep ? 'STEP_REQUEST · ' + scopeStep.method + ' ' + scopeStep.target + scopeStep.path : 'FLOW_RESPONSE'}</div>
+            <div style="font-size:18px;font-weight:600;letter-spacing:-0.01em">${scopeStep ? (isSql(scopeStep) ? 'Parameters of ' + scopeStep.name : isStore(scopeStep) ? 'What ' + scopeStep.name + (scopeStep.method === 'DELETE' ? ' deletes' : ' stores') : 'What ' + scopeStep.name + ' sends') : 'What the client gets'}</div>
+            <div style=${`font:11.5px ${MONO};color:#9A9CA2`}>${scopeStep ? (isSql(scopeStep) ? 'STEP_REQUEST · SQL · ' + scopeStep.target + ' · ' + (sqlParams(scopeStep.sql).map(p => ':' + p).join(' ') || 'no parameters') : 'STEP_REQUEST · ' + scopeStep.method + ' ' + scopeStep.target + scopeStep.path) : 'FLOW_RESPONSE'}</div>
           </div>
-          <div style="margin-top:4px;font-size:12px;color:#6A6D75;max-width:640px;line-height:1.45">Rules run top to bottom: value → default → lookup → converter → field handler → required check → write. Drop a field on a rule to replace its source, or a converter / lookup / handler to add it.</div>
+          <div style="margin-top:4px;font-size:12px;color:#6A6D75;max-width:640px;line-height:1.45">${scopeStep && isSql(scopeStep) ? html`Each rule sets one SQL parameter: target ${mono('$.id')} is bound to ${mono(':id')}. ` : ''}${scopeStep && isStore(scopeStep) ? html`BODY ${mono('$.file')} ← the upload (${mono('$.request.files.<field>')}), optional BODY ${mono('$.contentType')}; a PATH rule fills a key variable ${mono('{name}')} (built-ins need none: ${(cat.storageKeyVariables || []).join(', ')}). ` : ''}Rules run top to bottom: value → default → lookup → converter → field handler → required check → write. Drop a field on a rule to replace its source, or a converter / lookup / handler to add it.</div>
 
           <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;max-width:880px">
             ${rules.map((r, i) => {
-              const z = this.zone('rule-' + r.id, ruleAccept, d => updRule(r.id, x => { if (d.kind === 'src') { x.source = d.path; x.constant = ''; } if (d.kind === 'conv') x.conv = d.v; if (d.kind === 'lookup') x.lookup = d.v; if (d.kind === 'fh') x.fh = d.v; }));
+              const z = this.zone('rule-' + r.id, ruleAccept, d => (d.kind === 'conv' && !this.ro ? this.openConv({ id: r.id, conv: d.v, fromDrop: true }) : null, updRule(r.id, x => { if (d.kind === 'src') { x.source = d.path; x.constant = ''; } if (d.kind === 'conv') x.conv = d.v; if (d.kind === 'lookup') x.lookup = d.v; if (d.kind === 'fh') x.fh = d.v; })));
               const res = resText(r, i); const set = k => e => { const v = e.currentTarget.value; updRule(r.id, x => { x[k] = v; }); };
               return html`
               <div ...${zoneProps(z)} style="position:relative;background:#fff;border:1px solid #E4E1D8;border-radius:9px;padding:9px 10px;display:flex;flex-direction:column;gap:7px">
@@ -1389,14 +1900,15 @@ class App extends Component {
                 </div>
                 <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-left:26px">
                   ${r.lookup && html`<span style=${`display:flex;align-items:center;gap:4px;padding:2px 3px 2px 7px;border-radius:5px;background:oklch(0.96 0.03 160);font:11px ${MONO};color:oklch(0.38 0.1 160)`}>lookup ${r.lookup}<button onClick=${() => updRule(r.id, x => { x.lookup = ''; })} style="border:0;background:none;color:inherit;cursor:pointer;padding:0 3px">×</button></span>`}
-                  ${r.conv && html`<span style=${`display:flex;flex:0 1 auto;max-width:100%;min-width:0;align-items:center;gap:2px;padding:2px 3px;border-radius:5px;background:oklch(0.95 0.03 300);font:11px ${MONO};color:oklch(0.4 0.13 300)`}><input value=${r.conv} onInput=${set('conv')} style=${`border:0;background:transparent;font:11px ${MONO};color:inherit;flex:0 1 calc(${Math.max(6, r.conv.length)}ch + 12px);width:calc(${Math.max(6, r.conv.length)}ch + 12px);min-width:0;padding:0 4px;outline:none`}/><button onClick=${() => updRule(r.id, x => { x.conv = ''; })} style="border:0;background:none;color:inherit;cursor:pointer;padding:0 3px">×</button></span>`}
+                  ${r.conv && html`<span style=${`display:flex;flex:0 1 auto;max-width:100%;min-width:0;align-items:center;gap:2px;padding:2px 3px;border-radius:5px;background:${s.convEdit && s.convEdit.id === r.id ? 'oklch(0.9 0.06 300)' : 'oklch(0.95 0.03 300)'};font:11px ${MONO};color:oklch(0.4 0.13 300)`}><button class="hscroll" title=${'Edit converter · ' + r.conv} onClick=${() => this.openConv(r)} style=${`border:0;background:transparent;font:11px ${MONO};color:inherit;cursor:pointer;padding:0 4px;max-width:340px`}>${convLabel(r.conv)} ✎</button><button class="ro-hide" onClick=${() => updRule(r.id, x => { x.conv = ''; })} style="border:0;background:none;color:inherit;cursor:pointer;padding:0 3px">×</button></span>`}
                   ${r.fh && html`<span style=${`display:flex;align-items:center;gap:4px;padding:2px 3px 2px 7px;border-radius:5px;background:#F6EDD5;font:11px ${MONO};color:#7A5B12`}>${r.fh}<button onClick=${() => updRule(r.id, x => { x.fh = ''; })} style="border:0;background:none;color:inherit;cursor:pointer;padding:0 3px">×</button></span>`}
                   <input class="inp" value=${r.def} onInput=${set('def')} placeholder="default" style=${`width:104px;height:24px;border:1px solid #EFEDE6;border-radius:5px;padding:0 7px;font:11px ${MONO};background:#FAF9F6`}/>
                   <button onClick=${() => updRule(r.id, x => { x.required = !x.required; })} style=${`height:24px;border:1px solid ${r.required ? '#17181C' : '#E4E1D8'};background:${r.required ? '#17181C' : '#fff'};color:${r.required ? '#fff' : '#9A9CA2'};border-radius:5px;padding:0 8px;font:11px ${MONO};cursor:pointer`}>required</button>
                   <span style="flex:1"></span>
                   <span class="hscroll" title=${res.t} style=${`font:11px ${MONO};color:${res.c};max-width:300px`}>${res.t}</span>
-                  <button class="del" onClick=${() => updRule(r.id, (x, list, idx) => { list.splice(idx, 1); })} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:14px;padding:0 4px">×</button>
+                  <button class="del" onClick=${() => this.ask(`Delete rule ${i + 1}?`, `${r.type} ${r.target || '(no target)'} ← ${r.source || (r.constant ? "'" + r.constant + "'" : '(nothing)')}. Nothing changes in the database until Save & reload.`, () => updRule(r.id, (x, list, idx) => { list.splice(idx, 1); }))} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:14px;padding:0 4px">×</button>
                 </div>
+                ${r.conv && s.convEdit && s.convEdit.id === r.id && this.renderConvEditor(r, updRule)}
                 ${z.active && html`<div style=${`position:absolute;inset:-4px;border:1.5px dashed ${C.in};border-radius:11px;background:oklch(0.56 0.13 255 / 0.04);pointer-events:none`}></div>`}
                 ${z.over && html`<div style="position:absolute;inset:-4px;border-radius:11px;background:oklch(0.56 0.13 255 / 0.1);pointer-events:none"></div>`}
               </div>`;
@@ -1414,14 +1926,14 @@ class App extends Component {
           <div style="margin-top:8px;display:flex;flex-direction:column;gap:2px">
             ${headers.map(h => html`<div style=${`font:11.5px/1.5 ${MONO};word-break:break-all`}><span style="color:#8E9097">${h.n}:</span> ${h.v}</div>`)}
           </div>
-          <pre style=${`margin:14px 0 0;padding:12px;border-radius:7px;background:#22242A;font:11.5px/1.55 ${MONO};white-space:pre-wrap;word-break:break-all;color:#E9E7E1;min-height:40px`}>${body || (pv ? '' : 'running…')}</pre>
+          <pre class="code-dark" style=${`margin:14px 0 0;padding:12px;border-radius:7px;background:#22242A;font:11.5px/1.55 ${MONO};white-space:pre-wrap;word-break:break-all;color:#E9E7E1;min-height:40px`}>${body ? hl(body, bodyLang) : (pv ? '' : 'running…')}</pre>
           ${pvErrs.length > 0 && html`<div style="margin-top:12px;display:flex;flex-direction:column;gap:6px">${pvErrs.map(e => html`<div style=${`font:11px/1.45 ${MONO};color:oklch(0.75 0.14 25)`}>${e}</div>`)}</div>`}
           <div style="margin-top:16px;font-size:11.5px;color:#8E9097;line-height:1.5">${note}</div>
           <details style="margin-top:18px" open=${stored !== undefined}>
             <summary style=${`cursor:pointer;font:600 10px ${MONO};letter-spacing:.08em;color:#8E9097`}>SAMPLE CONTEXT ${stored !== undefined ? '· EDITED' : '· GENERATED'}</summary>
             <div style="margin-top:8px;font-size:11.5px;color:#8E9097;line-height:1.5">${'{request: {headers, path, query, body}, steps: {name: {outcome, status, headers, body}}}'}. Kept in this tab only.</div>
             <textarea class="ro-ok" value=${sampleValue} onInput=${e => { const v = e.currentTarget.value; this.setState(st => ({ samples: { ...st.samples, [f.code]: v } }), () => this.changed()); }} rows="14" spellcheck="false" style=${`margin-top:8px;width:100%;border:1px solid #3A3C43;border-radius:7px;background:#22242A;color:#E9E7E1;padding:10px;font:11px/1.5 ${MONO};resize:vertical`}></textarea>
-            ${stored !== undefined && html`<button onClick=${() => this.setState(st => { const n = { ...st.samples }; delete n[f.code]; return { samples: n }; }, () => this.changed())} style="margin-top:6px;border:1px solid #3A3C43;background:none;color:#C9CBD1;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px">Regenerate from rules</button>`}
+            ${stored !== undefined && html`<button onClick=${() => this.ask('Reset the sample context?', 'Your edits to the sample are thrown away and a generated sample is used again.', () => this.setState(st => { const n = { ...st.samples }; delete n[f.code]; return { samples: n }; }, () => this.changed()), 'Reset')} style="margin-top:6px;border:1px solid #3A3C43;background:none;color:#C9CBD1;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px">Regenerate from rules</button>`}
           </details>
         </aside>
       </div>`;
@@ -1518,7 +2030,7 @@ class App extends Component {
             <div style="font-weight:600">Project assistant</div>
             <div style=${`font:10.5px ${MONO};color:#9A9CA2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis`}>${st ? (st.configured ? st.model + ' · ' + st.baseUrl : 'not configured') : 'connecting…'}</div>
           </div>
-          ${a.messages.length > 0 && html`<button class="btn-line" disabled=${a.streaming} onClick=${() => this.setAssistant(x => { x.messages = []; })} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:4px 9px;cursor:pointer;font-size:12px">New chat</button>`}
+          ${a.messages.length > 0 && html`<button class="btn-line" disabled=${a.streaming} onClick=${() => this.ask('Clear the conversation?', `All ${a.messages.length} message(s) are removed; the assistant starts fresh.`, () => this.setAssistant(x => { x.messages = []; }), 'Clear')} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:4px 9px;cursor:pointer;font-size:12px">New chat</button>`}
           <button class="x" onClick=${() => this.setAssistant(x => { x.open = false; })} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:18px">×</button>
         </div>
         <div id="assistant-log" onClick=${e => this.onAssistantClick(e)} style="flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:12px">
@@ -1604,7 +2116,7 @@ class App extends Component {
     const verdict = r => (r.passed == null ? chip('RECORDED', '#6A6D75', '#EFEDE6') : r.passed ? chip('PASS', 'oklch(0.4 0.12 155)', 'oklch(0.94 0.05 155)') : chip('FAIL', 'oklch(0.45 0.17 25)', 'oklch(0.94 0.04 25)'));
     const btn = (label, onClick, dark, disabled, title) => html`<button class=${dark ? 'btn-dark' : 'btn-line'} disabled=${disabled} title=${title || ''} onClick=${onClick} style=${`border:1px solid ${dark ? '#17181C' : '#E4E1D8'};background:${dark ? '#17181C' : '#fff'};color:${dark ? '#fff' : '#17181C'};border-radius:7px;padding:7px 12px;cursor:pointer;font-weight:500;font-size:12.5px`}>${label}</button>`;
     const http = m => !m ? '(none)' : (m.method ? m.method + ' ' + m.url : 'HTTP ' + m.status) + '\n' + Object.keys(m.headers || {}).map(k => k + ': ' + m.headers[k]).join('\n') + (m.body ? '\n\n' + m.body : '');
-    const pre = txt => html`<pre style=${`margin:6px 0 0;padding:10px 12px;background:#22242A;color:#E9E7E1;border-radius:7px;font:11px/1.5 ${MONO};white-space:pre-wrap;word-break:break-all;max-height:320px;overflow:auto`}>${txt}</pre>`;
+    const pre = (txt, lang = 'http') => html`<pre class="code-dark" style=${`margin:6px 0 0;padding:10px 12px;background:#22242A;color:#E9E7E1;border-radius:7px;font:11px/1.5 ${MONO};white-space:pre-wrap;word-break:break-all;max-height:320px;overflow:auto`}>${hl(txt, lang)}</pre>`;
     const sec = (title, body) => html`<div style="margin-top:12px"><div style=${`font:600 10px ${MONO};letter-spacing:.08em;color:#6A6D75;text-transform:uppercase`}>${title}</div>${body}</div>`;
     const evidence = r => html`
       <div style="padding:4px 14px 14px;border-top:1px solid #EFEDE6">
@@ -1615,9 +2127,9 @@ class App extends Component {
         ${sec('4 · Outgoing response (gateway → client)', pre(http(r.outgoingResponse)))}
         ${sec('5 · Audit trail', !r.audit.enabled || !r.audit.transaction ? html`<div style="margin-top:6px;font-size:12px;color:#6A6D75;line-height:1.45">${r.audit.note}</div>` : html`
           ${r.audit.note && html`<div style="margin-top:6px;font-size:12px;color:#6A6D75">${r.audit.note}</div>`}
-          ${pre(Object.keys(r.audit.transaction).filter(k => !/payload/.test(k)).map(k => k + ' = ' + r.audit.transaction[k]).join('\n'))}
-          ${r.audit.steps.length > 0 && pre(r.audit.steps.map(x => [x.step_name, x.target_system, x.http_method, x.url, x.http_status, x.outcome, x.duration_ms + ' ms'].join('  ·  ')).join('\n'))}`)}
-        ${sec('6 · Logs', r.logs.length ? pre(r.logs.join('\n')) : html`<div style="margin-top:6px;font-size:12px;color:#9A9CA2">No log line carried this correlation ID.</div>`)}
+          ${pre(Object.keys(r.audit.transaction).filter(k => !/payload/.test(k)).map(k => k + ' = ' + r.audit.transaction[k]).join('\n'), 'plain')}
+          ${r.audit.steps.length > 0 && pre(r.audit.steps.map(x => [x.step_name, x.target_system, x.http_method, x.url, x.http_status, x.outcome, x.duration_ms + ' ms'].join('  ·  ')).join('\n'), 'plain')}`)}
+        ${sec('6 · Logs', r.logs.length ? pre(r.logs.join('\n'), 'log') : html`<div style="margin-top:6px;font-size:12px;color:#9A9CA2">No log line carried this correlation ID.</div>`)}
       </div>`;
     const ta = (c, key, label, emptyOk) => {
       const err = jsonErr(c[key], emptyOk);
@@ -1678,7 +2190,7 @@ class App extends Component {
                 ${r && verdict(r)}
                 <button class="btn-line" onClick=${() => upd(c.id, x => { x.open = !x.open; })} style="border:1px solid #E4E1D8;background:#FAF9F6;border-radius:6px;padding:4px 9px;cursor:pointer;font-size:12px">${c.open ? 'Hide request' : 'Edit request'}</button>
                 ${r && html`<button class="btn-line" onClick=${() => this.setTests(f, x => { x.openResult = x.openResult === c.id ? null : c.id; })} style="border:1px solid #E4E1D8;background:#FAF9F6;border-radius:6px;padding:4px 9px;cursor:pointer;font-size:12px">${t.openResult === c.id ? 'Hide evidence' : 'Evidence'}</button>`}
-                <button class="del" onClick=${() => this.setTests(f, x => { x.cases = x.cases.filter(y => y.id !== c.id); })} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:15px;padding:0 4px">×</button>
+                <button class="del" onClick=${() => this.ask(`Delete test case ${c.name || '(unnamed)'}?`, `${c.method} ${s.catalog.apiBasePath}${c.path} is removed from this flow's test list, with its last result.`, () => this.setTests(f, x => { x.cases = x.cases.filter(y => y.id !== c.id); }))} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:15px;padding:0 4px">×</button>
               </div>
               ${c.description && !c.open && html`<div style="padding:0 14px 10px 40px;font-size:12px;color:#6A6D75">${c.description}</div>`}
               ${c.open && html`
@@ -1721,7 +2233,7 @@ class App extends Component {
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             ${counts.map(c => html`<div style="display:flex;align-items:baseline;gap:6px;padding:7px 11px;background:#fff;border:1px solid #E4E1D8;border-radius:7px"><span style=${`font:600 15px ${MONO}`}>${c.n}</span><span style=${`font:11.5px ${MONO};color:#6A6D75`}>${c.t}</span></div>`)}
           </div>
-          <pre style=${`margin:0;padding:18px 20px;background:#fff;border:1px solid #E4E1D8;border-radius:9px;font:12px/1.6 ${MONO};white-space:pre-wrap;color:#2B2D33`}>${sql}</pre>
+          <pre class="code-light" style=${`margin:0;padding:18px 20px;background:#fff;border:1px solid #E4E1D8;border-radius:9px;font:12px/1.6 ${MONO};white-space:pre-wrap;color:#2B2D33`}>${hl(sql, 'sql')}</pre>
         </div>
       </div>`;
   }

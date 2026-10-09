@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        File storages configured in the database (Gateway Studio > Storages). A step whose target_system is a storage
+        code is a file storage step. Enabled rows win over gateway.storages in application.yml (same code).
+        storage_type LOCAL (base_dir) or S3 (bucket, prefix, region, endpoint, path_style, access/secret key).
+        Every text value may contain ${ENV_VAR} placeholders: keep keys out of this table.
+        allowed_types: comma-separated (image/*, application/pdf); max_size: 10MB, 512KB, ... (empty = no own limit).
+    -->
+    <changeSet id="007-gw-storage" author="json-gateway">
+        <createTable tableName="${tbl.storage}">
+            <column name="id" type="bigint" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="${tbl.storage}_PK" nullable="false"/>
+            </column>
+            <column name="code" type="varchar(100)">
+                <constraints nullable="false" unique="true" uniqueConstraintName="${tbl.storage}_UK1"/>
+            </column>
+            <column name="storage_type" type="varchar(10)" defaultValue="LOCAL">
+                <constraints nullable="false"/>
+            </column>
+            <column name="base_dir" type="varchar(1000)"/>
+            <column name="bucket" type="varchar(255)"/>
+            <column name="key_prefix" type="varchar(500)"/>
+            <column name="region" type="varchar(50)"/>
+            <column name="endpoint" type="varchar(500)"/>
+            <column name="path_style" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="access_key" type="varchar(500)"/>
+            <column name="secret_key" type="varchar(500)"/>
+            <column name="allowed_types" type="varchar(1000)"/>
+            <column name="max_size" type="varchar(20)"/>
+            <column name="enabled" type="boolean" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+</databaseChangeLog>

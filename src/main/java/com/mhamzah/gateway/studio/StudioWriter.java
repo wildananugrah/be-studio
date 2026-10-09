@@ -55,7 +55,7 @@ class StudioWriter {
         replaceSchemas(rows.schemas(), schemaDescriptions);
         // children first; the foreign keys cascade, but not every database honours that for bulk deletes
         for (String table : new String[] {t.mappingRule(), t.flowStep(), t.flow(), t.targetSystemHeader(),
-                t.targetSystem(), t.lookupEntry()}) {
+                t.targetSystem(), t.lookupEntry(), t.storage()}) {
             jdbc.sql("DELETE FROM " + db.qualify(table)).update();
         }
 
@@ -67,6 +67,15 @@ class StudioWriter {
                     .params(r.code(), r.baseUrl(), r.connectTimeoutMs(), r.readTimeoutMs(), r.bodyCodec(), r.enabled(),
                             r.tlsMode(), r.tlsTrustStore(), r.tlsTrustStorePassword(), r.tlsKeyStore(),
                             r.tlsKeyStorePassword())
+                    .update();
+        }
+        for (ConfigRows.StorageRow r : rows.storages()) {
+            jdbc.sql("INSERT INTO " + db.qualify(t.storage())
+                            + " (code, storage_type, base_dir, bucket, key_prefix, region, endpoint, path_style,"
+                            + " access_key, secret_key, allowed_types, max_size, enabled)"
+                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                    .params(r.code(), r.storageType(), r.baseDir(), r.bucket(), r.keyPrefix(), r.region(), r.endpoint(),
+                            r.pathStyle(), r.accessKey(), r.secretKey(), r.allowedTypes(), r.maxSize(), r.enabled())
                     .update();
         }
         for (TargetHeaderRow r : rows.targetHeaders()) {
@@ -97,10 +106,12 @@ class StudioWriter {
             stepIds.put(r.id(), insert("INSERT INTO " + db.qualify(t.flowStep())
                             + " (flow_id, name, step_order, target_system, http_method, path_template, condition_expr,"
                             + " success_expr, on_failure, timeout_ms, response_schema_code, request_handler,"
-                            + " response_handler, body_codec, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            + " response_handler, body_codec, enabled, sql_text)"
+                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     flowIds.get(r.flowId()), r.name(), r.stepOrder(), r.targetSystem(), r.httpMethod(),
                     r.pathTemplate(), r.conditionExpr(), r.successExpr(), r.onFailure(), r.timeoutMs(),
-                    r.responseSchemaCode(), r.requestHandler(), r.responseHandler(), r.bodyCodec(), r.enabled()));
+                    r.responseSchemaCode(), r.requestHandler(), r.responseHandler(), r.bodyCodec(), r.enabled(),
+                    r.sqlText()));
         }
         for (RuleRow r : rows.rules()) {
             jdbc.sql("INSERT INTO " + db.qualify(t.mappingRule())

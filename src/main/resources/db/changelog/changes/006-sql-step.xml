@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Database query steps. A step with sql_text runs that one SQL statement instead of an HTTP call:
+        target_system names a datasource of gateway.sql.datasources, :name parameters are bound from the step's
+        request mapping (BODY rules writing $.name), and the rows become $.steps.<name>.body. Such a step has no
+        http_method or path_template, so both become optional.
+    -->
+    <changeSet id="006-gw-flow-step-sql" author="json-gateway">
+        <addColumn tableName="${tbl.flow_step}">
+            <column name="sql_text" type="clob"/>
+        </addColumn>
+        <dropNotNullConstraint tableName="${tbl.flow_step}" columnName="http_method" columnDataType="varchar(10)"/>
+        <dropNotNullConstraint tableName="${tbl.flow_step}" columnName="path_template" columnDataType="varchar(500)"/>
+    </changeSet>
+</databaseChangeLog>

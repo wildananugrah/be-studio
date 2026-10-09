@@ -13,6 +13,8 @@ import com.mhamzah.gateway.invoke.DownstreamClient;
 import com.mhamzah.gateway.invoke.HttpDownstreamClient;
 import com.mhamzah.gateway.mapping.MappingEngine;
 import com.mhamzah.gateway.masking.Masker;
+import com.mhamzah.gateway.sql.SqlDatasources;
+import com.mhamzah.gateway.storage.FileStores;
 import java.time.Duration;
 import javax.sql.DataSource;
 import org.springframework.beans.factory.BeanFactory;
@@ -36,8 +38,21 @@ public class GatewayConfiguration {
         return new Masker(properties.masking().fields(), properties.masking().mask());
     }
 
+    /** Databases of database query steps (gateway.sql.datasources); a blank URL is the gateway's own database. */
+    @Bean(destroyMethod = "close")
+    SqlDatasources sqlDatasources(GatewayProperties properties, DataSource dataSource) {
+        return SqlDatasources.create(properties.sql(), dataSource);
+    }
+
+    /** Where file storage steps put uploads (gateway.storages): local directories and S3 buckets. */
+    @Bean(destroyMethod = "close")
+    FileStores fileStores(GatewayProperties properties) {
+        return FileStores.create(properties.storages());
+    }
+
     @Bean
-    ConfigCompiler configCompiler(BeanFactory beans, GatewayProperties properties, Environment environment) {
+    ConfigCompiler configCompiler(BeanFactory beans, GatewayProperties properties, Environment environment,
+            SqlDatasources sqlDatasources, FileStores fileStores) {
         ConfigCompiler.HandlerLookup lookup = new ConfigCompiler.HandlerLookup() {
             @Override
             public <T> T find(String name, Class<T> type) {
@@ -46,7 +61,8 @@ public class GatewayConfiguration {
         };
         // ${...} in gw_target_system(_header) values resolve from environment variables and application config
         return new ConfigCompiler(lookup, properties.targetSystems(), environment::resolveRequiredPlaceholders,
-                Duration.ofMillis(properties.defaultFlowTimeoutMs()), Duration.ofMillis(properties.defaultStepTimeoutMs()));
+                Duration.ofMillis(properties.defaultFlowTimeoutMs()), Duration.ofMillis(properties.defaultStepTimeoutMs()),
+                sqlDatasources, fileStores);
     }
 
     /** Built-in body codecs, referenced by bean name from gw_target_system.body_codec / gw_flow_step.body_codec. */

@@ -68,7 +68,7 @@ public class FlowExecutor implements AutoCloseable {
         long start = System.nanoTime();
         long deadline = start + flow.timeout().toNanos();
         ExecutionContext ctx = new ExecutionContext(flow.code(), correlationId, registry.lookups(),
-                requestNode(in, match.pathVariables()));
+                requestNode(in, match.pathVariables()), in.files());
         List<StepRecord> records = Collections.synchronizedList(new ArrayList<>());
 
         GatewayResponse response;
@@ -102,7 +102,7 @@ public class FlowExecutor implements AutoCloseable {
     private GatewayResponse run(FlowDefinition flow, InboundRequest in, ExecutionContext ctx, long deadline,
             List<StepRecord> records) {
         ObjectNode request = ctx.request();
-        request.set("body", parseInbound(in.body()));
+        request.set("body", in.form() != null ? in.form() : parseInbound(in.body()));
         if (flow.requestSchema() != null) {
             List<String> errors = flow.requestSchema().validate(request.get("body"));
             if (!errors.isEmpty()) {
@@ -157,7 +157,7 @@ public class FlowExecutor implements AutoCloseable {
                 toRun.add(step);
             } else {
                 ctx.putStepResult(step.name(), F.objectNode().put("outcome", "SKIPPED"));
-                records.add(new StepRecord(step.name(), step.targetSystemName(), step.method().name(), null, null,
+                records.add(new StepRecord(step.name(), step.targetSystemName(), step.methodName(), null, null,
                         "SKIPPED", null, null, null, null));
             }
         }
@@ -207,7 +207,7 @@ public class FlowExecutor implements AutoCloseable {
             } else {
                 f.cancel(true);
                 StepDefinition s = e.getValue();
-                records.add(new StepRecord(s.name(), s.targetSystemName(), s.method().name(), null, null,
+                records.add(new StepRecord(s.name(), s.targetSystemName(), s.methodName(), null, null,
                         cancelledOutcome, null, null, null, null));
             }
         }
@@ -291,6 +291,13 @@ public class FlowExecutor implements AutoCloseable {
         String errorCode = failure == null || response.body() == null ? null
                 : response.body().path("errorCode").asString(null);
         JsonNode requestBody = ctx.request().get("body");
+        if (!in.files().isEmpty()) {
+            // uploads: the form fields plus each file's description (never the content) for the audit trail
+            ObjectNode withFiles = F.objectNode();
+            withFiles.set("body", requestBody == null ? F.objectNode() : requestBody);
+            withFiles.set("files", ctx.request().get("files"));
+            requestBody = withFiles;
+        }
         AuditRecord audit = new AuditRecord(ctx.correlationId(), ctx.flowCode(), in.method().name(), in.path(),
                 finalResponse.status(), failure == null ? null : failure.type().name(), errorCode,
                 requestBody != null ? requestBody : F.stringNode(in.body()), finalResponse.body(), startedAt,
@@ -314,6 +321,8 @@ public class FlowExecutor implements AutoCloseable {
         pathVariables.forEach(path::put);
         ObjectNode query = request.putObject("query");
         in.query().forEach(query::put);
+        ObjectNode files = request.putObject("files");
+        in.files().forEach((field, file) -> files.set(field, file.describe()));
         return request;
     }
 
