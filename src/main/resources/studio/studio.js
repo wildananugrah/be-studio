@@ -45,6 +45,38 @@ function fromApi(c) {
   };
 }
 
+/** JSON schema texts by code (from the draft), so sample data can follow a flow's request schema. */
+let SCHEMA_TEXT = {};
+/** A sample value per field of a JSON schema, placed under {@code base} (e.g. $.request.body); depth-limited. */
+function schemaSample(ctx, schema, base, lookups, depth = 0, root = schema) {
+  if (!schema || typeof schema !== 'object' || depth > 6) return;
+  if (schema.$ref && /^#\/(\$defs|definitions)\//.test(schema.$ref)) { const k = schema.$ref.split('/'); return schemaSample(ctx, (root[k[1]] || {})[k[2]], base, lookups, depth + 1, root); }
+  const type = Array.isArray(schema.type) ? schema.type.find(x => x !== 'null') : schema.type;
+  if (type === 'object' || schema.properties) {
+    Object.entries(schema.properties || {}).forEach(([k, sub]) => schemaSample(ctx, sub, base + (/^[A-Za-z0-9_]+$/.test(k) ? '.' + k : "['" + k + "']"), lookups, depth + 1, root));
+    return;
+  }
+  if (type === 'array') return schemaSample(ctx, schema.items || { type: 'string' }, base + '[*]', lookups, depth + 1, root);
+  const key = (/([A-Za-z0-9_]+)\W*$/.exec(base) || [])[1] || 'value';
+  const ex = Array.isArray(schema.examples) && schema.examples.length ? schema.examples[0] : schema.example !== undefined ? schema.example : schema.default !== undefined ? schema.default
+    : schema.const !== undefined ? schema.const : Array.isArray(schema.enum) && schema.enum.length ? schema.enum[0] : undefined;
+  const v = ex !== undefined ? ex : type === 'integer' ? (/id$/i.test(key) ? 1 : 10) : type === 'number' ? 1500.5 : type === 'boolean' ? true
+    : schema.format === 'date' ? '2026-10-09' : schema.format === 'date-time' ? '2026-10-09T14:30:00Z' : schema.format === 'email' ? 'budi@example.com' : guess(key, null, lookups);
+  place(ctx, '$.' + base.replace(/^\$\./, ''), v);
+}
+
+/** Sections of the CONTEXT tree where a developer can add a field the client sends. */
+const ADDABLE = {
+  '$.request.headers': { what: 'header', placeholder: 'x-customer-id', re: /^[A-Za-z0-9-]+$/, invalid: 'Letters, digits and -.',
+    hint: st => (st && !isSql(st) && !isStore(st) ? 'Forwarded as the same HEADER.' : 'Copied into a field.') },
+  '$.request.path': { what: 'path variable', placeholder: 'customerId', re: /^[A-Za-z][A-Za-z0-9_]*$/, invalid: 'Letters, digits and _.',
+    hint: () => 'Also appended to the flow path as /{name} if it is not there.' },
+  '$.request.query': { what: 'query parameter', placeholder: 'page', re: /^[A-Za-z0-9_.-]+$/, invalid: 'Letters, digits, _ . and -.',
+    hint: st => (st && !isSql(st) && !isStore(st) ? 'Forwarded as the same QUERY parameter.' : 'Copied into a field.') },
+  '$.request.body': { what: 'body field', placeholder: 'customer.name or items[*].sku', re: /^[A-Za-z_][A-Za-z0-9_]*(\[\*\])?(\.[A-Za-z_][A-Za-z0-9_]*(\[\*\])?)*$/, invalid: 'Names with . for nesting and [*] for lists.',
+    hint: () => 'Copied to the same place. A request schema adds its fields here on its own.' }
+};
+
 /** Names of gateway.storages (from the catalog): a step whose target is one of them is a file storage step. */
 let STORE_NAMES = new Set();
 const isStore = s => !isSql(s) && STORE_NAMES.has(s.target);
@@ -179,6 +211,9 @@ function guess(key, rule, lookups) {
   if (rule && rule.lookup && lookups[rule.lookup]) { const e = lookups[rule.lookup].find(r => r.src !== '*'); if (e) return e.src; }
   if (/amount|amt|bal/i.test(key)) return '1500.00';
   if (/date|dt$/i.test(key)) return datefmt('yyyyMMdd');
+  if (/e-?mail/i.test(key)) return 'budi@example.com';
+  if (/phone|mobile|msisdn/i.test(key)) return '081234567890';
+  if (/^user_?name$|login/i.test(key)) return 'budi.santoso';
   if (/name/i.test(key)) return 'BUDI SANTOSO';
   if (/^ref|ref(no)?$/i.test(key)) return 'REF' + datefmt('yyyyMMdd') + '0001';
   if (/(responsecode|rc)$/i.test(key)) return '00';
@@ -199,6 +234,8 @@ function synthSample(f, lookups) {
     const row = {}; sqlColumns(s.sql).forEach(c => { row[c] = guess(c, null, lookups); });
     ctx.steps[s.name] = { outcome: 'SUCCESS', headers: {}, body: { rows: Object.keys(row).length ? [row] : [], rowCount: 1, truncated: false } };
   });
+  // the flow's request schema describes the body: every property is a field to drag
+  if (f.reqSchema && SCHEMA_TEXT[f.reqSchema]) { try { schemaSample(ctx, JSON.parse(SCHEMA_TEXT[f.reqSchema]), '$.request.body', lookups); } catch (e) { /* invalid schema text: shown on Schemas */ } }
   const all = [...f.steps.flatMap(s => s.rules), ...f.response];
   // an uploaded file is an object (filename, contentType, size, sha256), not a leaf value
   const files = () => all.forEach(r => { const m = /^\$\.request\.files\.([A-Za-z0-9_-]+)/.exec(r.source || ''); if (m) { ctx.request.files = ctx.request.files || {}; ctx.request.files[m[1]] = fileSample(m[1]); } });
@@ -618,6 +655,7 @@ class App extends Component {
   render(_, s) {
     if (s.phase === 'login' || s.phase === 'error') return this.renderLogin();
     if (s.cfg && s.catalog) STORE_NAMES = new Set(this.allStorages().map(x => x.name));
+    if (s.cfg) SCHEMA_TEXT = Object.fromEntries(s.cfg.schemas.map(x => [x.code, x.text]));
     if (s.phase === 'loading' || !s.cfg) return html`<div style="height:100vh;display:grid;place-items:center;color:#6A6D75">Loading configuration…</div>`;
     const f = s.screen === 'flow' ? s.cfg.flows[s.cur] : null;
     return html`
@@ -1782,6 +1820,30 @@ class App extends Component {
     }
     const sorted = [...f.steps].sort((a, b) => a.order - b.order);
     const scopes = [...sorted.map(st => ({ id: st.id, label: st.name, sub: st.order + ' ·' })), { id: 'resp', label: 'Client response', sub: '→' }];
+    /** A field the client sends, typed in the CONTEXT tree: a new rule reading it, into the current scope. */
+    const addField = (section, raw) => {
+      const sec = ADDABLE[section]; const name = String(raw || '').trim();
+      if (!sec || !sec.re.test(name)) return;
+      const source = section + '.' + (section === '$.request.headers' ? name.toLowerCase() : name);
+      const leaf = name.replace(/\[\*\]/g, '').split('.').pop();
+      const camel = leaf.replace(/[-_]+([a-zA-Z0-9])/g, (m, c) => c.toUpperCase());
+      this.mut(fl => {
+        let type = 'BODY', target = '$.' + (section === '$.request.body' ? name : camel);
+        const st = scopeStep && fl.steps.find(x => x.id === scopeStep.id);
+        if (st && !isSql(st) && !isStore(st)) {
+          if (section === '$.request.headers') { type = 'HEADER'; target = name; }
+          if (section === '$.request.query') { type = 'QUERY'; target = name; }
+          if (section === '$.request.path') { type = 'PATH'; target = name; }
+        } else if (st && isSql(st)) {
+          target = '$.' + camel;
+        } else if (st && isStore(st) && section === '$.request.path') {
+          type = 'PATH'; target = name;
+        }
+        if (section === '$.request.path' && !new RegExp('\\{' + name + '\\}').test(fl.path)) fl.path = fl.path.replace(/\/+$/, '') + '/{' + name + '}';
+        (st ? st.rules : fl.response).push(ruleIn({ type, target, source, required: section === '$.request.path' }));
+        return { ctxAdd: null, ctxAddName: '' };
+      });
+    };
     const ruleAccept = d => ['src', 'conv', 'lookup', 'fh'].includes(d.kind);
     const types = scopeStep ? (isSql(scopeStep) ? ['BODY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes) : ['BODY', 'HEADER'];
 
@@ -1852,11 +1914,18 @@ class App extends Component {
           <div style=${`margin:0 6px 4px;font:600 10px ${MONO};letter-spacing:.08em;color:#6A6D75`}>CONTEXT</div>
           <div style="margin:0 6px 10px;font-size:11.5px;color:#9A9CA2;line-height:1.4">${scopeStep ? 'Inbound request plus steps with a lower step_order than ' + scopeStep.name + '.' : 'Inbound request plus every step result.'} Drag a field onto a rule.</div>
           <div style="display:flex;flex-direction:column">
-            ${tree.map(n => html`
+            ${tree.map(n => { const sec = ADDABLE[n.path]; return html`
               <div class="ctx" draggable="true" onDragStart=${this.ds({ kind: 'src', path: n.path })} onDragEnd=${this.dragEnd} title=${n.path} style=${`display:flex;align-items:center;gap:8px;padding:4px 6px 4px ${6 + n.depth * 14}px;border-radius:5px;cursor:grab;font:11.5px ${MONO}`}>
                 <span style=${`color:${n.depth === 0 ? '#17181C' : n.sample === '' ? '#3E4047' : 'oklch(0.42 0.12 255)'};font-weight:${n.depth === 0 ? 600 : 400}`}>${n.key}</span>
                 <span class="hscroll" style="flex:1;min-width:0;text-align:right;color:#9A9CA2">${n.sample}</span>
-              </div>`)}
+                ${sec && html`<button class="ro-hide" title=${'Add a ' + sec.what + ' the client sends (creates a rule that reads it)'} onClick=${e => { e.stopPropagation(); this.setState({ ctxAdd: s.ctxAdd === n.path ? null : n.path, ctxAddName: '' }); }} style=${`flex:none;border:1px solid #E4E1D8;background:${s.ctxAdd === n.path ? '#17181C' : '#fff'};color:${s.ctxAdd === n.path ? '#fff' : '#6A6D75'};border-radius:4px;width:18px;height:18px;line-height:14px;padding:0;cursor:pointer;font-size:13px`}>+</button>`}
+              </div>
+              ${sec && s.ctxAdd === n.path && html`
+                <form onSubmit=${e => { e.preventDefault(); addField(n.path, s.ctxAddName); }} style=${`display:flex;flex-direction:column;gap:5px;padding:4px 6px 8px ${20 + n.depth * 14}px`}>
+                  <input class="inp" autofocus value=${s.ctxAddName} onInput=${e => this.setState({ ctxAddName: e.currentTarget.value })} onKeyDown=${e => { if (e.key === 'Escape') this.setState({ ctxAdd: null }); }} placeholder=${sec.placeholder} spellcheck="false" style=${inputStyle(28, 11.5)}/>
+                  <span style="font-size:10.5px;color:#9A9CA2;line-height:1.4">${sec.hint(scopeStep)} Enter adds it, Esc cancels.</span>
+                  ${s.ctxAddName && !sec.re.test(s.ctxAddName.trim()) && html`<span style="font-size:10.5px;color:oklch(0.5 0.18 25)">${sec.invalid}</span>`}
+                </form>`}`; })}
           </div>
           <div style=${`margin:22px 6px 8px;font:600 10px ${MONO};letter-spacing:.08em;color:#6A6D75`}>CONVERTERS</div>
           <div style="display:flex;flex-wrap:wrap;gap:5px;padding:0 6px">${cat.converters.map(v => dragChip(v, { kind: 'conv', v }, 'border:1px solid #E4E1D8;background:#FAF9F6'))}</div>
