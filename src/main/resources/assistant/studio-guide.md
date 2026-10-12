@@ -13,6 +13,7 @@ Gateway Studio is the browser UI of the JSON gateway for configuring flows, targ
 
 - Logo and **Gateway Studio** title.
 - Menu: **Flows**, **Target systems**, **Lookups**, **Schemas**.
+- Every screen has its own address (`#/flows`, `#/flow/<CODE>/pipeline|mapping|tests|rows`, `#/targets`, `#/lookups`, `#/schemas`, `#/storages`, `#/audit`): the browser's **Back** / **Forward** move between screens, and a copied link (or a reload) opens the same screen. The **←** button at the start of a flow's header goes back to the previous Studio screen (to Flows when there is none). Navigating never drops unsaved changes; only closing or reloading the tab asks first.
 - **unsaved changes** (amber) and **Discard** when something was edited. Discard asks for confirmation in a dialog, then reloads from the database.
 - **Every delete asks first**: deleting a flow, step, mapping rule, target system or its header, lookup or lookup entry, schema, test case, removing a policy chip, clearing the assistant conversation and resetting an edited sample all open a confirmation dialog naming what goes (and what still uses it). Enter or the red button confirms; Esc, Cancel or a click outside cancels. Deletes only change the draft until Save & reload.
 - Host of the gateway (e.g. `localhost:8080`).
@@ -28,12 +29,21 @@ Edits are only in the browser until **Save & reload**. Validation runs on the se
 
 ## Flows screen
 
-A table of every flow (`gw_flow`): ENDPOINT (method badge + `/api` + path), CODE and name, STEPS count, ERROR HANDLER, AUDIT mode, ENABLED toggle. A red number next to the endpoint is the count of problems in that flow.
+Flows are grouped by **application** (`gw_application`; a flow's `gw_flow.application_code`). Each application is a card: APP badge, code, name, flow count, description, and buttons **+ Flow** (new flow in this application), **Edit** (code, name, description; renaming moves its flows), **Delete** (only when it has no flows) and **Export** **JSON** / **SQL** / **Liquibase**. Inside, a table of its flows: ENDPOINT (method badge + `/api` + path), CODE and name, STEPS count, ERROR HANDLER, AUDIT mode, ENABLED toggle. A red number next to the endpoint is the count of problems in that flow.
 
-- Click a row to open the flow.
+- Click a row to open the flow. The flow's breadcrumb shows its application; the flow inspector has an **Application** field to move it.
 - The **ENABLED** toggle switches the flow on or off (saved with Save & reload). Disabled flows are not routed.
-- **+ New flow** creates `NEW_FLOW_n` (`GET /v1/new-n`) and opens it.
+- **+ New flow** first asks for the application (pick one or **+ New application…** with code, name, description), then creates `NEW_FLOW_n` (`GET /v1/new-n`) in it and opens it. **+ New application** creates an empty one.
+- **Export** (needs no unsaved changes; it reads the saved configuration) downloads the application's flows, steps and mapping rules plus the shared target systems, lookups, JSON schemas and storages they use: **JSON** (for Import application), **SQL** (a script for this gateway's database type, PostgreSQL or Oracle) or **Liquibase** (a changelog using the `tbl.*` properties; include it from db.changelog-master.xml). Applying the SQL or Liquibase replaces the application and its flows; shared items are only inserted when missing. Plain-text secrets (TLS passwords, storage keys, credential-like headers) are exported as `${NAME}` placeholders: set those environment variables on the target. The file header lists what the target needs but is not exported (handler and codec beans, application.yml target systems / datasources / storages).
+- **Import application…** loads a JSON export as unsaved changes: the application and its flows replace those with the same codes (its other flows are removed), shared items are added when missing and kept when this gateway has them (differences are listed). Review, then Save & reload.
 - Problems that belong to no flow (e.g. a broken schema) are listed under the table.
+
+### Where the CONTEXT fields of a step come from
+
+The Mapping tab's CONTEXT lists what each step's downstream answers (`steps.<name>.body`). Studio fills it from, in order: the step's **Response example** (`gw_flow_step.response_example`), its **Response schema**, and the fields the flow's rules already read. A new step has none of these, so its `body` is empty until you teach Studio:
+- Mapping → CONTEXT → the step's **body** row → **example** → paste what the downstream answers (JSON, or XML / SOAP: decoded with the step's codec, exactly as the response rules will see it) → **Use as example**. Or **Last real response**: the newest audited successful response of that step (needs audit on and `gateway.audit.store-payloads=true`; call the flow first, e.g. Tests tab).
+- Or edit **Response example** in the step inspector, or set a **Response schema** on the step.
+The example is saved with the step (Save & reload), shared, and exported with the application. It is documentation only: it never validates or answers real traffic. The body row then shows **example ✓**.
 
 ## One flow
 
@@ -68,7 +78,9 @@ You can also drag an existing step card to another column to change its order. A
 **Inspector fields:**
 - Flow: Code, Name, Flow timeout (ms) (empty = `gateway.default-flow-timeout-ms`), Audit (INHERIT/ON/OFF), Enabled; **Delete flow**.
 - Inbound: Method, Path (relative to `/api`; `{name}` becomes `$.request.path.name`), Request schema (+ **+ New schema** / **Edit SCHEMA →**), Request handler.
-- Downstream step: Name (later rules read it as `$.steps.<name>`), Target system, Method, Path (appended to the base URL; each `{var}` needs a PATH rule), Order (same number = parallel), If it fails (STOP / CONTINUE), Run only if, Success when, Timeout (ms) (empty = target read timeout), Response schema, Request handler, Response handler, Wire format (body codec), Enabled; **Edit request mapping →**, **Delete step**.
+- Downstream step: Name (later rules read it as `$.steps.<name>`), Target system, Method, Path (appended to the base URL; each `{var}` needs a PATH rule), Order (same number = parallel), **If it succeeds** (Next step / END / FAIL / Go to a later step), **If it fails** (STOP / CONTINUE / END / Go to a later step), Run only if, Success when, Timeout (ms) (empty = target read timeout), Response schema, Request handler, Response handler, Wire format (body codec), Enabled; **Edit request mapping →**, **Delete step**.
+- Branching: a step whose If it succeeds / If it fails goes to another step must have its own Order (no parallel siblings), and can only jump forward. Steps passed over are SKIPPED. The pipeline draws the jumps: green arcs above the cards for success, red dashed arcs below for failure; the card footer shows `✓ target ✗ target`. FAIL (on success) ends the flow with the error that led to this branch, e.g. after a reversal step. Renaming a step updates the routes that point at it; deleting it resets them. Demo: flow TRANSFER_WITH_REVERSAL.
+- Named responses: under the **Client response** card, **+ Response** adds another response (inspector: Name, Status, Description, **Edit response mapping →**, **Delete response**). A step's If it succeeds / If it fails then offers **Respond · <name> · HTTP <status>**: the flow stops and answers with that response's status and its own FLOW_RESPONSE rules (`gw_flow_response`, rules with `response_name`). The pipeline draws an arrow to its card; the Mapping tab has one scope per response ("reversed · 422") with the same live preview. Renaming it updates the routes; deleting it resets them. TRANSFER_WITH_REVERSAL answers its failure path with `reversed` (422).
 - Client response: Success status, Response schema, Response handler; **Edit response mapping →**.
 - On failure: Error handler.
 
@@ -150,7 +162,7 @@ Menu **Audit trail** (also **Audit trail →** in a flow's header, pre-filtered 
 
 ## Common tasks
 
-- **Add a new endpoint**: Flows → + New flow → set Code, Name, Method and Path in the inspector → drag "Call TARGET" onto the pipeline → select the step, set Path and Method → Edit request mapping (drag context fields; a PATH rule for every `{var}`) → Client response → Edit response mapping → Save & reload → Tests tab → Generate → Run.
+- **Add a new endpoint**: Flows → + New flow → choose (or create) its application → set Code, Name, Method and Path in the inspector → drag "Call TARGET" onto the pipeline → select the step, set Path and Method → Edit request mapping (drag context fields; a PATH rule for every `{var}`) → Client response → Edit response mapping → Save & reload → Tests tab → Generate → Run.
 - **Endpoint that reads a database table**: Flows → + New flow → Method GET, Path `/v1/things/{id}` → drag "Query GATEWAY_DB" (or another datasource) onto the pipeline → write the SQL in the inspector (`SELECT id, name FROM my_table WHERE id = :id`) → **+ Add rule for :id** (path variable, TO_NUMBER) → Success when `${steps.query.body.rowCount} > 0` → Client response → map `$.steps.query.body.rows[0].name` etc. → Save & reload. For writes, the datasource needs `read-only: false` in application.yml.
 - **Endpoint that accepts a file upload**: Flows → + New flow → Method POST, Path `/v1/attachments` → drag "Store file · LOCAL_FILES" (or S3_FILES) onto the pipeline → set Uploaded file (form field), e.g. `file`, and the Object key, e.g. `/attachments/{yyyy}/{uuid}-{filename}` → Client response: map `$.fileId ← $.steps.store.body.key`, `$.size ← $.steps.store.body.size` → Save & reload → `curl -F "file=@x.pdf" localhost:8080/api/v1/attachments`.
 - **Call a SOAP service with an exact envelope** (namespaces, prefixes, xsi:type): select the call step on the Pipeline → **Body template** → paste the XML and put `${request.path.accountNo}`, `${request.body.x}`, `${request.headers.x}`, `${steps.a.body.y}`, `${body.z}` (this step's BODY rules, with converters) or `${x:default}` where the values go; values are XML-escaped; the **Placeholders** list shows each value from the sample context and the Mapping tab's live preview shows the filled envelope. Do not try to build namespaces with mapping rules (`$.soapenv:Envelope.@xmlns:q0` is not a valid target path). The response is decoded by the wire format (default soapCodec for an envelope) into JSON for Client response mapping; add a HEADER rule SOAPAction if the service needs it. Empty template = body built from BODY rules as before.

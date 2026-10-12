@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Dev data: TRANSFER_WITH_REVERSAL answers its failure path with a response of its own instead of the
+        debit's error:
+
+          debit ──✓──► notify ──► default response   200 {refNo, notified}
+            └──✗──► reversal ──✓──► response "reversed"  422 {status, reason, reversalRef, correlationId}
+    -->
+    <changeSet id="109-demo-named-response" author="json-gateway" context="dev">
+        <preConditions onFail="MARK_RAN">
+            <sqlCheck expectedResult="1">SELECT COUNT(*) FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL'</sqlCheck>
+        </preConditions>
+        <insert tableName="${tbl.flow_response}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="name" value="reversed"/>
+            <column name="status_code" valueNumeric="422"/>
+            <column name="description" value="The debit was refused and has been reversed"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="response_name" value="reversed"/>
+            <column name="target_path" value="$.status"/><column name="constant_value" value="REVERSED"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="response_name" value="reversed"/>
+            <column name="target_path" value="$.reason"/><column name="source_path" value="$.steps.debit.body.responseMessage"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="3"/>
+            <column name="response_name" value="reversed"/>
+            <column name="target_path" value="$.reversalRef"/><column name="source_path" value="$.steps.reversal.body.reversalRef"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="4"/>
+            <column name="response_name" value="reversed"/>
+            <column name="target_path" value="$.correlationId"/><column name="source_path" value="$.correlationId"/>
+        </insert>
+        <update tableName="${tbl.flow_step}">
+            <column name="next_on_success" value="RESPOND:reversed"/>
+            <where>name = 'reversal' AND flow_id = (SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')</where>
+        </update>
+    </changeSet>
+</databaseChangeLog>

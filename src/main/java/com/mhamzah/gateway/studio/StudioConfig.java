@@ -12,7 +12,12 @@ import java.util.List;
  */
 public record StudioConfig(
         String version, List<Flow> flows, List<Target> targets, List<Lookup> lookups, List<Schema> schemas,
-        List<Storage> storages) {
+        List<Storage> storages, List<Application> applications) {
+
+    public StudioConfig(String version, List<Flow> flows, List<Target> targets, List<Lookup> lookups,
+            List<Schema> schemas, List<Storage> storages) {
+        this(version, flows, targets, lookups, schemas, storages, List.of());
+    }
 
     public StudioConfig(String version, List<Flow> flows, List<Target> targets, List<Lookup> lookups,
             List<Schema> schemas) {
@@ -21,6 +26,7 @@ public record StudioConfig(
 
     public StudioConfig {
         storages = storages == null ? List.of() : List.copyOf(storages);
+        applications = applications == null ? List.of() : List.copyOf(applications);
         flows = flows == null ? List.of() : List.copyOf(flows);
         targets = targets == null ? List.of() : List.copyOf(targets);
         lookups = lookups == null ? List.of() : List.copyOf(lookups);
@@ -28,7 +34,7 @@ public record StudioConfig(
     }
 
     public StudioConfig withVersion(String value) {
-        return new StudioConfig(value, flows, targets, lookups, schemas, storages);
+        return new StudioConfig(value, flows, targets, lookups, schemas, storages, applications);
     }
 
     /**
@@ -58,7 +64,10 @@ public record StudioConfig(
         }
     }
 
-    /** {@code gw_flow} plus its steps and its {@code FLOW_RESPONSE} rules. */
+    /** {@code gw_application}: a named group of flows, exported and imported as a unit. */
+    public record Application(String code, String name, String description) {}
+
+    /** {@code gw_flow} plus its steps and its {@code FLOW_RESPONSE} rules; {@code application} is its group. */
     public record Flow(
             String code,
             String name,
@@ -74,12 +83,40 @@ public record StudioConfig(
             String auditMode,
             Boolean enabled,
             List<Step> steps,
-            List<Rule> response) {
+            List<Rule> response,
+            String application,
+            List<Response> responses) {
+
+        public Flow(String code, String name, String method, String path, String requestSchema, String responseSchema,
+                String requestHandler, String responseHandler, String errorHandler, Integer successStatus,
+                Integer timeoutMs, String auditMode, Boolean enabled, List<Step> steps, List<Rule> response,
+                String application) {
+            this(code, name, method, path, requestSchema, responseSchema, requestHandler, responseHandler, errorHandler,
+                    successStatus, timeoutMs, auditMode, enabled, steps, response, application, List.of());
+        }
+
+        public Flow(String code, String name, String method, String path, String requestSchema, String responseSchema,
+                String requestHandler, String responseHandler, String errorHandler, Integer successStatus,
+                Integer timeoutMs, String auditMode, Boolean enabled, List<Step> steps, List<Rule> response) {
+            this(code, name, method, path, requestSchema, responseSchema, requestHandler, responseHandler, errorHandler,
+                    successStatus, timeoutMs, auditMode, enabled, steps, response, null, List.of());
+        }
 
         public Flow {
             enabled = enabled == null || enabled;
             steps = steps == null ? List.of() : List.copyOf(steps);
             response = response == null ? List.of() : List.copyOf(response);
+            responses = responses == null ? List.of() : List.copyOf(responses);
+        }
+    }
+
+    /**
+     * {@code gw_flow_response} plus its {@code FLOW_RESPONSE} rules: a named client response a branch answers with
+     * ({@code next_on_success / next_on_failure = RESPOND:<name>}); {@code status} null = 200.
+     */
+    public record Response(String name, Integer status, String description, List<Rule> rules) {
+        public Response {
+            rules = rules == null ? List.of() : List.copyOf(rules);
         }
     }
 
@@ -101,7 +138,19 @@ public record StudioConfig(
             Boolean enabled,
             List<Rule> rules,
             String sql,
-            String bodyTemplate) {
+            String bodyTemplate,
+            String nextOnSuccess,
+            String nextOnFailure,
+            String responseExample) {
+
+        public Step(String name, int order, String targetSystem, String method, String path, String condition,
+                String success, String onFailure, Integer timeoutMs, String responseSchema, String requestHandler,
+                String responseHandler, String bodyCodec, Boolean enabled, List<Rule> rules, String sql,
+                String bodyTemplate, String nextOnSuccess, String nextOnFailure) {
+            this(name, order, targetSystem, method, path, condition, success, onFailure, timeoutMs, responseSchema,
+                    requestHandler, responseHandler, bodyCodec, enabled, rules, sql, bodyTemplate, nextOnSuccess,
+                    nextOnFailure, null);
+        }
 
         public Step {
             enabled = enabled == null || enabled;
@@ -114,6 +163,14 @@ public record StudioConfig(
                 String responseHandler, String bodyCodec, Boolean enabled, List<Rule> rules) {
             this(name, order, targetSystem, method, path, condition, success, onFailure, timeoutMs, responseSchema,
                     requestHandler, responseHandler, bodyCodec, enabled, rules, null, null);
+        }
+
+        public Step(String name, int order, String targetSystem, String method, String path, String condition,
+                String success, String onFailure, Integer timeoutMs, String responseSchema, String requestHandler,
+                String responseHandler, String bodyCodec, Boolean enabled, List<Rule> rules, String sql,
+                String bodyTemplate) {
+            this(name, order, targetSystem, method, path, condition, success, onFailure, timeoutMs, responseSchema,
+                    requestHandler, responseHandler, bodyCodec, enabled, rules, sql, bodyTemplate, null, null);
         }
     }
 

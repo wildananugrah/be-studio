@@ -1,7 +1,5 @@
 package com.mhamzah.gateway.studio.audit;
 
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.core.AppenderBase;
@@ -13,7 +11,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
 
 /**
@@ -39,12 +36,8 @@ public class LogBuffer implements DisposableBean {
                 return size() > maxTransactions;
             }
         };
-        if (LoggerFactory.getILoggerFactory() instanceof LoggerContext context) {
-            appender.setContext(context);
-            appender.setName("gateway-studio-log-buffer");
-            appender.start();
-            context.getLogger(Logger.ROOT_LOGGER_NAME).addAppender(appender);
-        }
+        // re-attached after a Logback reset (another context initializing logging), so it keeps collecting
+        com.mhamzah.gateway.logging.RootAppenders.attach(appender, "gateway-studio-log-buffer");
     }
 
     /** The lines logged with this correlation ID, oldest first; empty when none (or already evicted). */
@@ -64,10 +57,7 @@ public class LogBuffer implements DisposableBean {
 
     @Override
     public void destroy() {
-        if (LoggerFactory.getILoggerFactory() instanceof LoggerContext context) {
-            context.getLogger(Logger.ROOT_LOGGER_NAME).detachAppender(appender);
-        }
-        appender.stop();
+        com.mhamzah.gateway.logging.RootAppenders.detach(appender);
     }
 
     private final class Appender extends AppenderBase<ILoggingEvent> {

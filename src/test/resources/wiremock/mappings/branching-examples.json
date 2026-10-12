@@ -1,0 +1,20 @@
+{
+  "mappings": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "/core/reversals"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "responseCode": "00",
+          "reversalRef": "REV-0001"
+        }
+      }
+    }
+  ]
+}

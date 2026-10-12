@@ -25,11 +25,12 @@ public class MappingRuleEntity {
     private String lookupCode;
     private String fieldHandler;
     private boolean required;
+    private String responseName;
 
     protected MappingRuleEntity() {}
 
     public RuleRow toRow() {
         return new RuleRow(id, flowId, stepId, phase, seq, targetType, targetPath, sourcePath, constantValue,
-                defaultValue, converter, lookupCode, fieldHandler, required);
+                defaultValue, converter, lookupCode, fieldHandler, required, responseName);
     }
 }

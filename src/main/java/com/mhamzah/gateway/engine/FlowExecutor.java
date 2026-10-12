@@ -123,8 +123,52 @@ public class FlowExecutor implements AutoCloseable {
             request.set("body", view.body() == null ? F.objectNode() : view.body());
         }
 
+        // next_on_success / next_on_failure: a branching step runs alone in its group and picks what runs next
+        String jumpTo = null;
+        boolean ended = false;
+        FlowDefinition.Response respond = null;
+        GatewayError routedFailure = null;
         for (List<StepDefinition> group : flow.groups()) {
-            runGroup(group, ctx, deadline, records);
+            String target = jumpTo;
+            if (ended || (target != null && group.stream().noneMatch(s -> s.name().equals(target)))) {
+                group.forEach(s -> skip(s, ctx, records)); // not on the path taken
+                continue;
+            }
+            jumpTo = null;
+            StepOutcome branch = runGroup(group, ctx, deadline, records);
+            if (branch == null) {
+                continue;
+            }
+            String route = branch.error() == null ? branch.step().nextOnSuccess() : branch.step().nextOnFailure();
+            if (branch.error() != null && route != null) {
+                routedFailure = branch.error();
+            }
+            if (route == null) {
+                continue;
+            }
+            switch (route) {
+                case StepDefinition.END -> ended = true;
+                case StepDefinition.FAIL -> throw routedFailure != null ? routedFailure
+                        : GatewayError.of(ErrorType.DOWNSTREAM_BUSINESS_ERROR).step(branch.step().name())
+                                .message("Flow ended on the failure path after step '" + branch.step().name() + "'").build();
+                default -> {
+                    if (route.startsWith(StepDefinition.RESPOND)) {
+                        ended = true;
+                        respond = flow.responses().get(route.substring(StepDefinition.RESPOND.length()));
+                    } else {
+                        jumpTo = route;
+                    }
+                }
+            }
+        }
+        if (respond != null) {
+            // a named response: its own rules and status; the response schema describes the default one only
+            MappedMessage named = mapping.apply(respond.rules(), ctx);
+            MessageView view = new MessageView(named.headers(), named.body());
+            if (flow.responseHandler() != null) {
+                invoke(flow.responseHandler(), view, ctx, "response_handler of flow", false);
+            }
+            return new GatewayResponse(respond.status(), view.headers(), view.body());
         }
 
         MappedMessage out = mapping.apply(flow.responseRules(), ctx);
@@ -141,7 +185,14 @@ public class FlowExecutor implements AutoCloseable {
         return new GatewayResponse(flow.successStatus(), view.headers(), view.body());
     }
 
-    private void runGroup(List<StepDefinition> group, ExecutionContext ctx, long deadline, List<StepRecord> records) {
+    private static void skip(StepDefinition step, ExecutionContext ctx, List<StepRecord> records) {
+        ctx.putStepResult(step.name(), F.objectNode().put("outcome", "SKIPPED"));
+        records.add(new StepRecord(step.name(), step.targetSystemName(), step.methodName(), null, null,
+                "SKIPPED", null, null, null, null));
+    }
+
+    /** Runs a group; returns the outcome of its branching step (which runs alone), else null. */
+    private StepOutcome runGroup(List<StepDefinition> group, ExecutionContext ctx, long deadline, List<StepRecord> records) {
         if (System.nanoTime() >= deadline) {
             throw GatewayError.of(ErrorType.FLOW_TIMEOUT).build();
         }
@@ -156,13 +207,11 @@ public class FlowExecutor implements AutoCloseable {
             if (run) {
                 toRun.add(step);
             } else {
-                ctx.putStepResult(step.name(), F.objectNode().put("outcome", "SKIPPED"));
-                records.add(new StepRecord(step.name(), step.targetSystemName(), step.methodName(), null, null,
-                        "SKIPPED", null, null, null, null));
+                skip(step, ctx, records);
             }
         }
         if (toRun.isEmpty()) {
-            return;
+            return null;
         }
 
         CompletionService<StepOutcome> completion = new ExecutorCompletionService<>(executor);
@@ -173,6 +222,7 @@ public class FlowExecutor implements AutoCloseable {
         }
 
         List<StepOutcome> stops = new ArrayList<>();
+        StepOutcome branch = null;
         boolean timedOut = false;
         try {
             while (!pending.isEmpty() && stops.isEmpty()) {
@@ -185,6 +235,9 @@ public class FlowExecutor implements AutoCloseable {
                 pending.remove(done);
                 StepOutcome outcome = result(done);
                 records.add(outcome.record());
+                if (outcome.step().branches()) {
+                    branch = outcome;
+                }
                 if (outcome.stopsFlow()) {
                     stops.add(outcome);
                 }
@@ -217,6 +270,7 @@ public class FlowExecutor implements AutoCloseable {
         if (timedOut) {
             throw GatewayError.of(ErrorType.FLOW_TIMEOUT).build();
         }
+        return branch;
     }
 
     private static StepOutcome result(Future<StepOutcome> f) {

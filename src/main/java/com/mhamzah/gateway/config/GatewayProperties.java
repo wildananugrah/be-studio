@@ -214,10 +214,26 @@ public record GatewayProperties(
             @DefaultValue("gw_audit_step") String auditStep,
             @DefaultValue("gw_target_system") String targetSystem,
             @DefaultValue("gw_target_system_header") String targetSystemHeader,
-            @DefaultValue("gw_storage") String storage) {
+            @DefaultValue("gw_storage") String storage,
+            @DefaultValue("gw_application") String application,
+            @DefaultValue("gw_flow_response") String flowResponse) {
 
         @org.springframework.boot.context.properties.bind.ConstructorBinding
         public Tables {}
+
+        public Tables(String flow, String flowStep, String mappingRule, String lookupEntry, String jsonSchema,
+                String auditTransaction, String auditStep, String targetSystem, String targetSystemHeader,
+                String storage, String application) {
+            this(flow, flowStep, mappingRule, lookupEntry, jsonSchema, auditTransaction, auditStep, targetSystem,
+                    targetSystemHeader, storage, application, "gw_flow_response");
+        }
+
+        public Tables(String flow, String flowStep, String mappingRule, String lookupEntry, String jsonSchema,
+                String auditTransaction, String auditStep, String targetSystem, String targetSystemHeader,
+                String storage) {
+            this(flow, flowStep, mappingRule, lookupEntry, jsonSchema, auditTransaction, auditStep, targetSystem,
+                    targetSystemHeader, storage, "gw_application", "gw_flow_response");
+        }
 
         public Tables(String flow, String flowStep, String mappingRule, String lookupEntry, String jsonSchema,
                 String auditTransaction, String auditStep, String targetSystem, String targetSystemHeader) {
@@ -227,17 +243,19 @@ public record GatewayProperties(
 
         /** Logical name (as used in {@code @Table} and Liquibase {@code tbl.*} parameters) to configured name. */
         public Map<String, String> byLogicalName() {
-            return Map.of(
-                    "flow", flow,
-                    "flow_step", flowStep,
-                    "mapping_rule", mappingRule,
-                    "lookup_entry", lookupEntry,
-                    "json_schema", jsonSchema,
-                    "audit_transaction", auditTransaction,
-                    "audit_step", auditStep,
-                    "target_system", targetSystem,
-                    "target_system_header", targetSystemHeader,
-                    "storage", storage);
+            return Map.ofEntries(
+                    Map.entry("flow", flow),
+                    Map.entry("flow_step", flowStep),
+                    Map.entry("mapping_rule", mappingRule),
+                    Map.entry("lookup_entry", lookupEntry),
+                    Map.entry("json_schema", jsonSchema),
+                    Map.entry("audit_transaction", auditTransaction),
+                    Map.entry("audit_step", auditStep),
+                    Map.entry("target_system", targetSystem),
+                    Map.entry("target_system_header", targetSystemHeader),
+                    Map.entry("storage", storage),
+                    Map.entry("application", application),
+                    Map.entry("flow_response", flowResponse));
         }
     }
 

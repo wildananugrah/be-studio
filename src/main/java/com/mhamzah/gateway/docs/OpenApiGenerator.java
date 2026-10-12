@@ -148,6 +148,35 @@ public final class OpenApiGenerator {
         }
         JsonNode okSchema = flow.responseSchema() != null ? ref(flow.responseSchema(), schemas) : responseBody;
         ok.putObject("content").putObject(JSON).set("schema", okSchema);
+        // named responses a branch answers with: their own status, or one more shape (oneOf) of a status in use
+        for (FlowDefinition.Response named : flow.responses().values()) {
+            ObjectNode body = objectSchema();
+            for (CompiledRule r : named.rules()) {
+                if (r.targetType() == TargetType.BODY && r.targetPath() != null) {
+                    addPath(body, r.targetPath().fieldNames(), false);
+                }
+            }
+            body.put("title", named.name());
+            String status = String.valueOf(named.status());
+            if (!responses.has(status)) {
+                ObjectNode resp = responses.putObject(status);
+                resp.put("description", "Response '" + named.name() + "' (a branch of the flow ends with it)");
+                resp.putObject("headers").putObject(CORRELATION_HEADER).putObject("schema").put("type", "string");
+                resp.putObject("content").putObject(JSON).set("schema", body);
+            } else {
+                ObjectNode resp = (ObjectNode) responses.get(status);
+                resp.put("description", resp.path("description").asString() + "; or response '" + named.name() + "'");
+                ObjectNode content = (ObjectNode) resp.path("content").path(JSON);
+                JsonNode current = content.get("schema");
+                if (current != null && current.has("oneOf")) {
+                    ((ArrayNode) current.get("oneOf")).add(body);
+                } else {
+                    ObjectNode one = F.objectNode();
+                    one.putArray("oneOf").add(current == null ? objectSchema() : current).add(body);
+                    content.set("schema", one);
+                }
+            }
+        }
         ObjectNode error = responses.putObject("default");
         error.put("description", "Error (default format; a flow with a custom error_handler may differ)");
         error.putObject("content").putObject(JSON).putObject("schema").put("$ref", "#/components/schemas/ErrorResponse");
@@ -166,6 +195,7 @@ public final class OpenApiGenerator {
     private static Inputs inputs(FlowDefinition flow) {
         Inputs in = new Inputs(new LinkedHashMap<>(), new LinkedHashMap<>(), objectSchema(), new LinkedHashMap<>());
         List<CompiledRule> rules = new ArrayList<>(flow.responseRules());
+        flow.responses().values().forEach(r -> rules.addAll(r.rules()));
         List<Condition> conditions = new ArrayList<>();
         for (StepDefinition s : flow.allSteps()) {
             rules.addAll(s.requestRules());

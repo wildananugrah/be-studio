@@ -216,6 +216,45 @@ public final class ApiSpec {
                             TestCaseGenerator.example(doc, responseSchema, "body"))));
         }
 
+        // ---- other responses (named responses the flow's branches end with)
+        List<Map.Entry<String, JsonNode>> others = new ArrayList<>();
+        op.path("responses").properties().forEach(x -> {
+            if (!x.getKey().equals("default") && !x.getKey().equals(String.valueOf(flow.successStatus()))) {
+                others.add(x);
+            }
+        });
+        JsonNode okSchema = op.path("responses").path(String.valueOf(flow.successStatus())).path("content")
+                .path("application/json").path("schema");
+        boolean okHasMore = okSchema.has("oneOf");
+        if (!others.isEmpty() || okHasMore) {
+            out.add(new Heading(2, "Other responses"));
+            out.add(new Paragraph("Depending on the path the request takes through the flow, it can also answer with:"));
+            List<Map.Entry<String, JsonNode>> all = new ArrayList<>(others);
+            if (okHasMore) {
+                all.addFirst(Map.entry(String.valueOf(flow.successStatus()), op.path("responses").path(String.valueOf(flow.successStatus()))));
+            }
+            for (Map.Entry<String, JsonNode> other : all) {
+                JsonNode schema = other.getValue().path("content").path("application/json").path("schema");
+                List<JsonNode> shapes = new ArrayList<>();
+                if (schema.has("oneOf")) {
+                    schema.get("oneOf").forEach(one -> { if (one.has("title")) shapes.add(one); });
+                } else {
+                    shapes.add(schema);
+                }
+                for (JsonNode shape : shapes) {
+                    String name = shape.path("title").asString("");
+                    out.add(new Paragraph("HTTP " + other.getKey() + (name.isEmpty() ? "" : ", response '" + name + "'") + ":"));
+                    List<List<String>> shapeFields = new ArrayList<>();
+                    fields(doc, TestCaseGenerator.resolve(doc, shape), "", false, shapeFields, 0);
+                    if (shapeFields.isEmpty()) {
+                        out.add(new Paragraph("No body fields."));
+                    } else {
+                        out.add(new Table(List.of("Field", "Type", "Notes"), shapeFields));
+                    }
+                }
+            }
+        }
+
         // ---- errors
         out.add(new Heading(2, "Errors"));
         List<List<String>> errors = new ArrayList<>();

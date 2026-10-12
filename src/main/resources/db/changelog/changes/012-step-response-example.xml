@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        An example of what the step's downstream answers (JSON, as the response mapping sees it: XML / SOAP already
+        decoded). Documentation only: Gateway Studio shows its fields in the mapping context so they can be dragged
+        onto rules. It is never used to validate or answer real traffic.
+    -->
+    <changeSet id="012-gw-flow-step-response-example" author="json-gateway">
+        <addColumn tableName="${tbl.flow_step}">
+            <column name="response_example" type="clob"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

@@ -20,6 +20,8 @@
     <property name="tbl.target_system" value="gw_target_system"/>
     <property name="tbl.target_system_header" value="gw_target_system_header"/>
     <property name="tbl.storage" value="gw_storage"/>
+    <property name="tbl.application" value="gw_application"/>
+    <property name="tbl.flow_response" value="gw_flow_response"/>
 
     <include file="changes/001-config-tables.xml" relativeToChangelogFile="true"/>
     <include file="changes/002-audit-tables.xml" relativeToChangelogFile="true"/>
@@ -29,6 +31,10 @@
     <include file="changes/006-sql-step.xml" relativeToChangelogFile="true"/>
     <include file="changes/007-storage-table.xml" relativeToChangelogFile="true"/>
     <include file="changes/008-body-template.xml" relativeToChangelogFile="true"/>
+    <include file="changes/009-step-branching.xml" relativeToChangelogFile="true"/>
+    <include file="changes/010-applications.xml" relativeToChangelogFile="true"/>
+    <include file="changes/011-flow-responses.xml" relativeToChangelogFile="true"/>
+    <include file="changes/012-step-response-example.xml" relativeToChangelogFile="true"/>
     <include file="changes/100-dev-demo-flows.xml" relativeToChangelogFile="true"/>
     <include file="changes/101-dev-demo-target-systems.xml" relativeToChangelogFile="true"/>
     <include file="changes/102-dev-demo-ms-user.xml" relativeToChangelogFile="true"/>
@@ -36,4 +42,7 @@
     <include file="changes/104-dev-demo-file-flows.xml" relativeToChangelogFile="true"/>
     <include file="changes/105-dev-demo-body-templates.xml" relativeToChangelogFile="true"/>
     <include file="changes/106-dev-demo-notify-target.xml" relativeToChangelogFile="true"/>
+    <include file="changes/107-dev-demo-branching.xml" relativeToChangelogFile="true"/>
+    <include file="changes/108-dev-demo-applications.xml" relativeToChangelogFile="true"/>
+    <include file="changes/109-dev-demo-named-response.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

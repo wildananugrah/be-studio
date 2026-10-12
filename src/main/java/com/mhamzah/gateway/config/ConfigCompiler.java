@@ -136,13 +136,16 @@ public class ConfigCompiler {
             Map<Long, List<RuleRow>> rulesByFlow = rows.rules().stream()
                     .collect(Collectors.groupingBy(RuleRow::flowId));
             Map<String, String> routes = new HashMap<>();
+            Map<Long, List<ConfigRows.ResponseRow>> responsesByFlow = rows.responses().stream()
+                    .collect(Collectors.groupingBy(ConfigRows.ResponseRow::flowId));
             List<FlowDefinition> flows = new ArrayList<>();
             rows.flows().stream()
                     .filter(FlowRow::enabled)
                     .sorted(Comparator.comparing(FlowRow::code, Comparator.nullsFirst(Comparator.naturalOrder())))
                     .forEach(f -> {
                         FlowDefinition def = compileFlow(f, stepsByFlow.getOrDefault(f.id(), List.of()),
-                                rulesByFlow.getOrDefault(f.id(), List.of()), routes);
+                                rulesByFlow.getOrDefault(f.id(), List.of()), routes,
+                                responsesByFlow.getOrDefault(f.id(), List.of()));
                         if (def != null) {
                             flows.add(def);
                         }
@@ -431,6 +434,14 @@ public class ConfigCompiler {
         }
 
         private void checkFlowCodes() {
+            Set<String> apps = new HashSet<>();
+            for (var a : rows.applications()) {
+                if (a.code() == null || a.code().isBlank()) {
+                    errors.add("application id " + a.id() + ": code is required");
+                } else if (!apps.add(a.code())) {
+                    errors.add("Duplicate application code '" + a.code() + "'");
+                }
+            }
             Set<String> seen = new HashSet<>();
             for (FlowRow f : rows.flows()) {
                 if (f.code() == null || f.code().isBlank()) {
@@ -438,12 +449,34 @@ public class ConfigCompiler {
                 } else if (!seen.add(f.code())) {
                     errors.add("Duplicate flow code '" + f.code() + "'");
                 }
+                if (f.applicationCode() != null && !apps.contains(f.applicationCode())) {
+                    errors.add("flow '" + f.code() + "': application '" + f.applicationCode() + "' does not exist");
+                }
             }
         }
 
         private FlowDefinition compileFlow(FlowRow f, List<StepRow> stepRows, List<RuleRow> ruleRows,
-                Map<String, String> routes) {
+                Map<String, String> routes, List<ConfigRows.ResponseRow> responseRows) {
             String where = "flow '" + f.code() + "'";
+            // named responses first: rules and routes refer to them
+            Map<String, Integer> responseStatus = new java.util.LinkedHashMap<>();
+            for (ConfigRows.ResponseRow r : responseRows) {
+                String rw = where + " response '" + r.name() + "'";
+                if (r.name() == null || !r.name().matches("[A-Za-z][A-Za-z0-9_-]*")) {
+                    errors.add(where + ": response name '" + r.name() + "' must start with a letter (letters, digits, _ and -)");
+                    continue;
+                }
+                int status = r.status() == null ? 200 : r.status();
+                if (status < 100 || status > 599) {
+                    errors.add(rw + ": status " + status + " is not a valid HTTP status");
+                }
+                if (responseStatus.putIfAbsent(r.name(), status) != null) {
+                    errors.add(rw + ": duplicate response name");
+                }
+            }
+            this.flowResponses = responseStatus;
+            Map<String, List<CompiledRule>> namedRules = new java.util.LinkedHashMap<>();
+            responseStatus.keySet().forEach(n -> namedRules.put(n, new ArrayList<>()));
             HttpMethod method = method(f.httpMethod(), where);
             PathPattern pattern = pathPattern(f.pathPattern(), where);
             if (method != null && pattern != null) {
@@ -497,9 +530,11 @@ public class ConfigCompiler {
                         continue;
                     }
                     CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.HEADER), FLOW_RESPONSE);
-                    if (rule != null) {
+                    if (r.responseName() != null && !namedRules.containsKey(r.responseName())) {
+                        errors.add(rw + ": response '" + r.responseName() + "' is not a response of this flow");
+                    } else if (rule != null) {
                         checkStepRefs(rule.source(), stepOrders, Integer.MAX_VALUE, null, rw);
-                        responseRules.add(rule);
+                        (r.responseName() == null ? responseRules : namedRules.get(r.responseName())).add(rule);
                     }
                 } else {
                     errors.add(rw + ": phase '" + r.phase() + "' must be STEP_REQUEST or FLOW_RESPONSE");
@@ -507,9 +542,19 @@ public class ConfigCompiler {
             }
 
             TreeMap<Integer, List<StepDefinition>> groups = new TreeMap<>();
+            Map<Integer, Long> groupSizes = enabledSteps.stream()
+                    .collect(java.util.stream.Collectors.groupingBy(StepRow::stepOrder, java.util.stream.Collectors.counting()));
             for (StepRow s : enabledSteps.stream().sorted(Comparator.comparing(StepRow::name)).toList()) {
                 StepDefinition def = step(s, where, stepRules.getOrDefault(s.id(), List.of()), stepOrders);
                 if (def != null) {
+                    String sw = where + " step '" + s.name() + "'";
+                    String onSuccess = route(s.nextOnSuccess(), true, s, stepOrders, sw + " next_on_success");
+                    String onFailure = route(s.nextOnFailure(), false, s, stepOrders, sw + " next_on_failure");
+                    if ((onSuccess != null || onFailure != null) && groupSizes.getOrDefault(s.stepOrder(), 0L) > 1) {
+                        errors.add(sw + ": a step that chooses the next step (next_on_success / next_on_failure) must"
+                                + " run alone: give it a step_order no other step uses");
+                    }
+                    def = def.withNext(onSuccess, onFailure);
                     groups.computeIfAbsent(s.stepOrder(), k -> new ArrayList<>()).add(def);
                 }
             }
@@ -518,7 +563,58 @@ public class ConfigCompiler {
             }
             return new FlowDefinition(f.code(), method, pattern, requestSchema, responseSchema, requestHandler,
                     responseHandler, errorHandler, errorHandlerName, successStatus, timeout, auditMode,
-                    new ArrayList<>(groups.values()), responseRules);
+                    new ArrayList<>(groups.values()), responseRules, responses(responseStatus, namedRules));
+        }
+
+        /**
+         * A {@code next_on_success} / {@code next_on_failure} value: null (not set), END, FAIL (success only) or the
+         * name of an enabled step of this flow with a higher step_order (jumps only go forward, so no loops).
+         */
+        /** The named responses of the flow being compiled, name to status (for {@link #route}). */
+        private Map<String, Integer> flowResponses = Map.of();
+
+        private static Map<String, FlowDefinition.Response> responses(Map<String, Integer> status,
+                Map<String, List<CompiledRule>> rules) {
+            Map<String, FlowDefinition.Response> out = new java.util.LinkedHashMap<>();
+            status.forEach((name, code) -> out.put(name, new FlowDefinition.Response(name, code, rules.get(name))));
+            return out;
+        }
+
+        private String route(String value, boolean onSuccess, StepRow s, Map<String, Integer> orders, String where) {
+            if (value == null || value.isBlank()) {
+                return null;
+            }
+            String v = value.strip();
+            if (v.regionMatches(true, 0, StepDefinition.RESPOND, 0, StepDefinition.RESPOND.length())) {
+                String name = v.substring(StepDefinition.RESPOND.length()).strip();
+                if (!flowResponses.containsKey(name)) {
+                    errors.add(where + ": '" + name + "' is not a response of this flow (" + (flowResponses.isEmpty()
+                            ? "it has none" : String.join(", ", flowResponses.keySet())) + ")");
+                    return null;
+                }
+                return StepDefinition.RESPOND + name;
+            }
+            if (v.equalsIgnoreCase(StepDefinition.END)) {
+                return StepDefinition.END;
+            }
+            if (v.equalsIgnoreCase(StepDefinition.FAIL)) {
+                if (!onSuccess) {
+                    errors.add(where + ": FAIL is only for next_on_success (on failure, on_failure STOP ends with the error)");
+                    return null;
+                }
+                return StepDefinition.FAIL;
+            }
+            Integer order = orders.get(v);
+            if (order == null) {
+                errors.add(where + ": '" + v + "' is not END" + (onSuccess ? ", FAIL" : "") + ", RESPOND:<response> or an enabled step of this flow");
+                return null;
+            }
+            if (order <= s.stepOrder()) {
+                errors.add(where + ": step '" + v + "' (step_order " + order + ") does not come after this step (step_order "
+                        + s.stepOrder() + "); jumps only go forward");
+                return null;
+            }
+            return v;
         }
 
         /** Checks step names and orders; returns name to order for the valid steps. */

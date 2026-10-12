@@ -53,7 +53,8 @@ final class StepRunner {
     /** Result of one step. {@code error} is null on success. */
     record StepOutcome(StepDefinition step, GatewayError error, StepRecord record) {
         boolean stopsFlow() {
-            return error != null && step.onFailure() == OnFailure.STOP;
+            // a failure routed elsewhere (next_on_failure) is handled, like CONTINUE
+            return error != null && step.onFailure() == OnFailure.STOP && step.nextOnFailure() == null;
         }
     }
 

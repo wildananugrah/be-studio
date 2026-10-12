@@ -54,9 +54,14 @@ class StudioWriter {
         GatewayProperties.Tables t = db.tables();
         replaceSchemas(rows.schemas(), schemaDescriptions);
         // children first; the foreign keys cascade, but not every database honours that for bulk deletes
-        for (String table : new String[] {t.mappingRule(), t.flowStep(), t.flow(), t.targetSystemHeader(),
-                t.targetSystem(), t.lookupEntry(), t.storage()}) {
+        for (String table : new String[] {t.mappingRule(), t.flowStep(), t.flowResponse(), t.flow(), t.targetSystemHeader(),
+                t.targetSystem(), t.lookupEntry(), t.storage(), t.application()}) {
             jdbc.sql("DELETE FROM " + db.qualify(table)).update();
+        }
+        for (ConfigRows.ApplicationRow r : rows.applications()) {
+            jdbc.sql("INSERT INTO " + db.qualify(t.application()) + " (code, name, description) VALUES (?, ?, ?)")
+                    .params(r.code(), r.name(), r.description())
+                    .update();
         }
 
         for (TargetRow r : rows.targets()) {
@@ -96,31 +101,40 @@ class StudioWriter {
             flowIds.put(r.id(), insert("INSERT INTO " + db.qualify(t.flow())
                             + " (code, name, http_method, path_pattern, request_schema_code, response_schema_code,"
                             + " request_handler, response_handler, error_handler, success_status, timeout_ms,"
-                            + " audit_mode, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            + " audit_mode, enabled, application_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     r.code(), r.name(), r.httpMethod(), r.pathPattern(), r.requestSchemaCode(),
                     r.responseSchemaCode(), r.requestHandler(), r.responseHandler(), r.errorHandler(),
-                    r.successStatus(), r.timeoutMs(), r.auditMode(), r.enabled()));
+                    r.successStatus(), r.timeoutMs(), r.auditMode(), r.enabled(),
+                    r.applicationCode() == null ? "DEFAULT" : r.applicationCode()));
         }
         Map<Long, Long> stepIds = new HashMap<>();
         for (StepRow r : rows.steps()) {
             stepIds.put(r.id(), insert("INSERT INTO " + db.qualify(t.flowStep())
                             + " (flow_id, name, step_order, target_system, http_method, path_template, condition_expr,"
                             + " success_expr, on_failure, timeout_ms, response_schema_code, request_handler,"
-                            + " response_handler, body_codec, enabled, sql_text, body_template)"
-                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            + " response_handler, body_codec, enabled, sql_text, body_template, next_on_success,"
+                            + " next_on_failure, response_example)"
+                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     flowIds.get(r.flowId()), r.name(), r.stepOrder(), r.targetSystem(), r.httpMethod(),
                     r.pathTemplate(), r.conditionExpr(), r.successExpr(), r.onFailure(), r.timeoutMs(),
                     r.responseSchemaCode(), r.requestHandler(), r.responseHandler(), r.bodyCodec(), r.enabled(),
-                    r.sqlText(), r.bodyTemplate()));
+                    r.sqlText(), r.bodyTemplate(), r.nextOnSuccess(), r.nextOnFailure(), r.responseExample()));
+        }
+        for (ConfigRows.ResponseRow r : rows.responses()) {
+            jdbc.sql("INSERT INTO " + db.qualify(t.flowResponse())
+                            + " (flow_id, name, status_code, description) VALUES (?, ?, ?, ?)")
+                    .params(flowIds.get(r.flowId()), r.name(), r.status() == null ? 200 : r.status(), r.description())
+                    .update();
         }
         for (RuleRow r : rows.rules()) {
             jdbc.sql("INSERT INTO " + db.qualify(t.mappingRule())
                             + " (flow_id, step_id, phase, seq, target_type, target_path, source_path, constant_value,"
-                            + " default_value, converter, lookup_code, field_handler, required)"
-                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                            + " default_value, converter, lookup_code, field_handler, required, response_name)"
+                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                     .params(flowIds.get(r.flowId()), r.stepId() == null ? null : stepIds.get(r.stepId()), r.phase(),
                             r.seq(), r.targetType(), r.targetPath(), r.sourcePath(), r.constantValue(),
-                            r.defaultValue(), r.converter(), r.lookupCode(), r.fieldHandler(), r.required())
+                            r.defaultValue(), r.converter(), r.lookupCode(), r.fieldHandler(), r.required(),
+                            r.responseName())
                     .update();
         }
     }

@@ -1,7 +1,5 @@
 package com.mhamzah.gateway.studio.testing;
 
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.core.AppenderBase;
@@ -17,7 +15,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 
@@ -45,12 +42,8 @@ public class TestRecorder implements BeanPostProcessor, DisposableBean {
     private final Appender appender = new Appender();
 
     public TestRecorder() {
-        if (LoggerFactory.getILoggerFactory() instanceof LoggerContext context) {
-            appender.setContext(context);
-            appender.setName("gateway-studio-tests");
-            appender.start();
-            context.getLogger(Logger.ROOT_LOGGER_NAME).addAppender(appender);
-        }
+        // re-attached after a Logback reset (another context initializing logging), so it keeps collecting
+        com.mhamzah.gateway.logging.RootAppenders.attach(appender, "gateway-studio-tests");
     }
 
     public Capture start(String correlationId) {
@@ -70,10 +63,7 @@ public class TestRecorder implements BeanPostProcessor, DisposableBean {
 
     @Override
     public void destroy() {
-        if (LoggerFactory.getILoggerFactory() instanceof LoggerContext context) {
-            context.getLogger(Logger.ROOT_LOGGER_NAME).detachAppender(appender);
-        }
-        appender.stop();
+        com.mhamzah.gateway.logging.RootAppenders.detach(appender);
     }
 
     private Capture captureOf(Map<String, String> headers) {

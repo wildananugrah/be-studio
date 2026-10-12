@@ -78,6 +78,27 @@ class OpenApiGeneratorTest {
     }
 
     @Test
+    void namedResponsesAreDocumentedByStatus() {
+        var flow = rows.flow("F", "POST", "/f");
+        rows.step(flow, "s", 1, s -> s.withNext("RESPOND:accepted", "RESPOND:refused"));
+        rows.responseRule(flow, "$.id", "$.steps.s.body.id");
+        rows.response(flow, "refused", 422);
+        rows.responseRule(flow, "refused", "$.reason", "$.steps.s.body.message", null);
+        rows.response(flow, "accepted", 200);
+        rows.responseRule(flow, "accepted", "$.queued", null, "true");
+
+        JsonNode responses = generate().get("paths").get("/api/f").get("post").get("responses");
+
+        assertThat(responses.get("422").get("description").asString()).contains("refused");
+        assertThat(responses.get("422").get("content").get("application/json").get("schema").get("properties").has("reason")).isTrue();
+        // same status as the default response: one more shape
+        JsonNode oneOf = responses.get("200").get("content").get("application/json").get("schema").get("oneOf");
+        assertThat(oneOf).hasSize(2);
+        assertThat(oneOf.get(1).get("title").asString()).isEqualTo("accepted");
+        assertThat(responses.get("200").get("description").asString()).contains("or response 'accepted'");
+    }
+
+    @Test
     void patternSyntaxIsConvertedToOpenApiTemplates() {
         rows.flow("A", "GET", "/a/{id:[0-9]+}");
         rows.flow("B", "GET", "/b/{*rest}");

@@ -31,10 +31,11 @@ class StudioRowsTest {
                 "coreBankingErrorHandler", 200, null, "INHERIT", true, List.of(inquiry, notify),
                 List.of(rule("$.name", "$.steps.inquiry.body.acctName"),
                         new Rule("BODY", "$.status", "$.steps.inquiry.body.statusCd", null, "A", "ACCOUNT_STATUS",
-                                "UPPER", null, false)));
+                                "UPPER", null, false)), "ACCOUNTS");
         Target core = new Target("CORE", "${CORE_URL:http://localhost:8089}", 2000, null, null, true, headers);
         return new StudioConfig(null, List.of(flow), List.of(core), lookups,
-                List.of(new Schema("ACCOUNT", "Account response", "{\"type\":\"object\"}")));
+                List.of(new Schema("ACCOUNT", "Account response", "{\"type\":\"object\"}")), List.of(),
+                List.of(new StudioConfig.Application("ACCOUNTS", "Accounts", "Account endpoints")));
     }
 
     @Test

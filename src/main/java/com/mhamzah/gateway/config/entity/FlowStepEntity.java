@@ -31,12 +31,16 @@ public class FlowStepEntity {
     private String sqlText;
     /** CLOB / text, like {@code sql_text}. */
     private String bodyTemplate;
+    private String nextOnSuccess;
+    private String nextOnFailure;
+    /** CLOB / text: an example downstream response, for Studio only. */
+    private String responseExample;
 
     protected FlowStepEntity() {}
 
     public StepRow toRow() {
         return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                 successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                bodyCodec, enabled, sqlText, bodyTemplate);
+                bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample);
     }
 }

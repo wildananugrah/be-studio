@@ -1,6 +1,8 @@
 package com.mhamzah.gateway.config;
 
+import com.mhamzah.gateway.config.entity.ApplicationEntity;
 import com.mhamzah.gateway.config.entity.FlowEntity;
+import com.mhamzah.gateway.config.entity.FlowResponseEntity;
 import com.mhamzah.gateway.config.entity.FlowStepEntity;
 import com.mhamzah.gateway.config.entity.JsonSchemaEntity;
 import com.mhamzah.gateway.config.entity.StorageEntity;
@@ -32,7 +34,9 @@ public class ConfigLoader {
                 all(JsonSchemaEntity.class, JsonSchemaEntity::toRow),
                 all(TargetSystemEntity.class, TargetSystemEntity::toRow),
                 all(TargetSystemHeaderEntity.class, TargetSystemHeaderEntity::toRow),
-                all(StorageEntity.class, StorageEntity::toRow));
+                all(StorageEntity.class, StorageEntity::toRow),
+                all(ApplicationEntity.class, ApplicationEntity::toRow),
+                all(FlowResponseEntity.class, FlowResponseEntity::toRow));
     }
 
     private <E, R> List<R> all(Class<E> type, Function<E, R> toRow) {

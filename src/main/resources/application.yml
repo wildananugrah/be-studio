@@ -103,6 +103,8 @@ gateway:
       audit-transaction: gw_audit_transaction
       audit-step: gw_audit_step
       storage: gw_storage
+      application: gw_application
+      flow-response: gw_flow_response
     liquibase-tables:
       changelog: gw_db_changelog
       changelog-lock: gw_db_changelog_lock

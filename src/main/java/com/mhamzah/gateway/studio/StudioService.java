@@ -73,6 +73,71 @@ public class StudioService {
         this.properties = properties;
         this.writer = new StudioWriter(dataSource, properties.db());
         this.tx = new TransactionTemplate(txManager);
+        this.dialect = dialect(dataSource);
+    }
+
+    private final ApplicationExport.Dialect dialect;
+
+    private static ApplicationExport.Dialect dialect(DataSource dataSource) {
+        try (java.sql.Connection c = dataSource.getConnection()) {
+            return c.getMetaData().getDatabaseProductName().toLowerCase(java.util.Locale.ROOT).contains("oracle")
+                    ? ApplicationExport.Dialect.ORACLE : ApplicationExport.Dialect.POSTGRES;
+        } catch (java.sql.SQLException e) {
+            return ApplicationExport.Dialect.POSTGRES;
+        }
+    }
+
+    /**
+     * A downstream body as the response mapping sees it: JSON as it is; XML / SOAP decoded by {@code codec} (a
+     * BodyCodec bean; empty = soapCodec for an envelope, else xmlCodec).
+     *
+     * @throws IllegalArgumentException when it cannot be decoded
+     */
+    public JsonNode decode(String codec, String text) {
+        String t = text == null ? "" : text.strip();
+        if (t.isEmpty()) {
+            throw new IllegalArgumentException("nothing to decode");
+        }
+        String name = codec == null || codec.isBlank()
+                ? (t.startsWith("<") ? (t.contains("Envelope") ? "soapCodec" : "xmlCodec") : "jsonCodec") : codec.strip();
+        BodyCodec bean;
+        try {
+            bean = beans.getBean(name, BodyCodec.class);
+        } catch (org.springframework.beans.BeansException e) {
+            throw new IllegalArgumentException("no BodyCodec bean '" + name + "'");
+        }
+        JsonNode out;
+        try {
+            out = bean.decode(t, new java.util.TreeMap<>(String.CASE_INSENSITIVE_ORDER));
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException(name + " cannot decode it: " + e.getMessage());
+        }
+        if (out == null) {
+            throw new IllegalArgumentException(name + " cannot decode it");
+        }
+        return out;
+    }
+
+    /** An exported file: its name, media type and content. */
+    public record Export(String filename, String contentType, String content) {}
+
+    /**
+     * One application of the saved configuration as {@code json} (Studio can import it), {@code sql} (a script for
+     * this gateway's database type) or {@code liquibase} (a changelog using the {@code tbl.*} properties).
+     *
+     * @throws IllegalArgumentException for an unknown application or format
+     */
+    public Export exportApplication(String code, String format, String exportedFrom) {
+        ApplicationExport.Bundle bundle = ApplicationExport.bundle(load(), code);
+        String stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmm"));
+        String base = "APP_" + code + "_" + stamp;
+        return switch (format == null ? "" : format.toLowerCase(java.util.Locale.ROOT)) {
+            case "json" -> new Export(base + ".json", "application/json", ApplicationExport.json(bundle, exportedFrom));
+            case "sql" -> new Export(base + "_" + dialect.name().toLowerCase(java.util.Locale.ROOT) + ".sql",
+                    "application/sql", ApplicationExport.sql(bundle, dialect, properties.db().tables(), exportedFrom));
+            case "liquibase" -> new Export(base + ".xml", "application/xml", ApplicationExport.liquibase(bundle, exportedFrom));
+            default -> throw new IllegalArgumentException("format must be json, sql or liquibase");
+        };
     }
 
     /**
@@ -126,7 +191,7 @@ public class StudioService {
     private static ConfigRows withoutEmptySchemas(ConfigRows rows) {
         return new ConfigRows(rows.flows(), rows.steps(), rows.rules(), rows.lookups(),
                 rows.schemas().stream().filter(x -> x.schemaText() != null && !x.schemaText().isBlank()).toList(),
-                rows.targets(), rows.targetHeaders(), rows.storages());
+                rows.targets(), rows.targetHeaders(), rows.storages(), rows.applications(), rows.responses());
     }
 
     /** Outcome of {@link #save}. */
@@ -168,6 +233,11 @@ public class StudioService {
      * Each rule is also run on its own so its result can be shown next to it.
      */
     public Preview preview(StudioConfig draft, String flowCode, String step, JsonNode sample) {
+        return preview(draft, flowCode, step, null, sample);
+    }
+
+    /** Like {@link #preview(StudioConfig, String, String, JsonNode)}; {@code response} names a named response. */
+    public Preview preview(StudioConfig draft, String flowCode, String step, String response, JsonNode sample) {
         Flow flow = draft.flows().stream().filter(f -> Objects.equals(f.code(), flowCode)).findFirst().orElse(null);
         if (flow == null) {
             return Preview.failed(List.of("unknown flow '" + flowCode + "'"));
@@ -176,7 +246,7 @@ public class StudioService {
         Flow only = new Flow(flow.code(), flow.name(), flow.method(), flow.path(), flow.requestSchema(),
                 flow.responseSchema(), flow.requestHandler(), flow.responseHandler(), flow.errorHandler(),
                 flow.successStatus(), flow.timeoutMs(), flow.auditMode(), true,
-                flow.steps().stream().map(StudioService::enabled).toList(), flow.response());
+                flow.steps().stream().map(StudioService::enabled).toList(), flow.response(), null, flow.responses());
         StudioConfig single = new StudioConfig(null, List.of(only), draft.targets(), draft.lookups(), draft.schemas(),
                 draft.storages());
         FlowRegistry registry;
@@ -187,7 +257,13 @@ public class StudioService {
         }
         FlowDefinition def = registry.flows().getFirst();
         List<CompiledRule> rules;
-        if (step == null || step.isBlank()) {
+        if (response != null && !response.isBlank()) {
+            FlowDefinition.Response named = def.responses().get(response);
+            if (named == null) {
+                return Preview.failed(List.of("unknown response '" + response + "'"));
+            }
+            rules = named.rules();
+        } else if (step == null || step.isBlank()) {
             rules = def.responseRules();
         } else {
             StepDefinition s = def.allSteps().stream().filter(x -> x.name().equals(step)).findFirst().orElse(null);
@@ -224,7 +300,8 @@ public class StudioService {
     private static Step enabled(Step s) {
         return new Step(s.name(), s.order(), s.targetSystem(), s.method(), s.path(), s.condition(), s.success(),
                 s.onFailure(), s.timeoutMs(), s.responseSchema(), s.requestHandler(), s.responseHandler(),
-                s.bodyCodec(), true, s.rules(), s.sql(), s.bodyTemplate());
+                s.bodyCodec(), true, s.rules(), s.sql(), s.bodyTemplate(), s.nextOnSuccess(), s.nextOnFailure(),
+                s.responseExample());
     }
 
     private static ExecutionContext context(String flowCode, FlowRegistry registry, JsonNode sample) {

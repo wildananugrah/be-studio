@@ -25,11 +25,12 @@ public class FlowEntity {
     private Integer timeoutMs;
     private String auditMode;
     private boolean enabled;
+    private String applicationCode;
 
     protected FlowEntity() {}
 
     public FlowRow toRow() {
         return new FlowRow(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode,
-                requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled);
+                requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled, applicationCode);
     }
 }

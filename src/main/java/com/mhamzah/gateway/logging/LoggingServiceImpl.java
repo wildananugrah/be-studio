@@ -41,6 +41,7 @@ public class LoggingServiceImpl implements LoggingService {
         }
         String correlationId = CorrelationId.of(request);
         MDC.put(CorrelationId.MDC_KEY, correlationId);
+        RootAppenders.ensureAttached();
 
         Map<String, String> headers = new LinkedHashMap<>();
         for (String name : Collections.list(request.getHeaderNames())) {

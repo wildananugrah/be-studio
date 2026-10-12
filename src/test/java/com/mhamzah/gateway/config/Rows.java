@@ -23,6 +23,20 @@ public final class Rows {
     private final List<SchemaRow> schemas = new ArrayList<>();
     private final List<TargetRow> targets = new ArrayList<>();
     private final List<TargetHeaderRow> targetHeaders = new ArrayList<>();
+    private final List<ConfigRows.ResponseRow> responses = new ArrayList<>();
+
+    /** A named client response of {@code flow}. */
+    public ConfigRows.ResponseRow response(FlowRow flow, String name, Integer status) {
+        ConfigRows.ResponseRow r = new ConfigRows.ResponseRow(ids.getAndIncrement(), flow.id(), name, status, null);
+        responses.add(r);
+        return r;
+    }
+
+    /** FLOW_RESPONSE BODY rule of the named response {@code response}. */
+    public RuleRow responseRule(FlowRow flow, String response, String target, String source, String constant) {
+        return rule(new RuleRow(ids.getAndIncrement(), flow.id(), null, "FLOW_RESPONSE", rules.size() + 1, "BODY", target,
+                source, constant, null, null, null, null, false, response));
+    }
 
     public FlowRow flow(String code, String method, String path) {
         return flow(code, method, path, f -> f);
@@ -90,6 +104,7 @@ public final class Rows {
     }
 
     public ConfigRows build() {
-        return new ConfigRows(flows, steps, rules, lookups, schemas, targets, targetHeaders);
+        return new ConfigRows(flows, steps, rules, lookups, schemas, targets, targetHeaders, List.of(), List.of(),
+                responses);
     }
 }

@@ -504,6 +504,141 @@ class FlowExecutorTest {
         assertThat(result.audit().steps().getFirst().requestPayload().asString()).isEqualTo(sent);
     }
 
+    // ---- branching: next_on_success / next_on_failure
+
+    private static java.util.List<String> outcomes(ExecutionResult result) {
+        return result.audit().steps().stream().map(x -> x.stepName() + "=" + x.outcome()).toList();
+    }
+
+    @Test
+    void failureJumpsToAFallbackAndTheStepsInBetweenAreSkipped() {
+        var flow = rows.flow("F", "POST", "/f");
+        rows.step(flow, "primary", 1, s -> s.withNext(null, "fallback"));
+        rows.step(flow, "enrich", 2);
+        rows.step(flow, "fallback", 3);
+        rows.step(flow, "after", 4);
+        rows.responseRule(flow, "$.primary", "$.steps.primary.outcome");
+        rows.responseRule(flow, "$.enrich", "$.steps.enrich.outcome");
+        rows.responseRule(flow, "$.fallback", "$.steps.fallback.outcome");
+        downstream.on("/primary", r -> new DownstreamResponse(503, Map.of(), ""));
+        for (String ok : java.util.List.of("/enrich", "/fallback", "/after")) {
+            downstream.on(ok, r -> new DownstreamResponse(200, Map.of(), "{}"));
+        }
+
+        var result = run("POST", "/f", "{}");
+
+        assertThat(result.response().status()).isEqualTo(200);
+        assertThat(result.response().body().toString())
+                .isEqualTo("{\"primary\":\"FAILED\",\"enrich\":\"SKIPPED\",\"fallback\":\"SUCCESS\"}");
+        assertThat(outcomes(result)).containsExactly("primary=FAILED", "enrich=SKIPPED", "fallback=SUCCESS", "after=SUCCESS");
+        assertThat(downstream.calls("/enrich")).isZero();
+    }
+
+    @Test
+    void successJumpsOverTheFailurePathAndEndStopsTheFlow() {
+        var flow = rows.flow("F", "POST", "/f");
+        rows.step(flow, "debit", 1, s -> s.withNext("notify", "reversal"));
+        rows.step(flow, "reversal", 2, s -> s.withNext("END", null));
+        rows.step(flow, "notify", 3);
+        downstream.on("/debit", r -> new DownstreamResponse(200, Map.of(), "{}"));
+        downstream.on("/reversal", r -> new DownstreamResponse(200, Map.of(), "{}"));
+        downstream.on("/notify", r -> new DownstreamResponse(200, Map.of(), "{}"));
+
+        assertThat(outcomes(run("POST", "/f", "{}")))
+                .containsExactly("debit=SUCCESS", "reversal=SKIPPED", "notify=SUCCESS");
+
+        downstream.on("/debit", r -> new DownstreamResponse(500, Map.of(), "{}"));
+        var failed = run("POST", "/f", "{}");
+        assertThat(failed.response().status()).isEqualTo(200);
+        assertThat(outcomes(failed)).containsExactly("debit=FAILED", "reversal=SUCCESS", "notify=SKIPPED");
+    }
+
+    @Test
+    void failEndsTheFailurePathWithTheOriginalError() {
+        var flow = rows.flow("F", "POST", "/f");
+        rows.step(flow, "debit", 1, s -> s.withSuccess("${steps.debit.body.code} == '00'").withNext(null, "reversal"));
+        rows.step(flow, "reversal", 2, s -> s.withNext("FAIL", null));
+        rows.step(flow, "notify", 3);
+        downstream.on("/debit", r -> new DownstreamResponse(200, Map.of(), "{\"code\":\"51\"}"));
+        downstream.on("/reversal", r -> new DownstreamResponse(200, Map.of(), "{}"));
+        downstream.on("/notify", r -> new DownstreamResponse(200, Map.of(), "{}"));
+
+        var result = run("POST", "/f", "{}");
+
+        assertThat(result.response().status()).isEqualTo(422);
+        assertThat(text(result.response(), "errorCode")).isEqualTo("GW-422-BUSINESS");
+        assertThat(text(result.response(), "step")).isEqualTo("debit");
+        assertThat(outcomes(result)).containsExactly("debit=FAILED", "reversal=SUCCESS");
+        assertThat(downstream.calls("/notify")).isZero();
+    }
+
+    @Test
+    void aConditionSkippedBranchingStepFollowsTheNormalOrder() {
+        var flow = rows.flow("F", "POST", "/f");
+        rows.step(flow, "a", 1, s -> s.withCondition("${request.body.go} == true").withNext("END", null));
+        rows.step(flow, "b", 2);
+        downstream.on("/a", r -> new DownstreamResponse(200, Map.of(), "{}"));
+        downstream.on("/b", r -> new DownstreamResponse(200, Map.of(), "{}"));
+        assertThat(outcomes(run("POST", "/f", "{\"go\":false}"))).containsExactly("a=SKIPPED", "b=SUCCESS");
+        assertThat(outcomes(run("POST", "/f", "{\"go\":true}"))).containsExactly("a=SUCCESS", "b=SKIPPED");
+    }
+
+    @Test
+    void aBranchCanAnswerWithANamedResponseOfItsOwn() {
+        var flow = rows.flow("F", "POST", "/f");
+        rows.step(flow, "debit", 1, s -> s.withSuccess("${steps.debit.body.code} == '00'").withNext("notify", "reversal"));
+        rows.step(flow, "reversal", 2, s -> s.withNext("RESPOND:reversed", null));
+        rows.step(flow, "notify", 3);
+        rows.rule(new com.mhamzah.gateway.config.ConfigRows.RuleRow(999, flow.id(), null, "FLOW_RESPONSE", 1, "BODY",
+                "$.status", null, "DONE", null, null, null, null, false));
+        rows.response(flow, "reversed", 409);
+        rows.responseRule(flow, "reversed", "$.status", null, "REVERSED");
+        rows.responseRule(flow, "reversed", "$.reason", "$.steps.debit.body.message", null);
+        rows.responseRule(flow, "reversed", "$.reversalRef", "$.steps.reversal.body.ref", null);
+        downstream.on("/debit", r -> new DownstreamResponse(200, Map.of(), "{\"code\":\"51\",\"message\":\"Insufficient funds\"}"));
+        downstream.on("/reversal", r -> new DownstreamResponse(200, Map.of(), "{\"ref\":\"REV-1\"}"));
+        downstream.on("/notify", r -> new DownstreamResponse(200, Map.of(), "{}"));
+
+        var failed = run("POST", "/f", "{}");
+        assertThat(failed.response().status()).isEqualTo(409);
+        assertThat(failed.response().body().toString())
+                .isEqualTo("{\"status\":\"REVERSED\",\"reason\":\"Insufficient funds\",\"reversalRef\":\"REV-1\"}");
+        assertThat(outcomes(failed)).containsExactly("debit=FAILED", "reversal=SUCCESS", "notify=SKIPPED");
+
+        downstream.on("/debit", r -> new DownstreamResponse(200, Map.of(), "{\"code\":\"00\"}"));
+        var ok = run("POST", "/f", "{}");
+        assertThat(ok.response().status()).isEqualTo(200);
+        assertThat(ok.response().body().toString()).isEqualTo("{\"status\":\"DONE\"}");
+    }
+
+    @Test
+    void namedResponseMistakesAreReportedOnReload() {
+        var flow = rows.flow("F", "POST", "/f");
+        rows.step(flow, "a", 1, s -> s.withNext("RESPOND:nope", null));
+        rows.response(flow, "bad name", 200);
+        rows.response(flow, "teapot", 999);
+        rows.responseRule(flow, "ghost", "$.x", null, "1");
+        assertThatThrownBy(this::registry).isInstanceOfSatisfying(ConfigValidationException.class, e -> assertThat(e.errors())
+                .anySatisfy(m -> assertThat(m).contains("step 'a' next_on_success: 'nope' is not a response of this flow (teapot)"))
+                .anySatisfy(m -> assertThat(m).contains("response name 'bad name' must start with a letter"))
+                .anySatisfy(m -> assertThat(m).contains("response 'teapot': status 999 is not a valid HTTP status"))
+                .anySatisfy(m -> assertThat(m).contains("response 'ghost' is not a response of this flow")));
+    }
+
+    @Test
+    void branchingMistakesAreReportedOnReload() {
+        var flow = rows.flow("F", "POST", "/f");
+        rows.step(flow, "a", 1, s -> s.withNext("nope", "FAIL"));
+        rows.step(flow, "b", 2, s -> s.withNext("a", null));
+        rows.step(flow, "c", 3, s -> s.withNext(null, "END"));
+        rows.step(flow, "d", 3);
+        assertThatThrownBy(this::registry).isInstanceOfSatisfying(ConfigValidationException.class, e -> assertThat(e.errors())
+                .anySatisfy(m -> assertThat(m).contains("step 'a' next_on_success: 'nope' is not END, FAIL, RESPOND:<response> or an enabled step"))
+                .anySatisfy(m -> assertThat(m).contains("step 'a' next_on_failure: FAIL is only for next_on_success"))
+                .anySatisfy(m -> assertThat(m).contains("step 'b' next_on_success: step 'a' (step_order 1) does not come after"))
+                .anySatisfy(m -> assertThat(m).contains("step 'c': a step that chooses the next step")));
+    }
+
     @Test
     void badPlaceholdersAndStepsThatHaveNotRunAreReportedOnReload() {
         var flow = rows.flow("F", "POST", "/f");

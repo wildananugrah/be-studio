@@ -261,6 +261,29 @@ Then run `make reload`. To switch a flow off without deleting it, use `UPDATE gw
 | `timeout_ms` | | `gateway.default-flow-timeout-ms` (30000) | Limit for the whole flow → `504 GW-504-FLOW` |
 | `audit_mode` | | `INHERIT` | `INHERIT` (follow `gateway.audit.enabled`), `ON`, `OFF` |
 | `enabled` | | `true` | `false` = the route does not exist (404) |
+| `application_code` | ✔ | `DEFAULT` | `gw_application.code` of the application the flow belongs to ([§3.1a](#31a-gw_application)) |
+
+### 3.1a `gw_application`
+
+Every flow belongs to an application, so one application's configuration can be extracted and applied elsewhere.
+
+| Column | Required | Meaning |
+|---|---|---|
+| `code` | ✔ | Unique ID, capitals, digits and `_` (e.g. `CORE_BANKING_API`) |
+| `name` | | Display name |
+| `description` | | Free text |
+
+`DEFAULT` exists from the start; flows created before applications existed belong to it. In Studio, **+ New flow** asks for the application first.
+
+**Export** (Studio → Flows → an application → Export, or `GET /studio/api/applications/{code}/export?format=json|sql|liquibase` with `X-Admin-Token`) contains the application, its flows with their steps and mapping rules, and the shared target systems (with headers), lookups, JSON schemas and storages those flows use:
+
+| Format | Use |
+|---|---|
+| `json` | Studio → Flows → **Import application…** on another gateway (loaded as unsaved changes, saved with Save & reload) |
+| `sql` | A script for this gateway's database type (PostgreSQL or Oracle); run it in one transaction, then reload |
+| `liquibase` | A changelog using the `tbl.*` table name properties; include it from `db.changelog-master.xml` |
+
+Applying an export replaces the application and its flows (also a flow with the same code in another application). Shared items are only added when the target does not have them; existing ones are left as they are, so an export never changes what other applications use. Secrets written as plain text (TLS store passwords, storage keys, credential-like target headers) become `${NAME}` placeholders; set those environment variables on the target. Handler and codec beans, and target systems, SQL datasources and storages from `application.yml`, are not exported; the file lists them under "requires".
 
 ### 3.2 `gw_flow_step`
 
@@ -277,6 +300,9 @@ Then run `make reload`. To switch a flow off without deleting it, use `UPDATE gw
 | `condition_expr` | | | Run only when true; otherwise the outcome is `SKIPPED` ([§3.6](#36-expressions-condition_expr-success_expr)) |
 | `success_expr` | | | Checked after a 2xx response; false → `DOWNSTREAM_BUSINESS_ERROR` |
 | `on_failure` | | `STOP` | `STOP`: end the flow with an error. `CONTINUE`: record the failure and carry on. |
+| `response_example` | | | An example of what the downstream answers (JSON, as the response rules see it). Documentation only: Gateway Studio shows its fields in the mapping context so they can be dragged onto rules |
+| `next_on_success` | | next group | Where to go after a success: `END` (stop, build the response), `FAIL` (end with the error of the failure that led to this branch) or the name of a **later** step to jump to ([§4.11a](#411a-branch-on-success-or-failure)) |
+| `next_on_failure` | | `on_failure` | Where to go after a failure: `END` or the name of a later step. The failure is then handled (`on_failure` is not used) |
 | `timeout_ms` | | target `read-timeout-ms`, else `gateway.default-step-timeout-ms` (10000) | Read timeout → `504 GW-504-DOWNSTREAM` |
 | `response_schema_code` | | | Validates the downstream response body → `502 GW-502-INVALID-RESPONSE` |
 | `request_handler` | | | `MessageHandler` run after the request is mapped, before sending |
@@ -639,6 +665,66 @@ Result: `422 {"errorCode":"INSUFFICIENT_FUNDS","errorMessage":"Insufficient bala
 ### 4.11 Best-effort call (notification, logging)
 
 Set `on_failure = 'CONTINUE'`. The flow succeeds even when this call fails, and the response can expose `$.steps.notify.outcome`.
+
+### 4.11a Branch on success or failure
+
+Each step can choose the next step: `next_on_success` and `next_on_failure`. Studio shows them as **If it succeeds** / **If it fails** on the step, and draws the jumps on the pipeline (green above the cards for success, red dashed below for failure).
+
+| Value | `next_on_success` | `next_on_failure` |
+|---|---|---|
+| empty | the next step_order group (as before) | `on_failure` decides: `STOP` or `CONTINUE` |
+| `END` | stop running steps; the response rules build the response | same, the failure is handled |
+| `FAIL` | end with the error of the failure that was routed to this branch (or `GW-422-BUSINESS` if none) | not allowed |
+| `RESPOND:<name>` | stop running steps and answer with the flow's **named response** `<name>` (its own status and rules) | same, the failure is handled |
+| a step name | jump to that step: the steps in between are `SKIPPED` | same, the failure is handled |
+
+Rules, checked on every reload:
+- Jumps only go **forward**: the target's `step_order` is higher, so a flow cannot loop.
+- A step that branches runs **alone**: no other step may share its `step_order` (otherwise two parallel steps could disagree).
+- The target continues with its whole `step_order` group (steps that share its number run too, in parallel).
+- Jumped-over steps are `SKIPPED` like a false `condition_expr`; later rules can check `${steps.x.outcome}`.
+
+Example: debit, and on failure run a reversal, then answer with the debit's error (the dev data has it as `TRANSFER_WITH_REVERSAL`, `POST /api/v1/transfers/with-reversal`):
+
+```
+debit (1) ──✓──► notify (3) ──► response
+   └──✗──► reversal (2) ──✓ FAIL──► 422 with the debit's error
+```
+
+```sql
+UPDATE gw_flow_step SET next_on_success = 'notify', next_on_failure = 'reversal' WHERE name = 'debit' AND flow_id = …;
+UPDATE gw_flow_step SET next_on_success = 'FAIL' WHERE name = 'reversal' AND flow_id = …;
+```
+
+A successful debit skips `reversal`; a failed one (send `"amount": 999999999`, the stub answers `51`) skips `notify`. The audit trail shows which steps ran.
+
+#### Named responses: a different client response per branch
+
+Besides its default response (`success_status` + the `FLOW_RESPONSE` rules), a flow can have **named responses** (`gw_flow_response`), each with its own HTTP status and its own `FLOW_RESPONSE` rules (`gw_mapping_rule.response_name = <name>`). A step routes to one with `RESPOND:<name>`; the flow stops there and answers with it. The response handler runs for every response; the response schema only checks the default one.
+
+| `gw_flow_response` column | Required | Meaning |
+|---|---|---|
+| `flow_id` | ✔ | The flow |
+| `name` | ✔ | Unique per flow; a letter, then letters, digits, `_` or `-` |
+| `status_code` | ✔ (200) | HTTP status of this response |
+| `description` | | Free text |
+
+The dev data's `TRANSFER_WITH_REVERSAL` answers its failure path with one (`109-dev-demo-named-response.xml`):
+
+```
+debit ──✓──► notify ──► default response     200 {"refNo": "...", "notified": "SUCCESS"}
+  └──✗──► reversal ──✓ RESPOND:reversed ──►  422 {"status": "REVERSED", "reason": "Insufficient funds",
+                                                  "reversalRef": "REV-0001", "correlationId": "..."}
+```
+
+```sql
+INSERT INTO gw_flow_response (flow_id, name, status_code) SELECT id, 'reversed', 422 FROM gw_flow WHERE code = 'TRANSFER_WITH_REVERSAL';
+INSERT INTO gw_mapping_rule (flow_id, phase, seq, target_type, target_path, source_path, response_name)
+SELECT id, 'FLOW_RESPONSE', 1, 'BODY', '$.reason', '$.steps.debit.body.responseMessage', 'reversed' FROM gw_flow WHERE code = 'TRANSFER_WITH_REVERSAL';
+UPDATE gw_flow_step SET next_on_success = 'RESPOND:reversed' WHERE name = 'reversal' AND flow_id = …;
+```
+
+In Studio: pipeline → under **Client response**, **+ Response** adds one (name, status, description; **Edit response mapping →**), and a step's **If it succeeds / If it fails** offers **Respond · <name>**. The API description lists each named response under its status (a `oneOf` when it shares the default's status), and so does the API specification document ("Other responses").
 
 ### 4.12 Timeouts
 

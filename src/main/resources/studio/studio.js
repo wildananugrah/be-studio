@@ -30,15 +30,17 @@ function fromApi(c) {
     flows: c.flows.map(f => ({
       code: str(f.code), name: str(f.name), method: f.method || 'GET', path: str(f.path), reqSchema: str(f.requestSchema), respSchema: str(f.responseSchema),
       reqHandler: str(f.requestHandler), respHandler: str(f.responseHandler), errorHandler: str(f.errorHandler), successStatus: str(f.successStatus || 200),
-      timeout: str(f.timeoutMs), audit: f.auditMode || 'INHERIT', enabled: f.enabled,
+      timeout: str(f.timeoutMs), audit: f.auditMode || 'INHERIT', enabled: f.enabled, application: str(f.application) || 'DEFAULT',
       steps: f.steps.map(s => ({ id: uid('s'), name: str(s.name), order: s.order, target: str(s.targetSystem), method: s.method || 'GET', path: str(s.path), onFailure: s.onFailure || 'STOP',
         timeout: str(s.timeoutMs), condition: str(s.condition), success: str(s.success), reqHandler: str(s.requestHandler), respHandler: str(s.responseHandler),
-        respSchema: str(s.responseSchema), bodyCodec: str(s.bodyCodec), enabled: s.enabled, rules: s.rules.map(ruleIn), sql: s.sql == null ? null : String(s.sql), bodyTemplate: str(s.bodyTemplate) })),
-      response: f.response.map(ruleIn)
+        respSchema: str(s.responseSchema), bodyCodec: str(s.bodyCodec), enabled: s.enabled, rules: s.rules.map(ruleIn), sql: s.sql == null ? null : String(s.sql), bodyTemplate: str(s.bodyTemplate), nextOk: str(s.nextOnSuccess), nextFail: str(s.nextOnFailure), example: str(s.responseExample) })),
+      response: f.response.map(ruleIn),
+      responses: (f.responses || []).map(r => ({ id: uid('o'), name: str(r.name), status: str(r.status || 200), description: str(r.description), rules: (r.rules || []).map(ruleIn) }))
     })),
     targets: c.targets.map(t => ({ code: str(t.code), base: str(t.baseUrl), connect: str(t.connectTimeoutMs), read: str(t.readTimeoutMs), bodyCodec: str(t.bodyCodec), enabled: t.enabled, headers: t.headers.map(h => ({ n: str(h.name), v: str(h.value) })),
       tls: { mode: (t.tls && t.tls.mode) || 'VERIFY', trust: str(t.tls && t.tls.trustStore), trustPw: str(t.tls && t.tls.trustStorePassword), key: str(t.tls && t.tls.keyStore), keyPw: str(t.tls && t.tls.keyStorePassword) } })),
     lookups,
+    applications: (c.applications || []).map(a => ({ code: str(a.code), name: str(a.name), description: str(a.description) })),
     schemas: (c.schemas || []).map(x => ({ code: str(x.code), desc: str(x.description), text: str(x.text) })),
     storages: (c.storages || []).map(x => ({ code: str(x.code), type: (x.type || 'LOCAL').toUpperCase(), baseDir: str(x.baseDir), bucket: str(x.bucket), prefix: str(x.prefix), region: str(x.region), endpoint: str(x.endpoint),
       pathStyle: !!x.pathStyle, accessKey: str(x.accessKey), secretKey: str(x.secretKey), allowedTypes: str(x.allowedTypes), maxSize: str(x.maxSize), enabled: x.enabled !== false }))
@@ -179,16 +181,18 @@ function toApi(cfg) {
   return {
     flows: cfg.flows.map(f => ({
       code: f.code, name: nn(f.name), method: f.method, path: f.path, requestSchema: nn(f.reqSchema), responseSchema: nn(f.respSchema), requestHandler: nn(f.reqHandler),
-      responseHandler: nn(f.respHandler), errorHandler: nn(f.errorHandler), successStatus: int(f.successStatus) || 200, timeoutMs: int(f.timeout), auditMode: f.audit, enabled: f.enabled,
+      responseHandler: nn(f.respHandler), errorHandler: nn(f.errorHandler), successStatus: int(f.successStatus) || 200, timeoutMs: int(f.timeout), auditMode: f.audit, enabled: f.enabled, application: nn(f.application),
       steps: [...f.steps].sort((a, b) => a.order - b.order).map(s => ({ name: s.name, order: s.order, targetSystem: s.target, method: isSql(s) ? null : s.method, path: isSql(s) ? null : s.path, sql: isSql(s) ? s.sql : null, bodyTemplate: isSql(s) || isStore(s) ? null : nn(s.bodyTemplate), condition: nn(s.condition), success: nn(s.success),
         onFailure: s.onFailure, timeoutMs: int(s.timeout), responseSchema: nn(s.respSchema), requestHandler: nn(s.reqHandler), responseHandler: nn(s.respHandler), bodyCodec: nn(s.bodyCodec),
-        enabled: s.enabled, rules: s.rules.map(ruleOut) })),
-      response: f.response.map(ruleOut)
+        enabled: s.enabled, rules: s.rules.map(ruleOut), nextOnSuccess: nn(s.nextOk), nextOnFailure: nn(s.nextFail), responseExample: isSql(s) || isStore(s) ? null : nn(s.example) })),
+      response: f.response.map(ruleOut),
+      responses: (f.responses || []).map(r => ({ name: r.name, status: int(r.status) || 200, description: nn(r.description), rules: r.rules.map(ruleOut) }))
     })),
     targets: cfg.targets.map(t => ({ code: t.code, baseUrl: t.base, connectTimeoutMs: int(t.connect), readTimeoutMs: int(t.read), bodyCodec: nn(t.bodyCodec), enabled: t.enabled !== false, headers: t.headers.map(h => ({ name: h.n, value: h.v })),
       tls: tlsOut(t.tls) })),
     lookups: Object.keys(cfg.lookups).map(code => ({ code, entries: cfg.lookups[code].map(r => ({ source: r.src, target: r.tgt })) })),
     schemas: cfg.schemas.map(x => ({ code: x.code, description: nn(x.desc), text: x.text })),
+    applications: (cfg.applications || []).map(a => ({ code: a.code, name: nn(a.name), description: nn(a.description) })),
     storages: (cfg.storages || []).map(x => ({ code: x.code, type: x.type, baseDir: nn(x.baseDir), bucket: nn(x.bucket), prefix: nn(x.prefix), region: nn(x.region), endpoint: nn(x.endpoint), pathStyle: !!x.pathStyle,
       accessKey: nn(x.accessKey), secretKey: nn(x.secretKey), allowedTypes: nn(x.allowedTypes), maxSize: nn(x.maxSize), enabled: x.enabled !== false }))
   };
@@ -244,17 +248,23 @@ function guess(key, rule, lookups) {
 function synthSample(f, lookups) {
   const ctx = { request: { headers: {}, path: {}, query: {}, body: {} }, steps: {} };
   // a path variable gets the sample its rule expects (e.g. a number when the rule converts it with TO_NUMBER)
-  const allRules = [...f.steps.flatMap(s => s.rules), ...f.response];
+  const allRules = [...f.steps.flatMap(s => s.rules), ...f.response, ...(f.responses || []).flatMap(r => r.rules)];
   (f.path.match(/\{([^}]+)\}/g) || []).forEach(v => { const k = v.slice(1, -1); ctx.request.path[k] = guess(k, allRules.find(r => r.source === '$.request.path.' + k) || null, lookups); });
   f.steps.forEach(s => {
     if (isStore(s)) { ctx.steps[s.name] = { outcome: 'SUCCESS', headers: {}, body: s.method === 'DELETE' ? { storage: s.target, key: '2026/10/sample.pdf', deleted: true } : { storage: s.target, key: '2026/10/0b6c-sample.pdf', location: 'file:/data/files/2026/10/0b6c-sample.pdf', filename: 'sample.pdf', contentType: 'application/pdf', size: 24680, sha256: fileSample('x').sha256 } }; return; }
-    if (!isSql(s)) { ctx.steps[s.name] = { outcome: 'SUCCESS', status: 200, headers: {}, body: {} }; return; }
+    if (!isSql(s)) {
+      ctx.steps[s.name] = { outcome: 'SUCCESS', status: 200, headers: {}, body: {} };
+      // what the downstream answers: the step's response schema, then its example (both only describe; rules add the rest)
+      if (s.respSchema && SCHEMA_TEXT[s.respSchema]) { try { schemaSample(ctx, JSON.parse(SCHEMA_TEXT[s.respSchema]), '$.steps.' + s.name + '.body', lookups); } catch (e) { /* invalid schema: shown on Schemas */ } }
+      if (s.example) { try { const ex = JSON.parse(s.example); ctx.steps[s.name].body = ex !== null && typeof ex === 'object' ? ex : { value: ex }; } catch (e) { /* invalid example: shown in the inspector */ } }
+      return;
+    }
     const row = {}; sqlColumns(s.sql).forEach(c => { row[c] = guess(c, null, lookups); });
     ctx.steps[s.name] = { outcome: 'SUCCESS', headers: {}, body: { rows: Object.keys(row).length ? [row] : [], rowCount: 1, truncated: false } };
   });
   // the flow's request schema describes the body: every property is a field to drag
   if (f.reqSchema && SCHEMA_TEXT[f.reqSchema]) { try { schemaSample(ctx, JSON.parse(SCHEMA_TEXT[f.reqSchema]), '$.request.body', lookups); } catch (e) { /* invalid schema text: shown on Schemas */ } }
-  const all = [...f.steps.flatMap(s => s.rules), ...f.response];
+  const all = [...f.steps.flatMap(s => s.rules), ...f.response, ...(f.responses || []).flatMap(r => r.rules)];
   // an uploaded file is an object (filename, contentType, size, sha256), not a leaf value
   const files = () => all.forEach(r => { const m = /^\$\.request\.files\.([A-Za-z0-9_-]+)/.exec(r.source || ''); if (m) { ctx.request.files = ctx.request.files || {}; ctx.request.files[m[1]] = fileSample(m[1]); } });
   all.forEach(r => { if (r.source) { const t = toks(r.source).filter(x => typeof x === 'string' && x !== '*'); place(ctx, r.source, guess(t[t.length - 1] || 'value', r, lookups)); } });
@@ -355,24 +365,26 @@ function flowSql(f, lookupsUsed) {
   const opt = (c, v, num, cols, vals) => { if (v !== '' && v != null) { cols.push(c); vals.push(num ? v : q(v)); } };
   const fc = ['code', 'name', 'http_method', 'path_pattern'], fv = [q(f.code), q(f.name || f.code), q(f.method), q(f.path)];
   opt('request_schema_code', f.reqSchema, 0, fc, fv); opt('response_schema_code', f.respSchema, 0, fc, fv); opt('request_handler', f.reqHandler, 0, fc, fv); opt('response_handler', f.respHandler, 0, fc, fv); opt('error_handler', f.errorHandler, 0, fc, fv);
-  if (String(f.successStatus) !== '200') opt('success_status', f.successStatus, 1, fc, fv); opt('timeout_ms', f.timeout, 1, fc, fv); if (f.audit !== 'INHERIT') opt('audit_mode', f.audit, 0, fc, fv); if (!f.enabled) opt('enabled', 'false', 1, fc, fv);
+  if (String(f.successStatus) !== '200') opt('success_status', f.successStatus, 1, fc, fv); opt('timeout_ms', f.timeout, 1, fc, fv); if (f.audit !== 'INHERIT') opt('audit_mode', f.audit, 0, fc, fv); if (!f.enabled) opt('enabled', 'false', 1, fc, fv); opt('application_code', f.application, 0, fc, fv);
   out.push('-- ' + (f.name || f.code) + '\nINSERT INTO gw_flow (' + fc.join(', ') + ')\nVALUES (' + fv.join(', ') + ');');
   const steps = [...f.steps].sort((a, b) => a.order - b.order);
   steps.forEach(st => {
     const c = isSql(st) ? ['flow_id', 'name', 'step_order', 'target_system', 'sql_text'] : ['flow_id', 'name', 'step_order', 'target_system', 'http_method', 'path_template'];
     const v = isSql(st) ? ['id', q(st.name), st.order, q(st.target), q(st.sql)] : ['id', q(st.name), st.order, q(st.target), q(st.method), q(st.path)];
     opt('condition_expr', st.condition, 0, c, v); opt('success_expr', st.success, 0, c, v); if (st.onFailure !== 'STOP') opt('on_failure', st.onFailure, 0, c, v); opt('timeout_ms', st.timeout, 1, c, v);
-    opt('response_schema_code', st.respSchema, 0, c, v); opt('request_handler', st.reqHandler, 0, c, v); opt('response_handler', st.respHandler, 0, c, v); if (!isSql(st)) opt('body_codec', st.bodyCodec, 0, c, v); if (!isSql(st)) opt('body_template', st.bodyTemplate, 0, c, v); if (!st.enabled) opt('enabled', 'false', 1, c, v);
+    opt('response_schema_code', st.respSchema, 0, c, v); opt('request_handler', st.reqHandler, 0, c, v); opt('response_handler', st.respHandler, 0, c, v); if (!isSql(st)) opt('body_codec', st.bodyCodec, 0, c, v); if (!isSql(st)) opt('body_template', st.bodyTemplate, 0, c, v); opt('next_on_success', st.nextOk, 0, c, v); opt('next_on_failure', st.nextFail, 0, c, v); if (!st.enabled) opt('enabled', 'false', 1, c, v);
     out.push('INSERT INTO gw_flow_step (' + c.join(', ') + ')\nSELECT ' + v.join(', ') + '\nFROM gw_flow WHERE code = ' + q(f.code) + ';');
   });
-  const ruleSql = (r, i, st) => {
+  const ruleSql = (r, i, st, resp) => {
     const c = st ? ['flow_id', 'step_id', 'phase', 'seq', 'target_type', 'target_path'] : ['flow_id', 'phase', 'seq', 'target_type', 'target_path'];
     const v = st ? ['f.id', 's.id', "'STEP_REQUEST'", i + 1, q(r.type), q(r.target)] : ['id', "'FLOW_RESPONSE'", i + 1, q(r.type), q(r.target)];
+    if (resp) { c.push('response_name'); v.push(q(resp)); }
     opt('source_path', r.source, 0, c, v); if (!r.source) opt('constant_value', r.constant, 0, c, v); opt('default_value', r.def, 0, c, v); opt('lookup_code', r.lookup, 0, c, v); opt('converter', r.conv, 0, c, v); opt('field_handler', r.fh, 0, c, v); if (r.required) opt('required', 'true', 1, c, v);
     return 'INSERT INTO gw_mapping_rule (' + c.join(', ') + ')\nSELECT ' + v.join(', ') + (st ? '\nFROM gw_flow f JOIN gw_flow_step s ON s.flow_id = f.id\nWHERE f.code = ' + q(f.code) + ' AND s.name = ' + q(st.name) + ';' : '\nFROM gw_flow WHERE code = ' + q(f.code) + ';');
   };
   steps.forEach(st => { if (st.rules.length) out.push('-- ' + st.name + ': what the call sends\n' + st.rules.map((r, i) => ruleSql(r, i, st)).join('\n')); });
   if (f.response.length) out.push('-- what the client gets\n' + f.response.map((r, i) => ruleSql(r, i, null)).join('\n'));
+  (f.responses || []).forEach(r => out.push('-- response ' + r.name + ' (HTTP ' + (r.status || 200) + '), answered by a branch\nINSERT INTO gw_flow_response (flow_id, name, status_code' + (r.description ? ', description' : '') + ')\nSELECT id, ' + q(r.name) + ', ' + (parseInt(r.status, 10) || 200) + (r.description ? ', ' + q(r.description) : '') + '\nFROM gw_flow WHERE code = ' + q(f.code) + ';' + (r.rules.length ? '\n' + r.rules.map((x, i) => ruleSql(x, i, null, r.name)).join('\n') : '')));
   if (lookupsUsed.length) out.push('-- lookups the rules use (skip the ones the target database already has)\n' + lookupsUsed.map(([code, rows]) => rows.map(r => 'INSERT INTO gw_lookup_entry (lookup_code, source_value, target_value) VALUES (' + q(code) + ', ' + q(r.src) + ', ' + q(r.tgt) + ');').join('\n')).join('\n'));
   return out.join('\n\n');
 }
@@ -396,6 +408,43 @@ const toggle = (on, onClick, w = 38, h = 22, cls = '', title = '') => html`
   <button class=${'tgl ' + cls} onClick=${onClick} title=${title || (on ? 'enabled' : 'disabled')} style=${`width:${w}px;height:${h}px;flex:none;border:0;border-radius:${h / 2}px;background:${on ? 'oklch(0.62 0.13 155)' : '#D3D0C7'};position:relative;cursor:pointer;padding:0`}>
     <span style=${`position:absolute;top:3px;left:${on ? w - h + 3 : 3}px;width:${h - 6}px;height:${h - 6}px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2)`}></span>
   </button>`;
+// ---------- branching: where the flow goes after a step ----------
+const OK_C = 'oklch(0.5 0.13 155)', FAIL_C = 'oklch(0.55 0.18 25)';
+/** Renames a step and the routes of other steps that point at it. */
+const renameStep = (fl, st, v) => { const old = st.name; st.name = v; fl.steps.forEach(x => { if (x.nextOk === old) x.nextOk = v; if (x.nextFail === old) x.nextFail = v; }); };
+/** A route as shown to people: RESPOND:x → "respond x". */
+const routeLabel = v => (v && v.startsWith('RESPOND:') ? '⇒ ' + v.slice(8) : v);
+/** The routes of a step for its card: ✓ target / ✗ target, else its on_failure. */
+const routeTag = st => {
+  if (!st.nextOk && !st.nextFail) return html`<span style=${`color:${st.onFailure === 'CONTINUE' ? C.out : '#9A9CA2'}`}>${st.onFailure}</span>`;
+  return html`<span style="display:flex;gap:7px;white-space:nowrap">${st.nextOk && html`<span style=${`color:${OK_C}`}>✓ ${routeLabel(st.nextOk)}</span>`}${html`<span style=${`color:${FAIL_C}`}>✗ ${routeLabel(st.nextFail || st.onFailure)}</span>`}</span>`;
+};
+/** Draws the jumps of a flow as arcs over the pipeline row: success above the cards, failure below. */
+const drawRoutes = (svg, f) => {
+  const box = svg.parentElement; if (!box) return;
+  const b = box.getBoundingClientRect();
+  const card = name => box.querySelector(name === 'END' ? '[data-node="out"]' : name.startsWith('RESPOND:') ? `[data-resp="${CSS.escape(name.slice(8))}"]` : `[data-step="${CSS.escape(name)}"]`);
+  const at = (el, side) => { const r = el.getBoundingClientRect(); return { x: r.left - b.left + r.width / 2, y: (side === 'top' ? r.top : r.bottom) - b.top, w: r.width }; };
+  let out = '';
+  const arc = (from, to, ok, label, k) => {
+    const side = ok ? 'top' : 'bottom'; const s = at(from, side), t = at(to, side); const dir = ok ? -1 : 1;
+    const sx = s.x + (ok ? 16 : -16) + k * 6, tx = t.x - t.w / 2 + 18 + k * 6, lift = 34 + k * 8;
+    const ys = s.y, yt = t.y, peak = (ok ? Math.min(ys, yt) : Math.max(ys, yt)) + dir * lift;
+    const c = ok ? OK_C : FAIL_C;
+    out += `<path d="M${sx},${ys} C${sx},${peak} ${tx},${peak} ${tx},${yt}" fill="none" stroke="${c}" stroke-width="1.6" stroke-dasharray="${ok ? '' : '5 3'}" marker-end="url(#arr-${ok ? 'ok' : 'fail'})"/>`;
+    out += `<text x="${(sx + tx) / 2}" y="${peak + (ok ? -4 : 12)}" text-anchor="middle" font-size="10.5" font-family="${MONO.replace(/"/g, '')}" fill="${c}">${ok ? '✓' : '✗'} ${label}</text>`;
+  };
+  let k = 0;
+  f.steps.forEach(st => {
+    const from = box.querySelector(`[data-step="${CSS.escape(st.name)}"]`); if (!from) return;
+    [[st.nextOk, true], [st.nextFail, false]].forEach(([to, ok]) => {
+      if (!to || to === 'FAIL') return; const el = card(to); if (!el) return;
+      arc(from, el, ok, to === 'END' ? 'END' : st.name + ' → ' + routeLabel(to), k++ % 3);
+    });
+  });
+  svg.setAttribute('width', box.scrollWidth); svg.setAttribute('height', box.scrollHeight);
+  svg.innerHTML = `<defs><marker id="arr-ok" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="${OK_C}"/></marker><marker id="arr-fail" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="${FAIL_C}"/></marker></defs>` + out;
+};
 const errList = errs => errs.length > 0 && html`<div style="display:flex;flex-direction:column;gap:3px">${errs.map(e => html`<div style=${`font:11px/1.45 ${MONO};color:oklch(0.5 0.18 25)`}>${e}</div>`)}</div>`;
 const pageHead = (title, desc, btnLabel, onBtn) => html`
   <div style="display:flex;align-items:flex-end;gap:16px">
@@ -473,8 +522,55 @@ class App extends Component {
     this.reqSeq = { validate: 0, preview: 0 };
   }
 
+  // ---------- browser history: each screen has an address (#/flows, #/flow/CODE/mapping, ...) ----------
+  /** The address of the current screen, or null while there is nothing to show. */
+  routeOf(st) {
+    if (st.phase !== 'ready' || !st.cfg) return null;
+    if (st.screen === 'flow') { const f = st.cfg.flows[st.cur]; return f ? '#/flow/' + encodeURIComponent(f.code) + '/' + st.tab : '#/flows'; }
+    return '#/' + st.screen;
+  }
+
+  /** Navigation part of the state an address stands for; null when it names nothing (e.g. a deleted flow). */
+  stateOfRoute(hash) {
+    const m = /^#\/([a-z]+)(?:\/([^/]+)(?:\/([a-z]+))?)?$/.exec(hash || '');
+    if (!m) return null;
+    if (m[1] === 'flow') {
+      const i = this.state.cfg.flows.findIndex(f => f.code === decodeURIComponent(m[2] || ''));
+      if (i < 0) return null;
+      return { screen: 'flow', cur: i, tab: ['pipeline', 'mapping', 'tests', 'rows'].includes(m[3]) ? m[3] : 'pipeline', sel: { kind: 'flow' }, scope: 'resp', preview: null };
+    }
+    return ['flows', 'targets', 'lookups', 'schemas', 'storages', 'audit'].includes(m[1]) ? { screen: m[1] } : null;
+  }
+
+  /** Records a screen change in the browser history (a new entry, or the same one when only the flow code changed). */
+  componentDidUpdate(prevProps, prev) {
+    const route = this.routeOf(this.state);
+    if (!route || route === location.hash) return;
+    const st = this.state;
+    const sameScreen = prev.phase === 'ready' && prev.screen === st.screen && prev.cur === st.cur && prev.tab === st.tab;
+    if (this.restoring || sameScreen || !location.hash) {
+      history.replaceState({ i: this.histIndex || 0 }, '', route);
+    } else {
+      this.histIndex = (this.histIndex || 0) + 1;
+      history.pushState({ i: this.histIndex }, '', route);
+    }
+  }
+
+  /** Back: the previous Studio screen when there is one, else the list of flows. */
+  goBack() {
+    if ((this.histIndex || 0) > 0) history.back();
+    else this.setState({ screen: 'flows', preview: null });
+  }
+
   componentDidMount() {
     if (this.state.token) this.load();
+    window.addEventListener('popstate', e => {
+      if (this.state.phase !== 'ready') return;
+      this.histIndex = e.state && typeof e.state.i === 'number' ? e.state.i : 0;
+      const next = this.stateOfRoute(location.hash) || { screen: 'flows' };
+      this.restoring = true;
+      this.setState({ ...next, appModal: null, confirm: null }, () => { this.restoring = false; this.changed(); });
+    });
     document.addEventListener('keydown', e => {
       if (this.state.confirm) { // modal: Esc cancels, Enter confirms, Tab stays between its two buttons
         if (e.key === 'Escape') { e.preventDefault(); this.setState({ confirm: null }); }
@@ -517,7 +613,11 @@ class App extends Component {
       if (c.status !== 200) throw new Error((c.json.errors || ['HTTP ' + c.status]).join('; '));
       const cfg = fromApi(c.json);
       this.setState({ phase: 'ready', cfg, baseJson: JSON.stringify(toApi(cfg)), version: c.json.version, catalog: cat.json, problems: [], preview: null,
-        cur: Math.min(this.state.cur, Math.max(cfg.flows.length - 1, 0)) }, () => this.changed());
+        cur: Math.min(this.state.cur, Math.max(cfg.flows.length - 1, 0)) }, () => {
+        const target = !this.routed && this.stateOfRoute(location.hash);
+        this.routed = true;
+        if (target) { this.restoring = true; this.setState(target, () => { this.restoring = false; this.changed(); }); } else this.changed();
+      });
     } catch (e) {
       if (e.message !== 'unauthorized') this.setState({ phase: 'error', loginError: String(e.message || e) });
     }
@@ -541,13 +641,14 @@ class App extends Component {
   async runPreview() {
     const s = this.state; const f = s.cfg && s.cfg.flows[s.cur];
     if (!f || s.screen !== 'flow' || s.tab !== 'mapping') return;
-    const st = s.scope !== 'resp' ? f.steps.find(x => x.id === s.scope) : null;
+    const st = s.scope !== 'resp' ? f.steps.find(x => x.id === s.scope) || null : null;
+    const rs = s.scope.startsWith('resp:') ? (f.responses || []).find(x => 'resp:' + x.id === s.scope) : null;
     let sample;
     try { sample = this.sampleText(f) ? JSON.parse(this.sampleText(f)) : synthSample(f, s.cfg.lookups); } catch (e) { this.setState({ preview: { errors: ['sample context is not valid JSON: ' + e.message], rules: [], output: null } }); return; }
     const n = ++this.reqSeq.preview;
     try {
-      const r = await this.api('POST', 'preview', { config: toApi(s.cfg), flow: f.code, step: st ? st.name : null, sample });
-      if (n === this.reqSeq.preview) this.setState({ preview: r.status === 200 ? { ...r.json, key: f.code + '/' + (st ? st.name : '') } : { errors: r.json.errors || ['HTTP ' + r.status], rules: [], output: null } });
+      const r = await this.api('POST', 'preview', { config: toApi(s.cfg), flow: f.code, step: st ? st.name : null, response: rs ? rs.name : null, sample });
+      if (n === this.reqSeq.preview) this.setState({ preview: r.status === 200 ? { ...r.json, key: f.code + '/' + (st ? st.name : rs ? '@' + rs.name : '') } : { errors: r.json.errors || ['HTTP ' + r.status], rules: [], output: null } });
     } catch (e) { /* shown by api() */ }
   }
 
@@ -587,7 +688,13 @@ class App extends Component {
   // view-only: re-render so a field the user typed into shows the real (unchanged) value again
   mut(fn) { if (this.ro) { this.forceUpdate(); return; } this.setState(s => { const cfg = clone(s.cfg); const extra = fn(cfg.flows[s.cur], s, cfg) || {}; return { cfg, ...extra }; }, () => this.changed()); }
   mutCfg(fn) { if (this.ro) { this.forceUpdate(); return; } this.setState(s => { const cfg = clone(s.cfg); fn(cfg, s); return { cfg }; }, () => this.changed()); }
-  norm(f) { const os = [...new Set(f.steps.map(x => x.order))].sort((a, b) => a - b); f.steps.forEach(x => { x.order = os.indexOf(x.order) + 1; }); }
+  norm(f) {
+    const os = [...new Set(f.steps.map(x => x.order))].sort((a, b) => a - b); f.steps.forEach(x => { x.order = os.indexOf(x.order) + 1; });
+    // a route to a deleted step goes back to the default (the server would reject it)
+    const names = new Set(f.steps.map(x => x.name)); const resps = new Set((f.responses || []).map(r => 'RESPOND:' + r.name));
+    const keep = v => !v || v === 'END' || v === 'FAIL' || names.has(v) || resps.has(v);
+    f.steps.forEach(x => { if (!keep(x.nextOk)) x.nextOk = ''; if (!keep(x.nextFail)) x.nextFail = ''; });
+  }
   ds(payload) { if (this.ro) return e => e.preventDefault(); return e => { e.dataTransfer.effectAllowed = 'copyMove'; try { e.dataTransfer.setData('text/plain', payload.kind); } catch (_) { /* ignore */ } setTimeout(() => this.setState({ drag: payload, over: null }), 0); }; }
   dragEnd = () => this.setState({ drag: null, over: null });
   zone(id, accepts, onDrop) {
@@ -599,6 +706,45 @@ class App extends Component {
       onDrop: e => { const dd = this.state.drag; if (!dd || !accepts(dd)) return; e.preventDefault(); e.stopPropagation(); this.setState({ drag: null, over: null }); onDrop(dd); }
     };
   }
+  /** The codec that decodes a step's responses: its own, its target's, or the default for its body template. */
+  stepCodec(st) {
+    if (st.bodyCodec) return st.bodyCodec;
+    const t = this.state.cfg.targets.find(x => x.code === st.target) || (this.state.catalog.configTargets || []).find(x => x.code === st.target);
+    if (t && t.bodyCodec) return t.bodyCodec;
+    return st.bodyTemplate && templateKind(st.bodyTemplate) === 'xml' ? (/:?Envelope/.test(st.bodyTemplate) ? 'soapCodec' : 'xmlCodec') : '';
+  }
+
+  /** Stores {@code text} (JSON, or XML / SOAP decoded by the step's codec) as the step's response example. */
+  async applyExample(f, st, text) {
+    const t = String(text || '').trim(); const ex = this.state.exEdit;
+    const fail = m => this.setState({ exEdit: { ...ex, text, busy: false, error: m } });
+    if (!t) { fail('Paste a response first.'); return; }
+    let body;
+    if (t.startsWith('<')) {
+      this.setState({ exEdit: { ...ex, text, busy: true, error: '' } });
+      const r = await this.api('POST', 'decode', { codec: this.stepCodec(st) || null, text: t });
+      if (r.status !== 200) { fail((r.json.errors || ['HTTP ' + r.status]).join('; ')); return; }
+      body = r.json.body;
+    } else {
+      try { body = JSON.parse(t); } catch (e) { fail('Not valid JSON: ' + e.message); return; }
+    }
+    const json = pretty(body);
+    this.mut(fl => { fl.steps.find(x => x.id === st.id).example = json; return { exEdit: null }; });
+    // an edited sample context wins over the generated one: put the example in it too
+    const stored = this.sampleText(f);
+    if (stored) { try { const smp = JSON.parse(stored); smp.steps = smp.steps || {}; smp.steps[st.name] = { ...(smp.steps[st.name] || { outcome: 'SUCCESS', status: 200, headers: {} }), body }; this.setState(x => ({ samples: { ...x.samples, [f.code]: pretty(smp) } })); } catch (e) { /* invalid sample: left as it is */ } }
+  }
+
+  /** Fills the example editor with the newest audited response of the step. */
+  async lastResponse(f, st) {
+    const ex = this.state.exEdit; this.setState({ exEdit: { ...ex, busy: true, error: '' } });
+    const r = await this.api('GET', 'audit/last-response?flow=' + encodeURIComponent(f.code) + '&step=' + encodeURIComponent(st.name));
+    if (r.status !== 200) { this.setState({ exEdit: { ...ex, busy: false, error: (r.json.errors || ['HTTP ' + r.status]).join('; ') } }); return; }
+    let v = r.json.response_payload; try { v = JSON.parse(v); } catch (e) { /* stored as text */ }
+    const text = typeof v === 'string' ? (v.trim().startsWith('<') ? prettyXml(v) : v) : pretty(v);
+    this.setState({ exEdit: { ...ex, busy: false, error: '', text, note: 'From call ' + r.json.correlation_id + ' at ' + r.json.started_at + '. Masked fields stay masked.' } });
+  }
+
   allTargets() {
     const s = this.state; const db = s.cfg.targets.map(t => ({ code: t.code, base: t.base, headers: t.headers, source: 'db' }));
     const yml = (s.catalog.configTargets || []).filter(t => !db.some(d => d.code === t.code)).map(t => ({ code: t.code, base: t.baseUrl || '', headers: (t.headers || []).map(n => ({ n, v: '<application.yml>' })), source: 'yml' }));
@@ -607,7 +753,7 @@ class App extends Component {
   newStep(f, target, order, sql, store) {
     const base = sql ? 'query' : store ? 'store' : String(target).toLowerCase().split('_')[0] || 'call';
     let name = base, i = 2; while (f.steps.some(x => x.name === name)) name = base + (i++);
-    return { id: uid('s'), name, order, target, method: 'GET', path: '/', onFailure: 'STOP', timeout: '', condition: '', success: '', reqHandler: '', respHandler: '', respSchema: '', bodyCodec: '', enabled: true, rules: [],
+    return { id: uid('s'), name, order, target, method: 'GET', path: '/', onFailure: 'STOP', nextOk: '', nextFail: '', timeout: '', condition: '', success: '', reqHandler: '', respHandler: '', respSchema: '', bodyCodec: '', enabled: true, rules: [],
       sql: sql ? 'SELECT *\nFROM my_table\nWHERE id = :id' : null,
       ...(store ? { method: 'PUT', path: '/{yyyy}/{MM}/{uuid}-{filename}', rules: [ruleIn({ type: 'BODY', target: '$.file', source: '$.request.files.file', required: true })] } : {}) };
   }
@@ -715,6 +861,7 @@ class App extends Component {
         ${s.screen === 'audit' && this.renderAudit()}
         ${s.toast && this.renderToast()}
         ${s.confirm && this.renderConfirm()}
+        ${s.appModal && this.renderAppModal()}
         ${s.catalog.assistantEnabled && s.assistant && s.assistant.open && this.renderAssistant()}
       </div>`;
   }
@@ -790,7 +937,7 @@ class App extends Component {
       <div style="position:fixed;right:20px;bottom:20px;width:min(440px,calc(100vw - 32px));background:#17181C;color:#E9E7E1;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.25);overflow:hidden;z-index:10">
         <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #2B2D33">
           <span style=${`font:600 11px ${MONO};color:#17181C;background:${t.color};padding:2px 7px;border-radius:4px`}>${t.status}</span>
-          <span style=${`font:12px ${MONO};color:#8E9097`}>PUT /studio/api/config</span>
+          <span style=${`font:12px ${MONO};color:#8E9097`}>${t.title || 'PUT /studio/api/config'}</span>
           <span style="flex:1"></span>
           <button onClick=${() => this.setState({ toast: null })} style="border:0;background:none;color:#8E9097;cursor:pointer;font-size:15px">×</button>
         </div>
@@ -800,30 +947,165 @@ class App extends Component {
   }
 
   // ---------- flows list ----------
-  renderFlows() {
-    const s = this.state; const base = s.catalog.apiBasePath;
-    const open = i => () => this.setState({ screen: 'flow', tab: 'pipeline', cur: i, sel: { kind: 'flow' }, scope: 'resp', preview: null });
-    const newFlow = () => this.mutCfg((cfg, st) => {
+  /** Applications with their flows (index in cfg.flows); a flow naming an unknown application gets a section too. */
+  appSections() {
+    const cfg = this.state.cfg; const apps = [...(cfg.applications || [])];
+    cfg.flows.forEach(f => { const c = f.application || 'DEFAULT'; if (!apps.some(a => a.code === c)) apps.push({ code: c, name: '', description: '', missing: true }); });
+    return apps.sort((a, b) => a.code.localeCompare(b.code)).map(a => ({ app: a, flows: cfg.flows.map((f, i) => ({ f, i })).filter(x => (x.f.application || 'DEFAULT') === a.code) }));
+  }
+
+  /** New flow in application {@code code}, opened right away. */
+  addFlow(code) {
+    this.mutCfg(cfg => {
       let k = 1; while (cfg.flows.some(x => x.code === 'NEW_FLOW_' + k || x.path === '/v1/new-' + k)) k++;
-      cfg.flows.push({ code: 'NEW_FLOW_' + k, name: 'New flow', method: 'GET', path: '/v1/new-' + k, reqSchema: '', respSchema: '', reqHandler: '', respHandler: '', errorHandler: '', successStatus: '200', timeout: '', audit: 'INHERIT', enabled: true, steps: [], response: [] });
+      cfg.flows.push({ code: 'NEW_FLOW_' + k, name: 'New flow', method: 'GET', path: '/v1/new-' + k, reqSchema: '', respSchema: '', reqHandler: '', respHandler: '', errorHandler: '', successStatus: '200', timeout: '', audit: 'INHERIT', enabled: true, steps: [], response: [], responses: [], application: code });
       setTimeout(() => this.setState({ cur: cfg.flows.length - 1, screen: 'flow', tab: 'pipeline', sel: { kind: 'flow' }, scope: 'resp' }), 0);
     });
+  }
+
+  /** Opens the application dialog: mode 'flow' (choose or create the application of a new flow), 'new' or 'edit'. */
+  openAppModal(mode, app) {
+    const apps = this.state.cfg.applications || [];
+    this.setState({ appModal: mode === 'edit' ? { mode, orig: app.code, code: app.code, name: app.name, description: app.description, error: '' }
+      : { mode, pick: mode === 'flow' && apps.length ? apps[0].code : '+new', code: '', name: '', description: '', error: '' } });
+  }
+
+  saveAppModal() {
+    const m = this.state.appModal; const apps = this.state.cfg.applications || [];
+    const creating = m.mode === 'new' || (m.mode === 'flow' && m.pick === '+new');
+    if (m.mode === 'flow' && !creating) { this.setState({ appModal: null }); this.addFlow(m.pick); return; }
+    const code = (m.code || '').trim();
+    const err = !code ? 'Give the application a code.' : !/^[A-Z][A-Z0-9_]*$/.test(code) ? 'Code: capitals, digits and _, starting with a letter.'
+      : apps.some(a => a.code === code && a.code !== m.orig) ? 'Application ' + code + ' already exists.' : '';
+    if (err) { this.setState({ appModal: { ...m, error: err } }); return; }
+    this.mutCfg(cfg => {
+      cfg.applications = cfg.applications || [];
+      if (m.mode === 'edit') {
+        const a = cfg.applications.find(x => x.code === m.orig); if (!a) return;
+        a.code = code; a.name = m.name; a.description = m.description;
+        if (code !== m.orig) cfg.flows.forEach(f => { if (f.application === m.orig) f.application = code; });
+      } else cfg.applications.push({ code, name: m.name, description: m.description });
+    });
+    this.setState({ appModal: null });
+    if (m.mode === 'flow') setTimeout(() => this.addFlow(code), 0);
+  }
+
+  renderAppModal() {
+    const m = this.state.appModal; const apps = this.state.cfg.applications || [];
+    const set = patch => this.setState({ appModal: { ...m, ...patch, error: '' } });
+    const creating = m.mode !== 'flow' || m.pick === '+new';
+    const title = m.mode === 'edit' ? 'Edit application ' + m.orig : m.mode === 'new' ? 'New application' : 'New flow: which application?';
+    const field = (label, key, extra = {}) => html`<label style="display:flex;flex-direction:column;gap:4px"><span style="font-size:12px;font-weight:500">${label}</span>
+      ${extra.area ? html`<textarea class="inp" rows="2" value=${m[key] || ''} onInput=${e => set({ [key]: e.currentTarget.value })} style="border:1px solid #E4E1D8;border-radius:6px;padding:7px 9px;font-size:12.5px;background:#FAF9F6;resize:vertical"></textarea>`
+        : html`<input class="inp" value=${m[key] || ''} placeholder=${extra.ph || ''} onInput=${e => set({ [key]: extra.upper ? e.currentTarget.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_') : e.currentTarget.value })} style=${inputStyle(34, 12.5)}/>`}
+      ${extra.hint && html`<span style="font-size:11px;color:#9A9CA2">${extra.hint}</span>`}</label>`;
+    return html`
+      <div onClick=${() => this.setState({ appModal: null })} style="position:fixed;inset:0;z-index:50;background:rgba(23,24,28,.45);display:grid;place-items:center;padding:16px">
+        <div role="dialog" aria-modal="true" onClick=${e => e.stopPropagation()} onKeyDown=${e => { if (e.key === 'Escape') this.setState({ appModal: null }); if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') this.saveAppModal(); }} style="width:min(460px,100%);background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden">
+          <div style="padding:18px 20px 4px;font-size:15px;font-weight:600">${title}</div>
+          <div style="padding:6px 20px 0;font-size:12px;color:#6A6D75;line-height:1.5">${m.mode === 'flow' ? 'Every flow belongs to an application, so its configuration can be exported and moved as one unit.' : 'Groups flows. Export it to move its flows, steps and mapping rules (with the target systems, lookups, schemas and storages they use) to another environment.'}</div>
+          <div style="padding:14px 20px 0;display:flex;flex-direction:column;gap:11px">
+            ${m.mode === 'flow' && html`<label style="display:flex;flex-direction:column;gap:4px"><span style="font-size:12px;font-weight:500">Application</span>
+              <select id="app-pick" value=${m.pick} onChange=${e => set({ pick: e.currentTarget.value })} style=${inputStyle(34, 12.5)}>
+                ${apps.map(a => html`<option value=${a.code}>${a.code}${a.name ? ' · ' + a.name : ''}</option>`)}
+                <option value="+new">+ New application…</option>
+              </select></label>`}
+            ${creating && field('Code', 'code', { upper: true, ph: 'CORE_BANKING_API', hint: m.mode === 'edit' ? 'Renaming moves its flows along.' : 'Capitals, digits and _ (gw_application.code).' })}
+            ${creating && field('Name', 'name', { ph: 'Core banking API' })}
+            ${creating && field('Description', 'description', { area: true })}
+            ${m.error && html`<div style=${`font:11.5px ${MONO};color:${C.err}`}>${m.error}</div>`}
+          </div>
+          <div style="padding:16px 20px 18px;display:flex;justify-content:flex-end;gap:8px">
+            <button class="btn-line" onClick=${() => this.setState({ appModal: null })} style="border:1px solid #E4E1D8;background:#fff;border-radius:7px;padding:8px 14px;cursor:pointer;font-weight:500">Cancel</button>
+            <button id="app-ok" class="btn-dark" onClick=${() => this.saveAppModal()} style="border:0;background:#17181C;color:#fff;border-radius:7px;padding:8px 14px;cursor:pointer;font-weight:600">${m.mode === 'edit' ? 'Save' : m.mode === 'new' ? 'Create application' : creating ? 'Create and add flow' : 'Add flow'}</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  async exportApp(code, format) {
+    const err = await this.download('api/applications/' + encodeURIComponent(code) + '/export?format=' + format, code + '.' + (format === 'liquibase' ? 'xml' : format));
+    if (err) this.setState({ toast: { status: 'Export', title: 'Export ' + code, color: 'oklch(0.72 0.15 25)', body: err, note: '' } });
+  }
+
+  /**
+   * Loads an exported application (JSON) into the page as unsaved changes: the application and its flows replace
+   * those with the same codes (its other flows are removed), shared items are added when missing and kept when this
+   * gateway already has them. Nothing is written until Save & reload, which validates it like any edit.
+   */
+  importApp(text) {
+    let d; try { d = JSON.parse(text); } catch (e) { d = null; }
+    const fail = msg => this.setState({ toast: { status: 'Import', title: 'Import application', color: 'oklch(0.72 0.15 25)', body: msg, note: '' } });
+    if (!d || d.format !== 'json-gateway-application' || !d.application || !d.application.code) { fail('Not an application export (a JSON file from Flows → Export → JSON).'); return; }
+    const inc = fromApi({ flows: d.flows || [], targets: d.targets || [], lookups: d.lookups || [], schemas: d.schemas || [], storages: d.storages || [], applications: [d.application] });
+    const app = inc.applications[0]; const notes = []; let added = 0, replaced = 0, removed = 0;
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    this.mutCfg(cfg => {
+      cfg.applications = cfg.applications || [];
+      const ex = cfg.applications.find(a => a.code === app.code);
+      if (ex) { ex.name = app.name; ex.description = app.description; } else cfg.applications.push(app);
+      const codes = new Set(inc.flows.map(f => f.code));
+      const before = cfg.flows.length;
+      cfg.flows = cfg.flows.filter(f => (f.application || 'DEFAULT') !== app.code || codes.has(f.code)); removed = before - cfg.flows.length;
+      inc.flows.forEach(f => {
+        f.application = app.code; const i = cfg.flows.findIndex(x => x.code === f.code);
+        if (i >= 0) { if ((cfg.flows[i].application || 'DEFAULT') !== app.code) notes.push('flow ' + f.code + ' moved here from ' + cfg.flows[i].application); cfg.flows[i] = f; replaced++; } else { cfg.flows.push(f); added++; }
+      });
+      const merge = (list, item, what) => { const e = list.find(x => x.code === item.code); if (!e) { list.push(item); notes.push(what + ' ' + item.code + ' added'); } else if (!same(e, item)) notes.push(what + ' ' + item.code + ' already exists here and differs: kept this gateway\'s'); };
+      inc.targets.forEach(t => merge(cfg.targets, t, 'target system'));
+      inc.schemas.forEach(x => merge(cfg.schemas, x, 'schema'));
+      inc.storages.forEach(x => merge(cfg.storages = cfg.storages || [], x, 'storage'));
+      Object.keys(inc.lookups).forEach(code => { if (!cfg.lookups[code]) { cfg.lookups[code] = inc.lookups[code]; notes.push('lookup ' + code + ' added'); } else if (!same(cfg.lookups[code], inc.lookups[code])) notes.push('lookup ' + code + ' already exists here and differs: kept this gateway\'s'); });
+    });
+    const req = Object.entries(d.requires || {}).filter(([, v]) => v && v.length).map(([k, v]) => k + ': ' + v.join(', '));
+    this.setState({ toast: { status: 'Imported', title: 'Import ' + app.code + ' · not saved yet', color: 'oklch(0.78 0.13 155)',
+      body: [added + ' flow(s) added, ' + replaced + ' replaced' + (removed ? ', ' + removed + ' removed (not in the file)' : ''), ...notes, ...req.map(r => 'needs ' + r),
+        ...(d.replacedSecrets && d.replacedSecrets.length ? ['set these environment variables: ' + d.replacedSecrets.join(', ')] : [])].join('\n'),
+      note: 'Review, then Save & reload: the save validates it like any edit.' } });
+  }
+
+  renderFlows() {
+    const s = this.state; const base = s.catalog.apiBasePath; const dirty = this.dirty();
+    const open = i => () => this.setState({ screen: 'flow', tab: 'pipeline', cur: i, sel: { kind: 'flow' }, scope: 'resp', preview: null });
     const grid = 'display:grid;grid-template-columns:minmax(0,2.4fr) minmax(0,1.4fr) 70px minmax(0,1.5fr) 80px 90px;gap:12px';
     const other = s.problems.filter(m => !s.cfg.flows.some(f => m.includes(`flow '${f.code}'`)) && !/^(target system|lookup|json schema|storage) '/.test(m));
+    const small = (label, onClick, disabled, title, cls = 'btn-line') => html`<button class=${cls} disabled=${disabled} title=${title || ''} onClick=${onClick} style="border:1px solid #E4E1D8;background:#fff;color:#17181C;border-radius:7px;padding:5px 10px;cursor:pointer;font-weight:500;font-size:12px;white-space:nowrap">${label}</button>`;
+    const pickFile = () => { const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json'; inp.onchange = async () => { const f = inp.files && inp.files[0]; if (f) this.importApp(await f.text()); }; inp.click(); };
+    const sections = this.appSections();
     return html`
       <div style="flex:1;min-height:0;overflow:auto;padding:28px 32px 60px">
         <div style="max-width:1080px;margin:0 auto">
-          ${pageHead('Flows', html`One flow per inbound endpoint under ${mono(base)}. Rows in ${mono('gw_flow')}.`, '+ New flow', newFlow)}
-          <div style="margin-top:12px;display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;font-size:12px;color:#6A6D75">
+          ${pageHead('Flows', html`Flows grouped by application; one flow per inbound endpoint under ${mono(base)}. Rows in ${mono('gw_application')} and ${mono('gw_flow')}.`, '+ New flow', () => this.openAppModal('flow'))}
+          <div style="margin-top:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:#6A6D75">
+            <span class="ro-hide" style="display:flex;gap:8px">${small('+ New application', () => this.openAppModal('new'))}${small('Import application…', pickFile, false, 'Load a JSON export as unsaved changes')}</span>
+            <span style="flex:1"></span>
             <span title="One document for every live endpoint, built from the API description (Swagger)">API specification of all endpoints</span>
-            ${['docx:Word', 'pdf:PDF', 'md:Markdown'].map(x => { const [fmt, label] = x.split(':'); return html`<button class="btn-line" disabled=${this.dirty()} title=${this.dirty() ? 'Save & reload first: the spec comes from the live configuration' : ''} onClick=${() => this.downloadSpec(null, fmt)} style="border:1px solid #E4E1D8;background:#fff;color:#17181C;border-radius:7px;padding:6px 11px;cursor:pointer;font-weight:500;font-size:12px">${label}</button>`; })}
+            ${['docx:Word', 'pdf:PDF', 'md:Markdown'].map(x => { const [fmt, label] = x.split(':'); return small(label, () => this.downloadSpec(null, fmt), dirty, dirty ? 'Save & reload first: the spec comes from the live configuration' : ''); })}
           </div>
-          <div style="margin-top:20px;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:auto">
-            <div style=${`${grid};min-width:760px;padding:10px 16px;font:600 10px ${MONO};letter-spacing:.06em;color:#9A9CA2;border-bottom:1px solid #EFEDE6`}>
-              <span>ENDPOINT</span><span>CODE</span><span>STEPS</span><span>ERROR HANDLER</span><span>AUDIT</span><span>ENABLED</span>
+          ${sections.map(({ app, flows }) => html`
+          <div style="margin-top:18px;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:auto">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px;background:#FAF9F6;border-bottom:1px solid #EFEDE6;min-width:760px">
+              <span style=${`font:600 10px ${MONO};letter-spacing:.06em;color:#fff;background:#3E4047;padding:3px 7px;border-radius:4px`}>APP</span>
+              <span style=${`font:600 13px ${MONO}`}>${app.code}</span>
+              ${app.name && html`<span style="font-weight:500">${app.name}</span>`}
+              <span style=${`font:11px ${MONO};color:#9A9CA2`}>${flows.length} flow${flows.length === 1 ? '' : 's'}</span>
+              ${app.missing && html`<span style=${`font:11px ${MONO};color:${C.err}`}>not defined: + New application with this code</span>`}
+              <span style="flex:1"></span>
+              <span class="ro-hide" style="display:flex;gap:6px">
+                ${small('+ Flow', () => this.addFlow(app.code), app.missing)}
+                ${!app.missing && small('Edit', () => this.openAppModal('edit', app))}
+                ${!app.missing && small('Delete', () => this.ask('Delete application ' + app.code + '?', 'Only an application without flows can be deleted. Nothing changes in the database until Save & reload.', () => this.mutCfg(cfg => { cfg.applications = cfg.applications.filter(a => a.code !== app.code); })), flows.length > 0, flows.length ? 'Move or delete its flows first' : '', 'btn-line btn-del')}
+              </span>
+              <span style="display:flex;align-items:center;gap:6px;color:#6A6D75">Export
+                ${[['json', 'JSON'], ['sql', 'SQL'], ['liquibase', 'Liquibase']].map(([fmt, label]) => small(label, () => this.exportApp(app.code, fmt), dirty || app.missing, dirty ? 'Save & reload first: the export reads the saved configuration' : 'Its flows, steps, rules and the shared items they use'))}
+              </span>
             </div>
-            ${s.cfg.flows.length === 0 && html`<div style="padding:22px 16px;color:#6A6D75">No flows yet.</div>`}
-            ${s.cfg.flows.map((x, i) => {
+            ${app.description && html`<div style="padding:8px 16px;font-size:12px;color:#6A6D75;border-bottom:1px solid #F3F1EC;min-width:760px">${app.description}</div>`}
+            ${flows.length > 0 && html`<div style=${`${grid};min-width:760px;padding:8px 16px;font:600 10px ${MONO};letter-spacing:.06em;color:#9A9CA2;border-bottom:1px solid #EFEDE6`}>
+              <span>ENDPOINT</span><span>CODE</span><span>STEPS</span><span>ERROR HANDLER</span><span>AUDIT</span><span>ENABLED</span>
+            </div>`}
+            ${flows.length === 0 && html`<div style="padding:16px;color:#6A6D75;font-size:12.5px;min-width:760px">No flows yet. <b>+ Flow</b> adds one to this application.</div>`}
+            ${flows.map(({ f: x, i }) => {
               const np = this.flowProblems(x).length;
               return html`
               <div class="row" onClick=${open(i)} style=${`${grid};min-width:760px;align-items:center;padding:12px 16px;border-bottom:1px solid #F3F1EC;cursor:pointer`}>
@@ -839,7 +1121,8 @@ class App extends Component {
                 ${toggle(x.enabled, e => { e.stopPropagation(); this.mutCfg(cfg => { cfg.flows[i].enabled = !cfg.flows[i].enabled; }); })}
               </div>`;
             })}
-          </div>
+          </div>`)}
+          ${sections.length === 0 && html`<div style="margin-top:20px;padding:26px;border:1.5px dashed #C9C6BC;border-radius:10px;color:#6A6D75;text-align:center;font-size:12.5px">No applications yet. <b>+ New flow</b> starts by naming its application.</div>`}
           ${other.length > 0 && html`
             <div style="margin-top:16px;background:#fff;border:1px solid oklch(0.85 0.06 25);border-radius:9px;overflow:hidden">
               <div style="padding:8px 12px;background:oklch(0.96 0.025 25);font-weight:600;color:oklch(0.45 0.17 25);font-size:12px">Other problems · a save would be rejected</div>
@@ -956,14 +1239,14 @@ class App extends Component {
   renderLookups() {
     const s = this.state; const L = s.cfg.lookups;
     const val = e => e.currentTarget.value;
-    const usedBy = code => s.cfg.flows.reduce((a, x) => a + [...x.response, ...x.steps.flatMap(y => y.rules)].filter(r => r.lookup === code).length, 0);
+    const usedBy = code => s.cfg.flows.reduce((a, x) => a + [...x.response, ...x.steps.flatMap(y => y.rules), ...(x.responses || []).flatMap(y => y.rules)].filter(r => r.lookup === code).length, 0);
     const handlers = code => s.catalog.errorHandlers.filter(h => h.lookupCode === code).map(h => h.name);
     const upd = (code, fn) => this.mutCfg(cfg => fn(cfg.lookups[code], cfg));
     const newLookup = () => this.mutCfg(cfg => { let k = 1; while (cfg.lookups['NEW_LOOKUP_' + k]) k++; cfg.lookups['NEW_LOOKUP_' + k] = [{ src: '', tgt: '' }]; });
     const rename = (code, v) => this.mutCfg(cfg => {
       if (!v || (v !== code && cfg.lookups[v])) return;
       const nl = {}; Object.keys(cfg.lookups).forEach(k => { nl[k === code ? v : k] = cfg.lookups[k]; }); cfg.lookups = nl;
-      cfg.flows.forEach(f2 => [...f2.response, ...f2.steps.flatMap(st => st.rules)].forEach(r => { if (r.lookup === code) r.lookup = v; }));
+      cfg.flows.forEach(f2 => [...f2.response, ...f2.steps.flatMap(st => st.rules), ...(f2.responses || []).flatMap(y => y.rules)].forEach(r => { if (r.lookup === code) r.lookup = v; }));
     });
     const cols = 'display:grid;grid-template-columns:96px 14px 1fr 22px;gap:6px';
     return html`
@@ -1326,7 +1609,10 @@ class App extends Component {
     return html`
       <div style="flex:1;min-height:0;display:flex;flex-direction:column">
         <div style="height:48px;flex:none;display:flex;align-items:center;gap:12px;padding:0 16px;background:#FFFFFF;border-bottom:1px solid #E4E1D8;overflow:hidden">
+          <button id="nav-back" class="btn-line" onClick=${() => this.goBack()} title=${(this.histIndex || 0) > 0 ? 'Back to the previous screen (browser Back works too)' : 'Back to Flows'} aria-label="Back" style="flex:none;width:30px;height:30px;border:1px solid #E4E1D8;background:#fff;border-radius:7px;cursor:pointer;display:grid;place-items:center;font-size:15px;color:#3E4047">←</button>
           <button class="x" onClick=${() => this.setState({ screen: 'flows' })} style="border:0;background:none;color:#6A6D75;cursor:pointer;padding:4px 0">Flows</button>
+          <span style="color:#C9C6BC">/</span>
+          <span title="Application" style=${`font:600 11px ${MONO};color:#6A6D75;white-space:nowrap`}>${f.application || 'DEFAULT'}</span>
           <span style="color:#C9C6BC">/</span>
           <span style=${`font:600 10.5px ${MONO};color:#fff;background:${MC[f.method] || '#555'};padding:3px 6px;border-radius:4px`}>${f.method}</span>
           <span style=${`font:500 13px ${MONO};white-space:nowrap;overflow:hidden;text-overflow:ellipsis`}>${s.catalog.apiBasePath}${f.path}</span>
@@ -1447,7 +1733,8 @@ class App extends Component {
                 ${zoneOverlay(flowZone, C.call)}
               </div>
 
-              <div style="display:flex;align-items:flex-start">
+              <div style=${`position:relative;display:flex;align-items:flex-start;${f.steps.some(x => x.nextOk || x.nextFail) ? 'padding:44px 0 56px' : ''}`}>
+                <svg ref=${el => el && requestAnimationFrame(() => drawRoutes(el, f))} aria-hidden="true" style="position:absolute;left:0;top:0;pointer-events:none;overflow:visible;z-index:2"></svg>
                 <div onClick=${select({ kind: 'in' })} title="Method and path" style="width:156px;flex:none;padding:12px 13px;border-radius:9px;background:#17181C;color:#F4F3EF;cursor:pointer">
                   <div style=${`font:600 10px ${MONO};letter-spacing:.08em;color:#8E9097`}>CLIENT REQUEST</div>
                   <div style=${`margin-top:8px;font:600 12px ${MONO};color:oklch(0.75 0.14 50)`}>${f.method}</div>
@@ -1477,7 +1764,7 @@ class App extends Component {
                         ${g.steps.length > 1 && html`<span style="color:oklch(0.55 0.16 42)">parallel · ${g.steps.length}</span>`}
                       </div>
                       ${g.steps.map(x => html`
-                        <div draggable="true" onDragStart=${this.ds({ kind: 'move', id: x.st.id })} onDragEnd=${this.dragEnd} onClick=${select({ kind: 'step', id: x.st.id })} ...${zoneProps(x.zone)} style=${card(x.on, 'padding:10px 12px;opacity:' + (x.st.enabled ? 1 : 0.55))}>
+                        <div data-step=${x.st.name} draggable="true" onDragStart=${this.ds({ kind: 'move', id: x.st.id })} onDragEnd=${this.dragEnd} onClick=${select({ kind: 'step', id: x.st.id })} ...${zoneProps(x.zone)} style=${card(x.on, 'padding:10px 12px;opacity:' + (x.st.enabled ? 1 : 0.55))}>
                           <div style="display:flex;align-items:center;gap:7px">
                             <span style=${`font:600 10px ${MONO};color:#fff;background:${isSql(x.st) ? C.sql : isStore(x.st) ? C.file : MC[x.st.method] || '#555'};padding:2px 5px;border-radius:4px`}>${isSql(x.st) ? 'SQL' : isStore(x.st) ? (x.st.method === 'DELETE' ? 'DELETE FILE' : 'STORE FILE') : x.st.method}</span>
                             <span style="font-weight:600;font-size:13.5px">${x.st.name}</span>
@@ -1488,7 +1775,7 @@ class App extends Component {
                           <div style=${`margin-top:6px;font:11px/1.4 ${MONO};color:#6A6D75;word-break:break-all`}><span style="color:#17181C">${x.st.target}</span> ${isSql(x.st) ? html`<span class="code-light" style="display:block;margin-top:3px;max-height:44px;overflow:hidden;word-break:normal;overflow-wrap:anywhere">${hl(x.st.sql.replace(/\s+/g, ' ').slice(0, 140), 'sql')}</span>` : x.st.path}</div>
                           ${x.chips.length > 0 && html`<div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">${x.chips.map(chipView)}</div>`}
                           <div style=${`margin-top:9px;padding-top:8px;border-top:1px solid #EFEDE6;display:flex;justify-content:space-between;font:10.5px ${MONO};color:#9A9CA2`}>
-                            <span>${x.st.bodyTemplate ? templateKind(x.st.bodyTemplate).toUpperCase() + ' template · ' : ''}${isStore(x.st) && fileField(x.st) ? 'file ← ' + fileField(x.st) + ' · ' : ''}${x.st.rules.length} ${isSql(x.st) ? 'parameter' : 'request'} rule${x.st.rules.length === 1 ? '' : 's'}</span><span style=${`color:${x.st.onFailure === 'CONTINUE' ? C.out : '#9A9CA2'}`}>${x.st.onFailure}</span>
+                            <span>${x.st.bodyTemplate ? templateKind(x.st.bodyTemplate).toUpperCase() + ' template · ' : ''}${isStore(x.st) && fileField(x.st) ? 'file ← ' + fileField(x.st) + ' · ' : ''}${x.st.rules.length} ${isSql(x.st) ? 'parameter' : 'request'} rule${x.st.rules.length === 1 ? '' : 's'}</span>${routeTag(x.st)}
                           </div>
                           ${zoneOverlay(x.zone, C.step, 'attach to ' + x.st.name)}
                         </div>`)}
@@ -1508,12 +1795,21 @@ class App extends Component {
                     ${connector}
                   </div>`}
 
-                <div onClick=${select({ kind: 'out' })} ...${zoneProps(outZone)} style=${card(sel.kind === 'out', 'width:216px')}>
-                  <div style="display:flex;align-items:center;gap:7px"><span style=${`width:7px;height:7px;border-radius:2px;background:${C.out}`}></span><span style="font-weight:600">Client response</span></div>
+                <div style="display:flex;flex-direction:column;gap:10px;flex:none">
+                <div data-node="out" onClick=${select({ kind: 'out' })} ...${zoneProps(outZone)} style=${card(sel.kind === 'out', 'width:216px')}>
+                  <div style="display:flex;align-items:center;gap:7px"><span style=${`width:7px;height:7px;border-radius:2px;background:${C.out}`}></span><span style="font-weight:600">Client response</span><span style="flex:1"></span>${(f.responses || []).length > 0 && html`<span style=${`font:600 10.5px ${MONO};color:#6A6D75`}>default · ${f.successStatus}</span>`}</div>
                   <div style=${`margin-top:4px;font:11px ${MONO};color:#6A6D75`}>${f.response.length} FLOW_RESPONSE rules</div>
                   <button class="btn-line" onClick=${toMap('resp')} style="margin-top:9px;width:100%;border:1px solid #E4E1D8;background:#FAF9F6;border-radius:6px;padding:6px 8px;cursor:pointer;font-size:12px;font-weight:500;text-align:left;display:flex;justify-content:space-between">Edit response mapping<span>→</span></button>
                   ${outChips.length > 0 && html`<div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">${outChips.map(chipView)}</div>`}
                   ${zoneOverlay(outZone, C.out)}
+                </div>
+                ${(f.responses || []).map(r => html`
+                  <div data-resp=${r.name} onClick=${select({ kind: 'resp', id: r.id })} style=${card(sel.kind === 'resp' && sel.id === r.id, 'width:216px')}>
+                    <div style="display:flex;align-items:center;gap:7px"><span style=${`width:7px;height:7px;border-radius:2px;background:${C.out}`}></span><span style="font-weight:600">${r.name}</span><span style="flex:1"></span><span style=${`font:600 10.5px ${MONO};color:${parseInt(r.status, 10) >= 400 ? C.err : '#6A6D75'}`}>HTTP ${r.status || 200}</span></div>
+                    <div style=${`margin-top:4px;font:11px ${MONO};color:#6A6D75`}>${r.rules.length} FLOW_RESPONSE rules · ${f.steps.some(x => x.nextOk === 'RESPOND:' + r.name || x.nextFail === 'RESPOND:' + r.name) ? 'answered by a branch' : 'no step responds with it'}</div>
+                    <button class="btn-line" onClick=${toMap('resp:' + r.id)} style="margin-top:9px;width:100%;border:1px solid #E4E1D8;background:#FAF9F6;border-radius:6px;padding:6px 8px;cursor:pointer;font-size:12px;font-weight:500;text-align:left;display:flex;justify-content:space-between">Edit response mapping<span>→</span></button>
+                  </div>`)}
+                <button class="btn-line ro-hide" title="Another response a branch can answer with (its own status and mapping)" onClick=${e => { e.stopPropagation(); this.mut(fl => { fl.responses = fl.responses || []; let k = 1; while (fl.responses.some(x => x.name === 'response' + k)) k++; const r = { id: uid('o'), name: 'response' + k, status: '200', description: '', rules: [] }; fl.responses.push(r); return { sel: { kind: 'resp', id: r.id } }; }); }} style="width:216px;border:1.5px dashed #C9C6BC;background:transparent;border-radius:9px;padding:8px;cursor:pointer;font-size:12px;color:#6A6D75">+ Response</button>
                 </div>
                 ${connector}
                 <div style="width:120px;flex:none;padding:12px 13px;border-radius:9px;background:#17181C;color:#F4F3EF">
@@ -1746,6 +2042,22 @@ class App extends Component {
     const plain = arr => arr.map(v => ({ v, l: v }));
     const fld = (label, col, value, kind, onSet, extra = {}) => ({ label, col, value: str(value), kind, onSet, ...extra });
     const withCurrent = (opts, v) => (v && !opts.some(o => o.v === v) ? [...opts, { v, l: v + ' (unknown)' }] : opts);
+    /** "If it succeeds" / "If it fails" for a step: the default, END / FAIL, or a jump to a later step. */
+    const routeFields = (st, f, S2) => {
+      const later = f.steps.filter(x => x.order > st.order).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+      const go = [...later.map(x => ({ v: x.name, l: 'Go to ' + x.name + ' · step_order ' + x.order })),
+        ...(f.responses || []).map(r => ({ v: 'RESPOND:' + r.name, l: 'Respond · ' + r.name + ' · HTTP ' + (r.status || 200) }))];
+      const failV = st.nextFail || st.onFailure;
+      const alone = f.steps.filter(x => x.order === st.order).length === 1;
+      const warn = (st.nextOk || st.nextFail) && !alone ? 'This step branches, so it must run alone: give it a step_order no other step uses. ' : '';
+      return [
+        fld('If it succeeds', 'next_on_success', st.nextOk || '', 'select', (fl, v) => { S2(fl).nextOk = v; }, { options: withCurrent([{ v: '', l: 'Next step (default)' }, { v: 'END', l: 'END · stop here, send the response' }, { v: 'FAIL', l: 'FAIL · end with the error that led here' }, ...go], st.nextOk || ''),
+          hint: warn + (later.length ? 'Steps passed over by a jump are SKIPPED. ' : 'No later step to jump to yet. ') + 'Respond · <name> answers with one of the flow\'s responses (Client response → + Response).' }),
+        fld('If it fails', 'on_failure', failV, 'select', (fl, v) => { const x = S2(fl); if (v === 'STOP' || v === 'CONTINUE') { x.onFailure = v; x.nextFail = ''; } else { x.onFailure = 'STOP'; x.nextFail = v; } },
+          { options: withCurrent([{ v: 'STOP', l: 'STOP · end with error' }, { v: 'CONTINUE', l: 'CONTINUE · record and carry on' }, { v: 'END', l: 'END · handled, send the response' }, ...go], failV),
+            hint: st.nextFail ? 'The failure is handled: the flow goes on at ' + (st.nextFail === 'END' ? 'the response' : routeLabel(st.nextFail)) + ', which can read $.steps.' + st.name + '.outcome and body.' : '' }),
+      ];
+    };
     let insp;
     const st = sel.kind === 'step' ? f.steps.find(x => x.id === sel.id) : null;
     if (st && isSql(st)) {
@@ -1753,12 +2065,12 @@ class App extends Component {
       const dss = (cat.sqlDatasources || []).map(d => ({ v: d.name, l: d.name + (d.gatewayDatabase ? ' · gateway database' : '') + (d.readOnly ? ' · read-only' : '') }));
       const ro = (cat.sqlDatasources || []).find(d => d.name === st.target);
       insp = { kind: 'Database query', color: C.sql, title: st.name, table: 'gw_flow_step.sql_text', fields: [
-        fld('Name', 'name', st.name, 'text', (fl, v) => { S2(fl).name = v; }, { hint: 'Later rules read the rows as $.steps.' + st.name + '.body.rows' }),
+        fld('Name', 'name', st.name, 'text', (fl, v) => renameStep(fl, S2(fl), v), { hint: 'Later rules read the rows as $.steps.' + st.name + '.body.rows' }),
         fld('Datasource', 'target_system', st.target, 'select', (fl, v) => { S2(fl).target = v; }, { options: withCurrent(dss, st.target), hint: ro && ro.readOnly ? 'Read-only: SELECT / WITH only, in a read-only transaction.' : 'gateway.sql.datasources in application.yml' }),
         fld('SQL', 'sql_text', st.sql, 'sql', (fl, v) => { S2(fl).sql = v; }, { hint: 'One statement. :name is bound from the parameter rules (never pasted into the SQL). Result: {rows, rowCount, truncated} or {updated} for INSERT / UPDATE / DELETE. Tab indents.' }),
         { kind: 'params', st, f },
         fld('Order', 'step_order', st.order, 'text', (fl, v) => { const n = parseInt(v, 10); if (n > 0) S2(fl).order = n; }, { hint: 'Same number = run in parallel' }),
-        fld('If it fails', 'on_failure', st.onFailure, 'select', (fl, v) => { S2(fl).onFailure = v; }, { options: [{ v: 'STOP', l: 'STOP · end with error' }, { v: 'CONTINUE', l: 'CONTINUE · record and carry on' }] }),
+        ...routeFields(st, f, S2),
         fld('Run only if', 'condition_expr', st.condition, 'area', (fl, v) => { S2(fl).condition = v; }, { placeholder: "${request.query.id} != null" }),
         fld('Success when', 'success_expr', st.success, 'area', (fl, v) => { S2(fl).success = v; }, { placeholder: '${steps.' + st.name + '.body.rowCount} > 0', hint: 'False → 422 GW-422-BUSINESS (e.g. no row found)' }),
         fld('Timeout (ms)', 'timeout_ms', st.timeout, 'text', (fl, v) => { S2(fl).timeout = v.replace(/\D/g, ''); }, { hint: 'Query timeout. Empty = ' + cat.defaultStepTimeoutMs }),
@@ -1780,7 +2092,7 @@ class App extends Component {
         else if (field) s2.rules.unshift(ruleIn({ type: 'BODY', target: '$.file', source: '$.request.files.' + field, required: true }));
       };
       insp = { kind: 'File storage', color: C.file, title: st.name, table: 'gw_flow_step', fields: [
-        fld('Name', 'name', st.name, 'text', (fl, v) => { S2(fl).name = v; }, { hint: 'Later rules read the result as $.steps.' + st.name + '.body (key, location, filename, contentType, size, sha256)' }),
+        fld('Name', 'name', st.name, 'text', (fl, v) => renameStep(fl, S2(fl), v), { hint: 'Later rules read the result as $.steps.' + st.name + '.body (key, location, filename, contentType, size, sha256)' }),
         fld('Storage', 'target_system', st.target, 'select', (fl, v) => { S2(fl).target = v; }, { options: withCurrent(stores.map(x => ({ v: x.name, l: x.name + ' · ' + x.type })), st.target),
           hint: (sto.location || '') + (sto.allowedTypes && sto.allowedTypes.length ? ' · allows ' + sto.allowedTypes.join(', ') : ' · any type') + (sto.maxSize ? ' · max ' + kb(sto.maxSize) : '') + ' (gateway.storages in application.yml)' }),
         fld('Operation', 'http_method', st.method, 'select', (fl, v) => { S2(fl).method = v; }, { options: [{ v: 'PUT', l: 'PUT · store the uploaded file' }, { v: 'DELETE', l: 'DELETE · delete the file at the key' }] }),
@@ -1788,7 +2100,7 @@ class App extends Component {
         fld('Object key', 'path_template', st.path, 'text', (fl, v) => { S2(fl).path = v; }, { hint: 'Starts with /. {var} = a PATH rule, or built in: ' + (cat.storageKeyVariables || []).map(v => '{' + v + '}').join(' ') + '. Values are made safe (no / or ..).' }),
         { kind: 'keyvars', st, f },
         fld('Order', 'step_order', st.order, 'text', (fl, v) => { const n = parseInt(v, 10); if (n > 0) S2(fl).order = n; }, { hint: 'Same number = run in parallel' }),
-        fld('If it fails', 'on_failure', st.onFailure, 'select', (fl, v) => { S2(fl).onFailure = v; }, { options: [{ v: 'STOP', l: 'STOP · end with error' }, { v: 'CONTINUE', l: 'CONTINUE · record and carry on' }] }),
+        ...routeFields(st, f, S2),
         fld('Run only if', 'condition_expr', st.condition, 'area', (fl, v) => { S2(fl).condition = v; }, { placeholder: '${request.files.file.size} > 0' }),
         fld('Timeout (ms)', 'timeout_ms', st.timeout, 'text', (fl, v) => { S2(fl).timeout = v.replace(/\D/g, ''); }, { hint: 'Empty = ' + cat.defaultStepTimeoutMs }),
         fld('Request handler', 'request_handler', st.reqHandler, 'select', (fl, v) => { S2(fl).reqHandler = v; }, { options: withCurrent(none(cat.messageHandlers), st.reqHandler), hint: 'Sees {file, contentType} as the body; the bytes via ctx.file(field)' }),
@@ -1800,12 +2112,12 @@ class App extends Component {
       const S2 = fl => fl.steps.find(x => x.id === st.id);
       const targets = this.allTargets().map(t => t.code);
       insp = { kind: 'Downstream step', color: C.call, title: st.name, table: 'gw_flow_step', fields: [
-        fld('Name', 'name', st.name, 'text', (fl, v) => { S2(fl).name = v; }, { hint: 'Later rules read this call as $.steps.' + st.name }),
+        fld('Name', 'name', st.name, 'text', (fl, v) => renameStep(fl, S2(fl), v), { hint: 'Later rules read this call as $.steps.' + st.name }),
         fld('Target system', 'target_system', st.target, 'select', (fl, v) => { S2(fl).target = v; }, { options: withCurrent(plain(targets), st.target) }),
         fld('Method', 'http_method', st.method, 'select', (fl, v) => { S2(fl).method = v; }, { options: plain(METHODS) }),
         fld('Path', 'path_template', st.path, 'text', (fl, v) => { S2(fl).path = v; }, { hint: 'Appended to the base URL. Each {var} needs a PATH rule' }),
         fld('Order', 'step_order', st.order, 'text', (fl, v) => { const n = parseInt(v, 10); if (n > 0) S2(fl).order = n; }, { hint: 'Same number = run in parallel' }),
-        fld('If it fails', 'on_failure', st.onFailure, 'select', (fl, v) => { S2(fl).onFailure = v; }, { options: [{ v: 'STOP', l: 'STOP · end with error' }, { v: 'CONTINUE', l: 'CONTINUE · record and carry on' }] }),
+        ...routeFields(st, f, S2),
         fld('Run only if', 'condition_expr', st.condition, 'area', (fl, v) => { S2(fl).condition = v; }, { placeholder: "${steps.x.body.status} == 'ACTIVE'" }),
         fld('Success when', 'success_expr', st.success, 'area', (fl, v) => { S2(fl).success = v; }, { placeholder: '${steps.' + st.name + ".body.responseCode} == '00'" }),
         fld('Timeout (ms)', 'timeout_ms', st.timeout, 'text', (fl, v) => { S2(fl).timeout = v.replace(/\D/g, ''); }, { hint: 'Empty = target read timeout, else ' + cat.defaultStepTimeoutMs }),
@@ -1813,6 +2125,7 @@ class App extends Component {
         fld('Request handler', 'request_handler', st.reqHandler, 'select', (fl, v) => { S2(fl).reqHandler = v; }, { options: withCurrent(none(cat.messageHandlers), st.reqHandler) }),
         fld('Response handler', 'response_handler', st.respHandler, 'select', (fl, v) => { S2(fl).respHandler = v; }, { options: withCurrent(none(cat.messageHandlers), st.respHandler) }),
         fld('Wire format', 'body_codec', st.bodyCodec, 'select', (fl, v) => { S2(fl).bodyCodec = v; }, { options: withCurrent(none(cat.bodyCodecs, st.bodyTemplate && templateKind(st.bodyTemplate) === 'xml' ? '— default: ' + (/:?Envelope/.test(st.bodyTemplate) ? 'soapCodec' : 'xmlCodec') + ' (XML template)' : '— target system default'), st.bodyCodec), hint: st.bodyTemplate ? 'Decodes the response; the request is the template.' : '' }),
+        fld('Response example', 'response_example', st.example, 'json', (fl, v) => { S2(fl).example = v; }, { hint: (() => { try { if (st.example) JSON.parse(st.example); return 'What ' + st.target + ' answers, as the mapping sees it. Its fields appear in the Mapping context (steps.' + st.name + '.body) to drag. Documentation only: never validates or answers traffic. Paste XML / SOAP or take the last real response in Mapping → context → body → example.'; } catch (e) { return 'Not valid JSON: ' + e.message; } })(), placeholder: '{\n  "responseCode": "00",\n  "acctName": "BUDI SANTOSO"\n}' }),
         ...(st.method !== 'GET' ? [fld('Body template', 'body_template', st.bodyTemplate, 'template', (fl, v) => { S2(fl).bodyTemplate = v; }, { hint: 'Optional. Paste the exact request (a SOAP envelope, XML, JSON): it is sent as written, namespaces and all. ${request.path.id}, ${request.body.x}, ${request.headers.x}, ${steps.a.body.y}, ${body.z} (this step\'s BODY rules, with converters) and ${x:default}. Values are XML/JSON-escaped. Empty = the body is built from the BODY rules.' }), { kind: 'slots', st, f }] : []),
         fld('Enabled', 'enabled', String(st.enabled), 'select', (fl, v) => { S2(fl).enabled = v === 'true'; }, { options: [{ v: 'true', l: 'true' }, { v: 'false', l: 'false · skipped with its rules' }] })
       ], mapping: { label: 'Edit request mapping · ' + st.rules.length + ' rules', go: toMap(st.id) },
@@ -1825,11 +2138,21 @@ class App extends Component {
         fld('Request handler', 'request_handler', f.reqHandler, 'select', (fl, v) => { fl.reqHandler = v; }, { options: withCurrent(none(cat.messageHandlers), f.reqHandler), hint: 'MessageHandler. May short-circuit with its own response.' })
       ] };
     } else if (sel.kind === 'out') {
-      insp = { kind: 'Client response', color: C.out, title: 'HTTP ' + f.successStatus, table: 'gw_flow', fields: [
+      insp = { kind: 'Client response · default', color: C.out, title: 'HTTP ' + f.successStatus, table: 'gw_flow', fields: [
         fld('Success status', 'success_status', f.successStatus, 'select', (fl, v) => { fl.successStatus = v; }, { options: withCurrent(plain(['200', '201', '202', '204']), f.successStatus) }),
         fld('Response schema', 'response_schema_code', f.respSchema, 'select', (fl, v) => { fl.respSchema = v; }, { options: withCurrent(none(this.schemaCodes()), f.respSchema), hint: 'Invalid → 500', actions: this.schemaActions(f.respSchema, () => this.responseExample(f), f.code + '_RESPONSE', (fl, c) => { fl.respSchema = c; }) }),
         fld('Response handler', 'response_handler', f.respHandler, 'select', (fl, v) => { fl.respHandler = v; }, { options: withCurrent(none(cat.messageHandlers), f.respHandler) })
       ], mapping: { label: 'Edit response mapping · ' + f.response.length + ' rules', go: toMap('resp') } };
+    } else if (sel.kind === 'resp' && (f.responses || []).some(r => r.id === sel.id)) {
+      const r = f.responses.find(x => x.id === sel.id);
+      const R = fl => fl.responses.find(x => x.id === r.id);
+      const used = f.steps.filter(x => x.nextOk === 'RESPOND:' + r.name || x.nextFail === 'RESPOND:' + r.name).map(x => x.name);
+      insp = { kind: 'Client response', color: C.out, title: r.name + ' · HTTP ' + (r.status || 200), table: 'gw_flow_response', fields: [
+        fld('Name', 'name', r.name, 'text', (fl, v) => { const x = R(fl); const old = 'RESPOND:' + x.name; x.name = v.replace(/[^A-Za-z0-9_-]/g, '_'); fl.steps.forEach(y => { if (y.nextOk === old) y.nextOk = 'RESPOND:' + x.name; if (y.nextFail === old) y.nextFail = 'RESPOND:' + x.name; }); }, { hint: used.length ? 'Answered by: ' + used.join(', ') + ' (their routes follow a rename)' : 'No step responds with it yet: set a step\'s If it succeeds / If it fails to Respond · ' + r.name }),
+        fld('Status', 'status_code', r.status, 'select', (fl, v) => { R(fl).status = v; }, { options: withCurrent(plain(['200', '201', '202', '204', '400', '404', '409', '422', '500', '502', '503']), String(r.status)), hint: 'The HTTP status the client gets with this response' }),
+        fld('Description', 'description', r.description, 'area', (fl, v) => { R(fl).description = v; })
+      ], mapping: { label: 'Edit response mapping · ' + r.rules.length + ' rules', go: toMap('resp:' + r.id) },
+        del: { label: 'Delete response', body: `Response ${r.name} and its ${r.rules.length} rule(s) are removed; steps that respond with it go back to their default route. Nothing changes in the database until Save & reload.`, go: () => this.mut(fl => { fl.responses = fl.responses.filter(x => x.id !== r.id); this.norm(fl); return { sel: { kind: 'out' } }; }) } };
     } else if (sel.kind === 'err') {
       insp = { kind: 'On failure', color: C.err, title: f.errorHandler || 'defaultErrorHandler', table: 'gw_flow.error_handler', fields: [
         fld('Error handler', 'error_handler', f.errorHandler, 'select', (fl, v) => { fl.errorHandler = v; }, { options: withCurrent([{ v: '', l: 'defaultErrorHandler' }, ...plain(cat.errorHandlers.map(h => h.name).filter(n => n !== 'defaultErrorHandler'))], f.errorHandler), hint: 'New error codes are new lookup rows plus a save. No code change.' })
@@ -1838,6 +2161,7 @@ class App extends Component {
       insp = { kind: 'Flow', color: C.flow, title: f.code, table: 'gw_flow', fields: [
         fld('Code', 'code', f.code, 'text', (fl, v) => { fl.code = v.toUpperCase().replace(/[^A-Z0-9_]/g, '_'); }, { hint: 'Appears in logs and audit' }),
         fld('Name', 'name', f.name, 'text', (fl, v) => { fl.name = v; }),
+        fld('Application', 'application_code', f.application, 'select', (fl, v) => { fl.application = v; }, { options: withCurrent((s.cfg.applications || []).map(a => ({ v: a.code, l: a.code + (a.name ? ' · ' + a.name : '') })), f.application), hint: 'The group this flow is exported with (Flows page → Export).' }),
         fld('Method', 'http_method', f.method, 'select', (fl, v) => { fl.method = v; }, { options: plain(METHODS) }),
         fld('Path', 'path_pattern', f.path, 'text', (fl, v) => { fl.path = v; }, { hint: 'Relative to ' + cat.apiBasePath + '. {name} → $.request.path.name' }),
         fld('Flow timeout (ms)', 'timeout_ms', f.timeout, 'text', (fl, v) => { fl.timeout = v.replace(/\D/g, ''); }, { hint: 'Empty = ' + cat.defaultFlowTimeoutMs + '. Exceeded → 504' }),
@@ -1860,6 +2184,7 @@ class App extends Component {
               ${fd.kind === 'text' && html`<input class="inp" value=${fd.value} onInput=${onSet(fd)} style=${inputStyle()}/>`}
               ${fd.kind === 'select' && html`<select class="inp" value=${fd.value} onChange=${onSet(fd)} style=${inputStyle() + ';padding:0 6px'}>${fd.options.map(o => html`<option value=${o.v}>${o.l}</option>`)}</select>`}
               ${fd.kind === 'sql' && this.sqlEditor(fd.value, v => this.mut(fl => fd.onSet(fl, v)))}
+              ${fd.kind === 'json' && this.sqlEditor(fd.value, v => this.mut(fl => fd.onSet(fl, v)), 'json', fd.placeholder || '', { minRows: 3 })}
               ${fd.kind === 'template' && this.sqlEditor(fd.value, v => this.mut(fl => fd.onSet(fl, v)), templateKind(fd.value) === 'json' ? 'json' : 'xml', '<soapenv:Envelope xmlns:soapenv="…">\n  …<accountNum>${request.path.accountNo}</accountNum>…\n</soapenv:Envelope>')}
               ${fd.kind === 'area' && html`<textarea class="inp" value=${fd.value} onInput=${onSet(fd)} rows="3" placeholder=${fd.placeholder || ''} style=${`border:1px solid #E4E1D8;border-radius:6px;padding:7px 9px;font:11.5px/1.45 ${MONO};background:#FAF9F6;resize:vertical;width:100%`}></textarea>`}
               ${fd.hint && html`<span style="font-size:11px;color:#9A9CA2;line-height:1.4">${fd.hint}</span>`}
@@ -1873,11 +2198,13 @@ class App extends Component {
 
   renderMapping(f) {
     const s = this.state; const cat = s.catalog;
-    const scopeStep = s.scope !== 'resp' ? f.steps.find(x => x.id === s.scope) : null;
-    const scope = scopeStep ? scopeStep.id : 'resp';
-    const rules = scopeStep ? scopeStep.rules : f.response;
-    const updRule = (id, fn) => this.mut(fl => { const list = scope === 'resp' ? fl.response : fl.steps.find(x => x.id === scope).rules; const i = list.findIndex(x => x.id === id); fn(list[i], list, i); });
-    const listOf = fl => (scope === 'resp' ? fl.response : fl.steps.find(x => x.id === scope).rules);
+    // scope: a step's id, 'resp' (the default response) or 'resp:<id>' (a named response)
+    const respSel = s.scope.startsWith('resp:') ? (f.responses || []).find(x => 'resp:' + x.id === s.scope) || null : null;
+    const scopeStep = s.scope !== 'resp' && !respSel ? f.steps.find(x => x.id === s.scope) || null : null;
+    const scope = scopeStep ? scopeStep.id : respSel ? s.scope : 'resp';
+    const rules = scopeStep ? scopeStep.rules : respSel ? respSel.rules : f.response;
+    const listOf = fl => (scope === 'resp' ? fl.response : scope.startsWith('resp:') ? fl.responses.find(x => 'resp:' + x.id === scope).rules : fl.steps.find(x => x.id === scope).rules);
+    const updRule = (id, fn) => this.mut(fl => { const list = listOf(fl); const i = list.findIndex(x => x.id === id); fn(list[i], list, i); });
 
     // sample context: stored text if the developer edited it, otherwise synthesized from the rules
     const stored = this.sampleText(f);
@@ -1898,7 +2225,8 @@ class App extends Component {
       flat(visible, '$', 0);
     }
     const sorted = [...f.steps].sort((a, b) => a.order - b.order);
-    const scopes = [...sorted.map(st => ({ id: st.id, label: st.name, sub: st.order + ' ·' })), { id: 'resp', label: 'Client response', sub: '→' }];
+    const scopes = [...sorted.map(st => ({ id: st.id, label: st.name, sub: st.order + ' ·' })), { id: 'resp', label: 'Client response', sub: '→' },
+      ...(f.responses || []).map(r => ({ id: 'resp:' + r.id, label: r.name + ' · ' + (r.status || 200), sub: '⇒' }))];
     /** A field the client sends, typed in the CONTEXT tree: a new rule reading it, into the current scope. */
     const addField = (section, raw) => {
       const sec = ADDABLE[section]; const name = String(raw || '').trim();
@@ -1919,14 +2247,14 @@ class App extends Component {
           type = 'PATH'; target = name;
         }
         if (section === '$.request.path' && !new RegExp('\\{' + name + '\\}').test(fl.path)) fl.path = fl.path.replace(/\/+$/, '') + '/{' + name + '}';
-        (st ? st.rules : fl.response).push(ruleIn({ type, target, source, required: section === '$.request.path' }));
+        (st ? st.rules : listOf(fl)).push(ruleIn({ type, target, source, required: section === '$.request.path' }));
         return { ctxAdd: null, ctxAddName: '' };
       });
     };
     const ruleAccept = d => ['src', 'conv', 'lookup', 'fh'].includes(d.kind);
     const types = scopeStep ? (isSql(scopeStep) ? ['BODY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes) : ['BODY', 'HEADER'];
 
-    const pv = s.preview && s.preview.key === f.code + '/' + (scopeStep ? scopeStep.name : '') ? s.preview : null;
+    const pv = s.preview && s.preview.key === f.code + '/' + (scopeStep ? scopeStep.name : respSel ? '@' + respSel.name : '') ? s.preview : null;
     const resText = (r, i) => {
       const x = pv && pv.rules && pv.rules[i];
       if (!x) return { t: '', c: '#9A9CA2' };
@@ -1937,7 +2265,7 @@ class App extends Component {
     const newZone = this.zone('rule-new', d => d.kind === 'src', d => this.mut(fl => {
       const list = listOf(fl);
       const tk = toks(d.path).filter(x => x !== '*' && typeof x !== 'number'); const key = tk[tk.length - 1] || 'value';
-      const st2 = scope === 'resp' ? null : fl.steps.find(x => x.id === scope);
+      const st2 = scope.startsWith('resp') ? null : fl.steps.find(x => x.id === scope);
       const pvar = st2 ? (st2.path.match(/\{([^}]+)\}/g) || []).map(v => v.slice(1, -1)).find(v => !st2.rules.some(r => r.type === 'PATH' && r.target === v)) : null;
       const isPath = pvar && /request\.path\./.test(d.path);
       list.push({ id: uid('r'), type: isPath ? 'PATH' : 'BODY', target: isPath ? pvar : '$.' + key, source: d.path, constant: '', def: '', lookup: '', conv: '', fh: '', required: !!isPath });
@@ -1981,7 +2309,7 @@ class App extends Component {
       note = 'Built by the server from STEP_REQUEST rules with the real converters, lookups and field handlers. This step can read ' + (sorted.filter(x => x.order < scopeStep.order).map(x => x.name).join(', ') || 'only the inbound request') + '.';
       if (scopeStep.bodyTemplate && scopeStep.method !== 'GET') note = 'The body is the step\'s body template, filled from the sample context (and ${body.…} from the BODY rules) and escaped for ' + templateKind(scopeStep.bodyTemplate).toUpperCase() + '; it is sent exactly like this. Headers, query and path come from the rules.';
     } else {
-      line = 'HTTP/1.1 ' + f.successStatus;
+      line = 'HTTP/1.1 ' + (respSel ? respSel.status || 200 : f.successStatus);
       headers = [{ n: 'X-Correlation-Id', v: 'preview-correlation-id' }, ...(out ? Object.keys(out.headers).map(k => ({ n: k, v: out.headers[k] })) : [])];
       body = out ? pretty(out.body) : '';
       note = 'Built by the server from FLOW_RESPONSE rules using the sample context. Error responses are built by ' + (f.errorHandler || 'defaultErrorHandler') + ' instead.';
@@ -1999,8 +2327,22 @@ class App extends Component {
               <div class="ctx" draggable="true" onDragStart=${this.ds({ kind: 'src', path: n.path })} onDragEnd=${this.dragEnd} title=${n.path} style=${`display:flex;align-items:center;gap:8px;padding:4px 6px 4px ${6 + n.depth * 14}px;border-radius:5px;cursor:grab;font:11.5px ${MONO}`}>
                 <span style=${`color:${n.depth === 0 ? '#17181C' : n.sample === '' ? '#3E4047' : 'oklch(0.42 0.12 255)'};font-weight:${n.depth === 0 ? 600 : 400}`}>${n.key}</span>
                 <span class="hscroll" style="flex:1;min-width:0;text-align:right;color:#9A9CA2">${n.sample}</span>
+                ${(() => { const m = /^\$\.steps\.([^.\[]+)\.body$/.exec(n.path); const st = m && f.steps.find(x => x.name === m[1] && !isSql(x) && !isStore(x)); return st && html`<button class="ro-hide" title=${'Teach Studio what ' + st.target + ' answers: paste an example response (JSON, XML or SOAP) or take the last real one'} onClick=${e => { e.stopPropagation(); this.setState({ exEdit: s.exEdit && s.exEdit.step === st.id ? null : { step: st.id, text: st.example || '', error: '', busy: false, note: '' } }); }} style=${`flex:none;border:1px solid ${st.example ? 'oklch(0.85 0.06 160)' : '#E4E1D8'};background:${s.exEdit && s.exEdit.step === st.id ? '#17181C' : '#fff'};color:${s.exEdit && s.exEdit.step === st.id ? '#fff' : st.example ? 'oklch(0.45 0.11 160)' : '#6A6D75'};border-radius:4px;padding:0 6px;height:18px;cursor:pointer;font:10px ${MONO}`}>${st.example ? 'example ✓' : 'example'}</button>`; })()}
                 ${sec && html`<button class="ro-hide" title=${'Add a ' + sec.what + ' the client sends (creates a rule that reads it)'} onClick=${e => { e.stopPropagation(); this.setState({ ctxAdd: s.ctxAdd === n.path ? null : n.path, ctxAddName: '' }); }} style=${`flex:none;border:1px solid #E4E1D8;background:${s.ctxAdd === n.path ? '#17181C' : '#fff'};color:${s.ctxAdd === n.path ? '#fff' : '#6A6D75'};border-radius:4px;width:18px;height:18px;line-height:14px;padding:0;cursor:pointer;font-size:13px`}>+</button>`}
               </div>
+              ${(() => { const m = /^\$\.steps\.([^.\[]+)\.body$/.exec(n.path); const st = m && f.steps.find(x => x.name === m[1]); const ex = s.exEdit; return st && ex && ex.step === st.id && html`
+                <div style=${`display:flex;flex-direction:column;gap:6px;padding:4px 6px 10px ${20 + n.depth * 14}px`}>
+                  <span style="font-size:11px;color:#6A6D75;line-height:1.4">Paste what <b>${st.target}</b> answers (JSON, XML or SOAP${this.stepCodec(st) ? ', decoded with ' + this.stepCodec(st) : ''}). Its fields appear here to drag onto rules.</span>
+                  <textarea class="inp ro-ok" rows="8" spellcheck="false" value=${ex.text} onInput=${e => this.setState({ exEdit: { ...ex, text: e.currentTarget.value, error: '' } })} placeholder=${'{ "responseCode": "00", "acctName": "BUDI SANTOSO" }\nor <soapenv:Envelope …>'} style=${`border:1px solid #E4E1D8;border-radius:6px;padding:7px 8px;font:11px/1.45 ${MONO};background:#FAF9F6;resize:vertical;width:100%`}></textarea>
+                  ${ex.note && html`<span style="font-size:10.5px;color:#9A9CA2;line-height:1.4">${ex.note}</span>`}
+                  ${ex.error && html`<span style=${`font:10.5px/1.4 ${MONO};color:oklch(0.5 0.18 25)`}>${ex.error}</span>`}
+                  <div style="display:flex;gap:6px;flex-wrap:wrap">
+                    <button class="btn-dark" disabled=${ex.busy} onClick=${() => this.applyExample(f, st, ex.text)} style="border:0;background:#17181C;color:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:11.5px;font-weight:500">${ex.busy ? 'Working…' : 'Use as example'}</button>
+                    <button class="btn-line" disabled=${ex.busy} title="The newest audited successful response of this step (needs audit with stored payloads)" onClick=${() => this.lastResponse(f, st)} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:11.5px">Last real response</button>
+                    ${st.example && html`<button class="btn-line" onClick=${() => this.mut(fl => { fl.steps.find(x => x.id === st.id).example = ''; return { exEdit: null }; })} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:11.5px;color:oklch(0.5 0.18 25)">Remove</button>`}
+                    <button class="btn-line" onClick=${() => this.setState({ exEdit: null })} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:11.5px">Cancel</button>
+                  </div>
+                </div>`; })()}
               ${sec && s.ctxAdd === n.path && html`
                 <form onSubmit=${e => { e.preventDefault(); addField(n.path, s.ctxAddName); }} style=${`display:flex;flex-direction:column;gap:5px;padding:4px 6px 8px ${20 + n.depth * 14}px`}>
                   <input class="inp" autofocus value=${s.ctxAddName} onInput=${e => this.setState({ ctxAddName: e.currentTarget.value })} onKeyDown=${e => { if (e.key === 'Escape') this.setState({ ctxAdd: null }); }} placeholder=${sec.placeholder} spellcheck="false" style=${inputStyle(28, 11.5)}/>
@@ -2023,8 +2365,8 @@ class App extends Component {
             ${scopes.map(x => html`<button onClick=${() => this.setState({ scope: x.id, preview: null }, () => this.changed())} style=${`display:flex;align-items:center;gap:7px;border:1px solid ${x.id === scope ? '#17181C' : '#E4E1D8'};background:${x.id === scope ? '#17181C' : '#fff'};color:${x.id === scope ? '#fff' : '#17181C'};border-radius:7px;padding:6px 10px;cursor:pointer;font-weight:500`}><span style=${`font:10.5px ${MONO};opacity:.7`}>${x.sub}</span>${x.label}</button>`)}
           </div>
           <div style="margin-top:20px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
-            <div style="font-size:18px;font-weight:600;letter-spacing:-0.01em">${scopeStep ? (isSql(scopeStep) ? 'Parameters of ' + scopeStep.name : isStore(scopeStep) ? 'What ' + scopeStep.name + (scopeStep.method === 'DELETE' ? ' deletes' : ' stores') : 'What ' + scopeStep.name + ' sends') : 'What the client gets'}</div>
-            <div style=${`font:11.5px ${MONO};color:#9A9CA2`}>${scopeStep ? (isSql(scopeStep) ? 'STEP_REQUEST · SQL · ' + scopeStep.target + ' · ' + (sqlParams(scopeStep.sql).map(p => ':' + p).join(' ') || 'no parameters') : 'STEP_REQUEST · ' + scopeStep.method + ' ' + scopeStep.target + scopeStep.path) : 'FLOW_RESPONSE'}</div>
+            <div style="font-size:18px;font-weight:600;letter-spacing:-0.01em">${scopeStep ? (isSql(scopeStep) ? 'Parameters of ' + scopeStep.name : isStore(scopeStep) ? 'What ' + scopeStep.name + (scopeStep.method === 'DELETE' ? ' deletes' : ' stores') : 'What ' + scopeStep.name + ' sends') : respSel ? 'What the client gets · ' + respSel.name + ' (HTTP ' + (respSel.status || 200) + ')' : 'What the client gets'}</div>
+            <div style=${`font:11.5px ${MONO};color:#9A9CA2`}>${scopeStep ? (isSql(scopeStep) ? 'STEP_REQUEST · SQL · ' + scopeStep.target + ' · ' + (sqlParams(scopeStep.sql).map(p => ':' + p).join(' ') || 'no parameters') : 'STEP_REQUEST · ' + scopeStep.method + ' ' + scopeStep.target + scopeStep.path) : respSel ? 'FLOW_RESPONSE · response_name ' + respSel.name + ' · answered when a branch routes to Respond · ' + respSel.name : 'FLOW_RESPONSE'}</div>
           </div>
           <div style="margin-top:4px;font-size:12px;color:#6A6D75;max-width:640px;line-height:1.45">${scopeStep && isSql(scopeStep) ? html`Each rule sets one SQL parameter: target ${mono('$.id')} is bound to ${mono(':id')}. ` : ''}${scopeStep && scopeStep.bodyTemplate && !isSql(scopeStep) && !isStore(scopeStep) ? html`This step sends its <b>body template</b> (Pipeline → step); BODY rules here only feed its ${mono('${body.<field>}')} placeholders, HEADER / QUERY / PATH rules apply as usual. ` : ''}${scopeStep && isStore(scopeStep) ? html`BODY ${mono('$.file')} ← the upload (${mono('$.request.files.<field>')}), optional BODY ${mono('$.contentType')}; a PATH rule fills a key variable ${mono('{name}')} (built-ins need none: ${(cat.storageKeyVariables || []).join(', ')}). ` : ''}Rules run top to bottom: value → default → lookup → converter → field handler → required check → write. Drop a field on a rule to replace its source, or a converter / lookup / handler to add it.</div>
 
@@ -2385,7 +2727,7 @@ class App extends Component {
 
   renderRows(f) {
     const s = this.state;
-    const used = [...new Set([...f.steps.flatMap(x => x.rules), ...f.response].map(r => r.lookup).filter(Boolean))].filter(c => s.cfg.lookups[c]).map(c => [c, s.cfg.lookups[c]]);
+    const used = [...new Set([...f.steps.flatMap(x => x.rules), ...f.response, ...(f.responses || []).flatMap(x => x.rules)].map(r => r.lookup).filter(Boolean))].filter(c => s.cfg.lookups[c]).map(c => [c, s.cfg.lookups[c]]);
     const sql = flowSql(f, used);
     const ruleCount = f.steps.reduce((a, x) => a + x.rules.length, 0) + f.response.length;
     const counts = [{ n: 1, t: 'gw_flow' }, { n: f.steps.length, t: 'gw_flow_step' }, { n: ruleCount, t: 'gw_mapping_rule' }];

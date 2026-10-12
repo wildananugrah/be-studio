@@ -64,7 +64,8 @@ public class StudioController {
 
     public record SaveRequest(String baseVersion, StudioConfig config) {}
 
-    public record PreviewRequest(StudioConfig config, String flow, String step, JsonNode sample) {}
+    /** {@code step} null = the response; {@code response} names a named response (null = the default one). */
+    public record PreviewRequest(StudioConfig config, String flow, String step, JsonNode sample, String response) {}
 
     /** A converter spec ({@code DATE_FORMAT:ddMMyyyy:yyyy-MM-dd}) and a value to run it on. */
     public record ConverterTry(String spec, JsonNode value) {}
@@ -118,7 +119,8 @@ public class StudioController {
         if (!authorized(supplied)) {
             return UNAUTHORIZED;
         }
-        return ResponseEntity.ok(studio.preview(request.config(), request.flow(), request.step(), request.sample()));
+        return ResponseEntity.ok(studio.preview(request.config(), request.flow(), request.step(), request.response(),
+                request.sample()));
     }
 
     @PutMapping("/config")
@@ -152,6 +154,46 @@ public class StudioController {
             return ResponseEntity.status(503).body(Map.of("errors",
                     List.of("database error, nothing was saved: " + e.getMostSpecificCause().getMessage())));
         }
+    }
+
+    /** A pasted downstream response: {@code codec} (optional BodyCodec bean) and the raw text. */
+    public record DecodeRequest(String codec, String text) {}
+
+    /** Decodes an example downstream response the way the step's codec will (for the mapping context). */
+    @PostMapping("/decode")
+    public ResponseEntity<Object> decode(@RequestHeader(name = "X-Admin-Token", required = false) String supplied,
+            @RequestBody DecodeRequest request) {
+        if (!authorized(supplied)) {
+            return UNAUTHORIZED;
+        }
+        try {
+            return ResponseEntity.ok(Map.of("body", studio.decode(request.codec(), request.text())));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("errors", List.of(e.getMessage())));
+        }
+    }
+
+    /** One application's flows and the shared items they use, as JSON, a SQL script or a Liquibase changelog. */
+    @GetMapping("/applications/{code}/export")
+    public ResponseEntity<Object> exportApplication(
+            @RequestHeader(name = "X-Admin-Token", required = false) String supplied,
+            @org.springframework.web.bind.annotation.PathVariable String code,
+            @org.springframework.web.bind.annotation.RequestParam(defaultValue = "json") String format,
+            jakarta.servlet.http.HttpServletRequest request) {
+        if (!authorized(supplied)) {
+            return UNAUTHORIZED;
+        }
+        StudioService.Export export;
+        try {
+            export = studio.exportApplication(code, format, request.getServerName() + ":" + request.getServerPort());
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("errors", List.of(e.getMessage())));
+        }
+        return ResponseEntity.ok()
+                .header(org.springframework.http.HttpHeaders.CONTENT_TYPE, export.contentType() + "; charset=utf-8")
+                .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, org.springframework.http.ContentDisposition
+                        .attachment().filename(export.filename()).build().toString())
+                .body(export.content().getBytes(StandardCharsets.UTF_8));
     }
 
     private boolean authorized(String supplied) {

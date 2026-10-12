@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Dev data: the demo flows grouped into applications (flows not named here stay in DEFAULT). -->
+    <changeSet id="108-demo-applications" author="json-gateway" context="dev">
+        <insert tableName="${tbl.application}">
+            <column name="code" value="CORE_BANKING_API"/>
+            <column name="name" value="Core banking API"/>
+            <column name="description" value="Accounts and transfers on the core banking system"/>
+        </insert>
+        <update tableName="${tbl.flow}">
+            <column name="application_code" value="CORE_BANKING_API"/>
+            <where>code IN ('ACCOUNT_HISTORY', 'ACCOUNT_INQUIRY', 'TRANSFER', 'TRANSFER_WITH_REVERSAL')</where>
+        </update>
+        <insert tableName="${tbl.application}">
+            <column name="code" value="SOAP_BRIDGE"/>
+            <column name="name" value="SOAP bridge"/>
+            <column name="description" value="JSON endpoints in front of SOAP / XML services (body templates)"/>
+        </insert>
+        <update tableName="${tbl.flow}">
+            <column name="application_code" value="SOAP_BRIDGE"/>
+            <where>code IN ('SOAP_ACCOUNT_INQUIRY', 'SOAP_TRANSFER', 'TEMPLATE_NOTIFY')</where>
+        </update>
+        <insert tableName="${tbl.application}">
+            <column name="code" value="USER_SERVICE"/>
+            <column name="name" value="User service"/>
+            <column name="description" value="Users over REST and straight from the database"/>
+        </insert>
+        <update tableName="${tbl.flow}">
+            <column name="application_code" value="USER_SERVICE"/>
+            <where>code IN ('MS_USER_CREATE', 'MS_USER_DELETE', 'MS_USER_DETAIL', 'MS_USER_LIST', 'MS_USER_UPDATE', 'SQL_USER_DETAIL', 'SQL_USER_SEARCH')</where>
+        </update>
+        <insert tableName="${tbl.application}">
+            <column name="code" value="DOCUMENTS"/>
+            <column name="name" value="Documents"/>
+            <column name="description" value="File uploads to local or S3 storage"/>
+        </insert>
+        <update tableName="${tbl.flow}">
+            <column name="application_code" value="DOCUMENTS"/>
+            <where>code IN ('FILE_UPLOAD', 'FILE_UPLOAD_RAW', 'FILE_DELETE')</where>
+        </update>
+    </changeSet>
+</databaseChangeLog>

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Where a flow goes after a step (null keeps today's behaviour: the next step_order group).
+        next_on_success: END (stop here, build the response), FAIL (end with the error of the failure that was
+                         routed here) or the name of a later step to jump to.
+        next_on_failure: END or the name of a later step; the failure is then handled (on_failure is not used).
+        Steps jumped over are SKIPPED. Jumps only go forward (no loops).
+    -->
+    <changeSet id="009-gw-flow-step-branching" author="json-gateway">
+        <addColumn tableName="${tbl.flow_step}">
+            <column name="next_on_success" type="varchar(100)"/>
+            <column name="next_on_failure" type="varchar(100)"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

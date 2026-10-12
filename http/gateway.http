@@ -321,3 +321,21 @@ POST {{baseUrl}}/api/v1/template/notify
 Content-Type: application/json
 
 {"account": "1001", "amount": 150000, "message": "Say \"hi\"", "recipients": ["0812000001", "0812000002"]}
+
+### ---------------------------------------------------------------------------------------------------------------
+### Branching (next_on_success / next_on_failure), flow TRANSFER_WITH_REVERSAL:
+###   debit ✓→ notify → 200 {refNo, notified};  debit ✗→ reversal → FAIL → 422 with the debit's error
+### ---------------------------------------------------------------------------------------------------------------
+
+### success path: reversal is SKIPPED
+POST {{baseUrl}}/api/v1/transfers/with-reversal
+Content-Type: application/json
+
+{"fromAccount": "1001", "toAccount": "2002", "amount": 150000}
+
+### failure path: the stub answers 51 for this amount, so the reversal runs, notify is skipped and the flow answers
+### with its named response "reversed": 422 {"status":"REVERSED","reason":"Insufficient funds","reversalRef":"REV-0001",...}
+POST {{baseUrl}}/api/v1/transfers/with-reversal
+Content-Type: application/json
+
+{"fromAccount": "1001", "toAccount": "2002", "amount": 999999999}

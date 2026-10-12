@@ -67,6 +67,21 @@ public class StudioAuditController {
         }
     }
 
+    /** The last recorded response of a step: a real example of what its downstream answers. */
+    @GetMapping("/last-response")
+    public ResponseEntity<Object> lastResponse(@RequestHeader(name = "X-Admin-Token", required = false) String supplied,
+            @RequestParam String flow, @RequestParam String step) {
+        if (!authorized(supplied)) {
+            return UNAUTHORIZED;
+        }
+        Map<String, Object> row = audit.lastResponse(flow, step);
+        return row == null
+                ? ResponseEntity.status(404).body(Map.of("errors", List.of("no audited successful call of step '" + step
+                        + "' with a stored response yet: call the flow (Tests tab), with audit on and"
+                        + " gateway.audit.store-payloads=true")))
+                : ResponseEntity.ok(row);
+    }
+
     @GetMapping("/{correlationId}")
     public ResponseEntity<Object> detail(@RequestHeader(name = "X-Admin-Token", required = false) String supplied,
             @PathVariable String correlationId) {

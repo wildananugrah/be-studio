@@ -35,6 +35,9 @@ final class StudioRows {
 
     private StudioRows() {}
 
+    /** The application of flows that name none (the database default of {@code gw_flow.application_code}). */
+    static final String DEFAULT_APPLICATION = "DEFAULT";
+
     /**
      * Rows to document, in a stable order (flows, targets, lookups and schemas by code; steps by order, then name).
      * {@code schemaDescriptions} is {@code gw_json_schema.description} by code, which the config rows leave out.
@@ -45,8 +48,16 @@ final class StudioRows {
                 .filter(r -> r.stepId() != null && STEP_REQUEST.equals(r.phase()))
                 .collect(Collectors.groupingBy(RuleRow::stepId));
         Map<Long, List<RuleRow>> responseByFlow = rows.rules().stream()
-                .filter(r -> r.stepId() == null && FLOW_RESPONSE.equals(r.phase()))
+                .filter(r -> r.stepId() == null && FLOW_RESPONSE.equals(r.phase()) && r.responseName() == null)
                 .collect(Collectors.groupingBy(RuleRow::flowId));
+        Map<String, List<RuleRow>> namedRules = rows.rules().stream()
+                .filter(r -> r.stepId() == null && FLOW_RESPONSE.equals(r.phase()) && r.responseName() != null)
+                .collect(Collectors.groupingBy(r -> r.flowId() + "/" + r.responseName()));
+        Map<Long, List<StudioConfig.Response>> responsesByFlow = new java.util.HashMap<>();
+        rows.responses().stream()
+                .sorted(Comparator.comparing(ConfigRows.ResponseRow::name, Comparator.nullsFirst(Comparator.naturalOrder())))
+                .forEach(r -> responsesByFlow.computeIfAbsent(r.flowId(), k -> new ArrayList<>()).add(new StudioConfig.Response(
+                        r.name(), r.status(), r.description(), rules(namedRules.getOrDefault(r.flowId() + "/" + r.name(), List.of())))));
 
         List<Flow> flows = rows.flows().stream()
                 .sorted(Comparator.comparing(FlowRow::code, Comparator.nullsFirst(Comparator.naturalOrder())))
@@ -61,9 +72,10 @@ final class StudioRows {
                                         s.timeoutMs(), s.responseSchemaCode(), s.requestHandler(),
                                         s.responseHandler(), s.bodyCodec(), s.enabled(),
                                         rules(rulesByStep.getOrDefault(s.id(), List.of())), s.sqlText(),
-                                        s.bodyTemplate()))
+                                        s.bodyTemplate(), s.nextOnSuccess(), s.nextOnFailure(), s.responseExample()))
                                 .toList(),
-                        rules(responseByFlow.getOrDefault(f.id(), List.of()))))
+                        rules(responseByFlow.getOrDefault(f.id(), List.of())), f.applicationCode(),
+                        responsesByFlow.getOrDefault(f.id(), List.of())))
                 .toList();
 
         Map<String, List<Header>> headers = new TreeMap<>();
@@ -98,7 +110,11 @@ final class StudioRows {
                         s.region(), s.endpoint(), s.pathStyle(), s.accessKey(), s.secretKey(), s.allowedTypes(),
                         s.maxSize(), s.enabled()))
                 .toList();
-        return new StudioConfig(null, flows, targets, lookups, schemas, storages);
+        List<StudioConfig.Application> applications = rows.applications().stream()
+                .sorted(Comparator.comparing(ConfigRows.ApplicationRow::code, Comparator.nullsFirst(Comparator.naturalOrder())))
+                .map(a -> new StudioConfig.Application(a.code(), a.name(), a.description()))
+                .toList();
+        return new StudioConfig(null, flows, targets, lookups, schemas, storages, applications);
     }
 
     private static List<Rule> rules(List<RuleRow> rows) {
@@ -119,15 +135,17 @@ final class StudioRows {
         List<FlowRow> flows = new ArrayList<>();
         List<StepRow> steps = new ArrayList<>();
         List<RuleRow> rules = new ArrayList<>();
+        List<ConfigRows.ResponseRow> responses = new ArrayList<>();
         long flowId = 0;
         long stepId = 0;
+        long responseId = 0;
         for (Flow f : config.flows()) {
             flowId++;
             flows.add(new FlowRow(flowId, text(f.code()), text(f.name()), text(f.method()), text(f.path()),
                     text(f.requestSchema()), text(f.responseSchema()), text(f.requestHandler()),
                     text(f.responseHandler()), text(f.errorHandler()),
                     f.successStatus() == null ? 200 : f.successStatus(), f.timeoutMs(),
-                    or(f.auditMode(), "INHERIT"), f.enabled()));
+                    or(f.auditMode(), "INHERIT"), f.enabled(), or(f.application(), DEFAULT_APPLICATION)));
             for (Step s : f.steps()) {
                 stepId++;
                 // a database query step has no HTTP method, path or wire format
@@ -136,10 +154,17 @@ final class StudioRows {
                         sql ? null : text(s.method()), sql ? null : text(s.path()), text(s.condition()),
                         text(s.success()), or(s.onFailure(), "STOP"), s.timeoutMs(), text(s.responseSchema()),
                         text(s.requestHandler()), text(s.responseHandler()), sql ? null : text(s.bodyCodec()),
-                        s.enabled(), sql ? s.sql().strip() : null, sql || s.bodyTemplate() == null || s.bodyTemplate().isBlank() ? null : s.bodyTemplate()));
+                        s.enabled(), sql ? s.sql().strip() : null, sql || s.bodyTemplate() == null || s.bodyTemplate().isBlank() ? null : s.bodyTemplate(),
+                        text(s.nextOnSuccess()), text(s.nextOnFailure()),
+                        s.responseExample() == null || s.responseExample().isBlank() ? null : s.responseExample()));
                 addRules(rules, s.rules(), flowId, stepId, STEP_REQUEST);
             }
             addRules(rules, f.response(), flowId, null, FLOW_RESPONSE);
+            for (StudioConfig.Response r : f.responses()) {
+                responses.add(new ConfigRows.ResponseRow(++responseId, flowId, text(r.name()),
+                        r.status() == null ? 200 : r.status(), text(r.description())));
+                addRules(rules, r.rules(), flowId, null, FLOW_RESPONSE, text(r.name()));
+            }
         }
 
         List<TargetRow> targets = new ArrayList<>();
@@ -181,16 +206,32 @@ final class StudioRows {
                     s3 ? text(s.endpoint()) : null, s3 && s.pathStyle(), s3 ? text(s.accessKey()) : null,
                     s3 ? text(s.secretKey()) : null, text(s.allowedTypes()), text(s.maxSize()), s.enabled()));
         }
-        return new ConfigRows(flows, steps, rules, lookups, schemas, targets, headers, storages);
+        List<ConfigRows.ApplicationRow> applications = new ArrayList<>();
+        long applicationId = 0;
+        for (StudioConfig.Application a : config.applications()) {
+            applications.add(new ConfigRows.ApplicationRow(++applicationId, text(a.code()), text(a.name()),
+                    text(a.description())));
+        }
+        // a flow without an application belongs to DEFAULT, which then has to exist
+        if (flows.stream().anyMatch(f -> DEFAULT_APPLICATION.equals(f.applicationCode()))
+                && applications.stream().noneMatch(a -> DEFAULT_APPLICATION.equals(a.code()))) {
+            applications.add(new ConfigRows.ApplicationRow(++applicationId, DEFAULT_APPLICATION, "Default application", null));
+        }
+        return new ConfigRows(flows, steps, rules, lookups, schemas, targets, headers, storages, applications, responses);
     }
 
     private static void addRules(List<RuleRow> out, List<Rule> rules, long flowId, Long stepId, String phase) {
+        addRules(out, rules, flowId, stepId, phase, null);
+    }
+
+    private static void addRules(List<RuleRow> out, List<Rule> rules, long flowId, Long stepId, String phase,
+            String response) {
         int seq = 0;
         for (Rule r : rules) {
             seq++;
             out.add(new RuleRow(seq, flowId, stepId, phase, seq, or(r.type(), "BODY"), text(r.target()),
                     text(r.source()), text(r.constant()), text(r.defaultValue()), text(r.converter()),
-                    text(r.lookup()), text(r.fieldHandler()), r.required()));
+                    text(r.lookup()), text(r.fieldHandler()), r.required(), response));
         }
     }
 
@@ -209,6 +250,15 @@ final class StudioRows {
             }
             if (f.pathPattern() == null) {
                 errors.add(where + ": path_pattern is required");
+            }
+        }
+        Set<String> responseNames = new HashSet<>();
+        for (ConfigRows.ResponseRow r : rows.responses()) {
+            String where = "flow '" + flowCodes.get(r.flowId()) + "'";
+            if (r.name() == null) {
+                errors.add(where + ": every response needs a name");
+            } else if (!responseNames.add(r.flowId() + "/" + r.name())) {
+                errors.add(where + " response '" + r.name() + "': duplicate response name (unique per flow)");
             }
         }
         Set<String> stepNames = new HashSet<>();

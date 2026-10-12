@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Named client responses of a flow, besides its default one (gw_flow.success_status + the FLOW_RESPONSE rules
+        without a response_name). A step routes to one with next_on_success / next_on_failure = RESPOND:<name>: the
+        flow stops and answers with that response's status and its own FLOW_RESPONSE rules
+        (gw_mapping_rule.response_name = <name>).
+    -->
+    <changeSet id="011-gw-flow-response" author="json-gateway">
+        <createTable tableName="${tbl.flow_response}">
+            <column name="id" type="bigint" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="${tbl.flow_response}_PK" nullable="false"/>
+            </column>
+            <column name="flow_id" type="bigint">
+                <constraints nullable="false" foreignKeyName="${tbl.flow_response}_FK1"
+                             referencedTableName="${tbl.flow}" referencedColumnNames="id" deleteCascade="true"/>
+            </column>
+            <column name="name" type="varchar(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status_code" type="int" defaultValueNumeric="200">
+                <constraints nullable="false"/>
+            </column>
+            <column name="description" type="varchar(500)"/>
+        </createTable>
+        <addUniqueConstraint tableName="${tbl.flow_response}" columnNames="flow_id, name"
+                             constraintName="${tbl.flow_response}_UK1"/>
+        <addColumn tableName="${tbl.mapping_rule}">
+            <column name="response_name" type="varchar(100)"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

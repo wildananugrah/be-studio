@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Demo of branching (next_on_success / next_on_failure), dev data only.
+
+        POST /api/v1/transfers/with-reversal  {"fromAccount":"1001","toAccount":"2002","amount":150000}
+
+          debit (1) ──✓──► notify (3) ──► response {refNo, notified}
+             └──✗──► reversal (2) ──✓ FAIL──► the debit's error (422 GW-422-BUSINESS, step "debit")
+
+        The WireMock stub answers /core/transfers with 51 "Insufficient funds" for amount 999999999, else 00;
+        /core/reversals (branching-examples.json) always succeeds. The audit trail shows which path ran and the
+        steps that were SKIPPED.
+    -->
+    <changeSet id="107-demo-branching" author="json-gateway" context="dev">
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="TRANSFER_WITH_REVERSAL"/>
+            <column name="name" value="Transfer with reversal on failure (branching)"/>
+            <column name="http_method" value="POST"/>
+            <column name="path_pattern" value="/v1/transfers/with-reversal"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="name" value="debit"/><column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="CORE_BANKING"/><column name="http_method" value="POST"/>
+            <column name="path_template" value="/core/transfers"/>
+            <column name="success_expr" value="${steps.debit.body.responseCode} == '00'"/>
+            <column name="next_on_success" value="notify"/>
+            <column name="next_on_failure" value="reversal"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="name" value="reversal"/><column name="step_order" valueNumeric="2"/>
+            <column name="target_system" value="CORE_BANKING"/><column name="http_method" value="POST"/>
+            <column name="path_template" value="/core/reversals"/>
+            <column name="next_on_success" value="FAIL"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="name" value="notify"/><column name="step_order" valueNumeric="3"/>
+            <column name="target_system" value="CORE_BANKING"/><column name="http_method" value="POST"/>
+            <column name="path_template" value="/notifications"/>
+            <column name="on_failure" value="CONTINUE"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER_WITH_REVERSAL' AND s.name = 'debit')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_path" value="$.fromAcct"/><column name="source_path" value="$.request.body.fromAccount"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER_WITH_REVERSAL' AND s.name = 'debit')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="2"/>
+            <column name="target_path" value="$.toAcct"/><column name="source_path" value="$.request.body.toAccount"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER_WITH_REVERSAL' AND s.name = 'debit')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="3"/>
+            <column name="target_path" value="$.amount"/><column name="source_path" value="$.request.body.amount"/>
+            <column name="converter" value="PAD_LEFT:15:0"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER_WITH_REVERSAL' AND s.name = 'reversal')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_path" value="$.fromAcct"/><column name="source_path" value="$.request.body.fromAccount"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER_WITH_REVERSAL' AND s.name = 'reversal')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="2"/>
+            <column name="target_path" value="$.amount"/><column name="source_path" value="$.request.body.amount"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER_WITH_REVERSAL' AND s.name = 'reversal')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="3"/>
+            <column name="target_path" value="$.reason"/><column name="source_path" value="$.steps.debit.body.responseMessage"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER_WITH_REVERSAL' AND s.name = 'notify')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_path" value="$.account"/><column name="source_path" value="$.request.body.fromAccount"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER_WITH_REVERSAL' AND s.name = 'notify')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="2"/>
+            <column name="target_path" value="$.message"/>
+            <column name="constant_value" value="Transfer completed"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_path" value="$.refNo"/><column name="source_path" value="$.steps.debit.body.refNo"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_WITH_REVERSAL')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_path" value="$.notified"/><column name="source_path" value="$.steps.notify.outcome"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

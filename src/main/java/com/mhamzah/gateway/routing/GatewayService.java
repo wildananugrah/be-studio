@@ -35,6 +35,7 @@ public class GatewayService {
         // captured once: a concurrent reload does not affect this request
         FlowRegistry registry = registryHolder.current();
         MDC.put("correlationId", correlationId);
+        com.mhamzah.gateway.logging.RootAppenders.ensureAttached();
         try {
             var match = registry.match(request.method(), request.path());
             ExecutionResult result;

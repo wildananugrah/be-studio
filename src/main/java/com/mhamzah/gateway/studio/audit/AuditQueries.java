@@ -103,6 +103,19 @@ public class AuditQueries {
         return out;
     }
 
+    /**
+     * The response payload of the newest audited successful run of {@code step} in {@code flow} (as stored: masked,
+     * JSON, or a JSON string holding the XML that came back); null when there is none.
+     */
+    public Map<String, Object> lastResponse(String flow, String step) {
+        String where = " FROM " + steps + " s JOIN " + transactions + " t ON t.id = s.transaction_id"
+                + " WHERE t.flow_code = ? AND s.step_name = ? AND s.outcome = 'SUCCESS' AND s.response_payload IS NOT NULL";
+        List<Map<String, Object>> rows = jdbc.sql("SELECT s.response_payload, t.correlation_id, t.started_at" + where
+                        + " AND s.id = (SELECT MAX(s.id)" + where + ")")
+                .params(flow, step, flow, step).query().listOfRows();
+        return rows.isEmpty() ? null : AuditRows.row(rows.getFirst());
+    }
+
     /** What the screen needs to explain empty results. */
     public Map<String, Object> status() {
         Map<String, Object> out = new LinkedHashMap<>();

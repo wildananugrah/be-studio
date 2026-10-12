@@ -43,6 +43,10 @@ class FakeDownstream implements DownstreamClient {
         }
     }
 
+    long calls(String path) {
+        return requests.stream().filter(r -> r.path().split("\\?")[0].equals(path)).count();
+    }
+
     DownstreamRequest last(String path) {
         return requests.stream().filter(r -> r.path().startsWith(path)).reduce((a, b) -> b).orElseThrow();
     }
