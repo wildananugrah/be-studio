@@ -625,6 +625,151 @@ class FlowExecutorTest {
                 .anySatisfy(m -> assertThat(m).contains("response 'ghost' is not a response of this flow")));
     }
 
+    // ---- transform steps: re-map what the flow has so far, for the steps after them
+
+    private com.mhamzah.gateway.config.ConfigRows.StepRow transform(com.mhamzah.gateway.config.ConfigRows.FlowRow flow,
+            String name, int order, java.util.function.UnaryOperator<com.mhamzah.gateway.config.ConfigRows.StepRow> more) {
+        return rows.step(flow, name, order, s -> more.apply(s.withTarget("TRANSFORM").withMethod(null).withPathTemplate(null)));
+    }
+
+    @Test
+    void aTransformRemapsTheRequestAndEarlierStepsForTheNextStep() {
+        var flow = rows.flow("F", "POST", "/f");
+        rows.step(flow, "account", 1);
+        var t = transform(flow, "prepared", 2, s -> s);
+        rows.stepRule(t, "$.debit.accountNo", "$.request.body.from");
+        rows.stepRule(t, "$.debit.holder", "$.steps.account.body.acctName");
+        rows.rule(new com.mhamzah.gateway.config.ConfigRows.RuleRow(900, flow.id(), t.id(), "STEP_REQUEST", 3, "BODY",
+                "$.amount", "$.request.body.amount", null, null, "PAD_LEFT:10:0", null, null, true));
+        rows.rule(new com.mhamzah.gateway.config.ConfigRows.RuleRow(901, flow.id(), t.id(), "STEP_REQUEST", 4, "BODY",
+                "$.channel", null, "MOBILE", null, null, null, null, false));
+        var pay = rows.step(flow, "pay", 3);
+        rows.stepRule(pay, "$.payload", "$.steps.prepared.body");
+        rows.responseRule(flow, "$.sent", "$.steps.prepared.body.amount");
+        downstream.on("/account", r -> new DownstreamResponse(200, Map.of(), "{\"acctName\":\"BUDI\"}"));
+        downstream.on("/pay", r -> new DownstreamResponse(200, Map.of(), "{}"));
+
+        var result = run("POST", "/f", "{\"from\":\"1001\",\"amount\":150000}");
+
+        assertThat(result.response().status()).isEqualTo(200);
+        assertThat(downstream.last("/pay").body()).isEqualTo(
+                "{\"payload\":{\"debit\":{\"accountNo\":\"1001\",\"holder\":\"BUDI\"},\"amount\":\"0000150000\",\"channel\":\"MOBILE\"}}");
+        assertThat(result.response().body().toString()).isEqualTo("{\"sent\":\"0000150000\"}");
+        // nothing was called for the transform; the audit shows what it built
+        assertThat(downstream.requests).extracting(r -> r.path()).containsExactly("/account", "/pay");
+        assertThat(result.audit().steps()).filteredOn(x -> x.stepName().equals("prepared")).singleElement().satisfies(x -> {
+            assertThat(x.httpMethod()).isEqualTo("TRANSFORM");
+            assertThat(x.outcome()).isEqualTo("SUCCESS");
+            assertThat(x.responsePayload().get("channel").asString()).isEqualTo("MOBILE");
+        });
+    }
+
+    @Test
+    void aTransformCanBeWrittenAsAJsonTemplate() {
+        var flow = rows.flow("F", "POST", "/f");
+        rows.step(flow, "account", 1);
+        var t = transform(flow, "doc", 2, s -> s.withBodyTemplate("""
+                {"customer": {"id": "${request.body.from}", "name": "${steps.account.body.acctName}"},
+                 "amount": ${body.amount}, "tags": ${request.body.tags:[]}, "channel": "${request.headers.x-channel:API}"}"""));
+        rows.rule(new com.mhamzah.gateway.config.ConfigRows.RuleRow(910, flow.id(), t.id(), "STEP_REQUEST", 1, "BODY",
+                "$.amount", "$.request.body.amount", null, null, "DECIMAL_SCALE:2", null, null, false));
+        rows.responseRule(flow, "$.doc", "$.steps.doc.body");
+        downstream.on("/account", r -> new DownstreamResponse(200, Map.of(), "{\"acctName\":\"BUDI \\\"B\\\"\"}"));
+
+        var result = run("POST", "/f", "{\"from\":\"1001\",\"amount\":15,\"tags\":[\"a\",\"b\"]}");
+
+        assertThat(result.response().status()).isEqualTo(200);
+        assertThat(result.response().body().toString()).isEqualTo("{\"doc\":{\"customer\":{\"id\":\"1001\",\"name\":\"BUDI \\\"B\\\"\"},"
+                + "\"amount\":15.00,\"tags\":[\"a\",\"b\"],\"channel\":\"API\"}}");
+    }
+
+    @Test
+    void aTransformCanCheckWhatItBuilt() {
+        var flow = rows.flow("F", "POST", "/f");
+        var t = transform(flow, "check", 1, s -> s.withSuccess("${steps.check.body.limit} > 100"));
+        rows.stepRule(t, "$.limit", "$.request.body.limit");
+        rows.schema("CHECKED", "{\"type\":\"object\",\"required\":[\"limit\"],\"properties\":{\"limit\":{\"type\":\"integer\"}}}");
+        var s2 = transform(flow, "typed", 2, s -> new com.mhamzah.gateway.config.ConfigRows.StepRow(s.id(), s.flowId(), s.name(),
+                s.stepOrder(), s.targetSystem(), null, null, null, null, "STOP", null, "CHECKED", null, null, null, true));
+        rows.stepRule(s2, "$.limit", "$.request.body.limit");
+
+        assertThat(run("POST", "/f", "{\"limit\":500}").response().status()).isEqualTo(200);
+        var small = run("POST", "/f", "{\"limit\":5}");
+        assertThat(small.response().status()).isEqualTo(422);
+        assertThat(text(small.response(), "step")).isEqualTo("check");
+        var wrongType = run("POST", "/f", "{\"limit\":\"500x\"}");
+        assertThat(text(wrongType.response(), "step")).isIn("check", "typed");
+    }
+
+    @Test
+    void transformMistakesAreReportedOnReload() {
+        var flow = rows.flow("F", "POST", "/f");
+        var t = transform(flow, "t", 1, s -> s.withBodyTemplate("<a/>"));
+        rows.rule(t.flowId(), t.id(), "STEP_REQUEST", "HEADER", "X-A", "$.request.body.a", null);
+        rows.target("TRANSFORM", "http://somewhere");
+        assertThatThrownBy(this::registry).isInstanceOfSatisfying(ConfigValidationException.class, e -> assertThat(e.errors())
+                .anySatisfy(m -> assertThat(m).contains("step 't': body_template of a transform step must be JSON"))
+                .anySatisfy(m -> assertThat(m).contains("target_type HEADER is not allowed for a transform step"))
+                .anySatisfy(m -> assertThat(m).contains("'TRANSFORM' is reserved for transform steps")));
+    }
+
+    // ---- condition steps: check values and route
+
+    private com.mhamzah.gateway.config.ConfigRows.StepRow condition(com.mhamzah.gateway.config.ConfigRows.FlowRow flow,
+            String name, int order, String cases, java.util.function.UnaryOperator<com.mhamzah.gateway.config.ConfigRows.StepRow> more) {
+        return rows.step(flow, name, order, s -> more.apply(s.withTarget("CONDITION").withMethod(null).withPathTemplate(null).withCases(cases)));
+    }
+
+    @Test
+    void aConditionValidatesAndRoutesToTheFirstMatchingCase() {
+        var flow = rows.flow("F", "POST", "/f");
+        condition(flow, "check", 1, """
+                [{"when": "${request.body.amount} <= 0", "then": "RESPOND:invalid", "label": "not positive"},
+                 {"when": "${request.body.amount} > 50000000", "then": "approval", "label": "large"}]""", s -> s.withNext("post", null));
+        rows.step(flow, "approval", 2, s -> s.withNext("END", null));
+        rows.step(flow, "post", 3);
+        rows.responseRule(flow, "$.matched", "$.steps.check.body.matched");
+        rows.response(flow, "invalid", 400);
+        rows.responseRule(flow, "invalid", "$.error", null, "amount must be positive");
+        downstream.on("/approval", r -> new DownstreamResponse(200, Map.of(), "{}"));
+        downstream.on("/post", r -> new DownstreamResponse(200, Map.of(), "{}"));
+
+        var small = run("POST", "/f", "{\"amount\":10}");
+        assertThat(small.response().body().toString()).isEqualTo("{\"matched\":\"otherwise\"}");
+        assertThat(outcomes(small)).containsExactly("check=SUCCESS", "approval=SKIPPED", "post=SUCCESS");
+
+        var large = run("POST", "/f", "{\"amount\":60000000}");
+        assertThat(large.response().body().toString()).isEqualTo("{\"matched\":\"large\"}");
+        assertThat(outcomes(large)).containsExactly("check=SUCCESS", "approval=SUCCESS", "post=SKIPPED");
+
+        var invalid = run("POST", "/f", "{\"amount\":-5}");
+        assertThat(invalid.response().status()).isEqualTo(400);
+        assertThat(invalid.response().body().toString()).isEqualTo("{\"error\":\"amount must be positive\"}");
+        assertThat(invalid.audit().steps()).first().satisfies(x -> {
+            assertThat(x.httpMethod()).isEqualTo("CONDITION");
+            assertThat(x.responsePayload().get("matched").asString()).isEqualTo("not positive");
+        });
+    }
+
+    @Test
+    void conditionMistakesAreReportedOnReload() {
+        var flow = rows.flow("F", "POST", "/f");
+        rows.step(flow, "a", 1);
+        var c = condition(flow, "c", 2, "[{\"when\": \"${request.body.x} == 1\", \"then\": \"a\"}, {\"when\": \"${request.body.x} == 2\"},"
+                + " {\"when\": \"${steps.later.body.y} == 1\", \"then\": \"END\"}]", s -> s);
+        rows.stepRule(c, "$.x", "$.request.body.x");
+        condition(flow, "d", 3, "{not json", s -> s);
+        condition(flow, "e", 4, "[]", s -> s);
+        rows.step(flow, "later", 5);
+        assertThatThrownBy(this::registry).isInstanceOfSatisfying(ConfigValidationException.class, e -> assertThat(e.errors())
+                .anySatisfy(m -> assertThat(m).contains("step 'c' case 1 then: step 'a' (step_order 1) does not come after"))
+                .anySatisfy(m -> assertThat(m).contains("step 'c' case 2: needs both when (an expression) and then"))
+                .anySatisfy(m -> assertThat(m).contains("step 'c' case 3 when: references step 'later'"))
+                .anySatisfy(m -> assertThat(m).contains("step 'c': a condition step has no mapping rules"))
+                .anySatisfy(m -> assertThat(m).contains("step 'd': cases is not valid JSON"))
+                .anySatisfy(m -> assertThat(m).contains("step 'e': a condition step needs at least one case")));
+    }
+
     @Test
     void branchingMistakesAreReportedOnReload() {
         var flow = rows.flow("F", "POST", "/f");

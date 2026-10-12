@@ -139,7 +139,8 @@ public class FlowExecutor implements AutoCloseable {
             if (branch == null) {
                 continue;
             }
-            String route = branch.error() == null ? branch.step().nextOnSuccess() : branch.step().nextOnFailure();
+            String route = branch.route() != null ? branch.route()
+                    : branch.error() == null ? branch.step().nextOnSuccess() : branch.step().nextOnFailure();
             if (branch.error() != null && route != null) {
                 routedFailure = branch.error();
             }

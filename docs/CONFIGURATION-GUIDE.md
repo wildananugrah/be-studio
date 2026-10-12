@@ -726,6 +726,73 @@ UPDATE gw_flow_step SET next_on_success = 'RESPOND:reversed' WHERE name = 'rever
 
 In Studio: pipeline → under **Client response**, **+ Response** adds one (name, status, description; **Edit response mapping →**), and a step's **If it succeeds / If it fails** offers **Respond · <name>**. The API description lists each named response under its status (a `oneOf` when it shares the default's status), and so does the API specification document ("Other responses").
 
+### 4.11b Transform: re-map earlier results for the next steps
+
+A **transform step** calls nothing. Its `STEP_REQUEST` BODY rules build a JSON document from the request and every step with a lower `step_order`, and that document becomes its result: `$.steps.<name>.body`. Later steps, conditions, body templates and the response read it like any other step's result. Use it to reshape or combine data once (rename, nest, convert with converters and lookups, add constants) instead of repeating the same rules in every later step.
+
+| Column | Value |
+|---|---|
+| `target_system` | `TRANSFORM` (reserved: no target system, storage or SQL datasource may use that code) |
+| `http_method`, `path_template`, `body_codec`, `body_template`, `request_handler`, `timeout_ms` | not used (leave empty) |
+| `condition_expr`, `success_expr`, `on_failure`, `next_on_success` / `next_on_failure` | as for any step; `success_expr` checks what it built |
+| `response_schema_code` | validates what it built → `500 GW-500-MAPPING` |
+| `response_handler` | optional Java `MessageHandler` that can change the result after the rules |
+
+Rules: BODY targets only (`$.a.b`, or `$` for the whole result). Or write the result as a JSON **`body_template`** with `${...}` placeholders (as for HTTP steps, [§4.15](#415-body-templates-xml-soap-json-written-out)): `${request...}`, `${steps...}`, `${correlationId}`, `${x:default}`, and `${body.x}` for what the step's rules built (with converters and lookups). Text goes in quotes (`"${steps.a.body.name}"`), numbers, objects and arrays without (`${body.amount}`); the filled template must be valid JSON (otherwise `500 GW-500-MAPPING`) and becomes the result. Its outcome is `SUCCESS`; the audit trail shows it with method `TRANSFORM`, no URL, and what it built as the response.
+
+The dev data has `ACCOUNT_SUMMARY` (`GET /api/v1/accounts/{accountNo}/summary`, `110-dev-demo-transform.xml`):
+
+```
+account (1, CORE_BANKING GET /core/accounts/{acc})
+summary (2, TRANSFORM):  $.account.number   ← $.steps.account.body.acctNo
+                         $.account.holder   ← $.steps.account.body.acctName
+                         $.account.status   ← $.steps.account.body.statusCd   (lookup ACCOUNT_STATUS)
+                         $.balance          ← $.steps.account.body.availBal   (DECIMAL_SCALE:2)
+                         $.channel          ← $.request.headers.x-channel     (default API)
+                         $.source           = CORE_BANKING
+notify  (3, POST /notifications):  $.summary ← $.steps.summary.body
+response:                          $ ← $.steps.summary.body, $.notified ← $.steps.notify.outcome
+```
+
+```sql
+INSERT INTO gw_flow_step (flow_id, name, step_order, target_system)
+SELECT id, 'summary', 2, 'TRANSFORM' FROM gw_flow WHERE code = 'ACCOUNT_SUMMARY';
+```
+
+In Studio: drag **Transform** from the palette onto the pipeline, then **Edit transform mapping →**: the Mapping tab shows "What <name> builds" with a live preview of the result, and later steps see its fields in their CONTEXT.
+
+### 4.11c Condition: check values and route
+
+A **condition step** calls nothing. It checks a list of **cases** in order; the first one whose expression is true sends the flow to its route: a later step, `END`, `FAIL` (422 `GW-422-BUSINESS`) or `RESPOND:<name>` (one of the flow's named responses, e.g. a 400 for invalid input). When no case is true, `next_on_success` is taken, or simply the next step.
+
+| Column | Value |
+|---|---|
+| `target_system` | `CONDITION` (reserved, like `TRANSFORM`) |
+| `cases` | JSON array: `[{"when": "<expression>", "then": "<route>", "label": "<name>"}, ...]`; `when` uses the `condition_expr` syntax ([§3.6](#36-expressions-condition_expr-success_expr)) and may read the request and earlier steps. Combine checks with `&&` / `and`, `\|\|` / `or`, `!` / `not` and parentheses: `${request.body.currency} == 'USD' && (${request.body.amount} > 1000 \|\| ${request.body.vip})`. Studio may add a `builder` object (its rows); the gateway ignores it |
+| `next_on_success` | the route when no case is true (empty = next step) |
+| `condition_expr` | false = the whole check is skipped |
+
+It has no mapping rules (prepare values with a transform step before it), runs alone in its `step_order`, and routes only forward. Its result `$.steps.<name>.body` is `{"matched": "<label>", "case": <n>, "route": "<route>"}` (`"matched": "otherwise"` when none was true), so a response can say which check failed. The audit trail shows it with method `CONDITION`.
+
+The dev data has `TRANSFER_CHECKED` (`POST /api/v1/transfers/checked`, `111-dev-demo-condition.xml`):
+
+```
+check (CONDITION)
+  amount missing or <= 0        → RESPOND:invalid          400 {"error": "INVALID_TRANSFER", "reason": "amount must be positive"}
+  fromAccount == toAccount      → RESPOND:invalid          400 {"error": "INVALID_TRANSFER", "reason": "same account"}
+  amount > 50000000             → RESPOND:needs_approval   202 {"status": "PENDING_APPROVAL", "amount": ...}
+  otherwise                     → debit (CORE_BANKING)     200 {"refNo": "...", "status": "POSTED"}
+```
+
+```sql
+INSERT INTO gw_flow_step (flow_id, name, step_order, target_system, cases)
+SELECT id, 'check', 1, 'CONDITION',
+       '[{"when": "${request.body.amount} <= 0", "then": "RESPOND:invalid", "label": "amount must be positive"}]'
+FROM gw_flow WHERE code = 'TRANSFER_CHECKED';
+```
+
+In Studio: drag **Condition** from the palette; the inspector has **Cases** and **Otherwise**. Each case's WHEN is built from rows (field, with suggestions from the request and earlier steps; operator `== != > >= < <=`, *is empty*, *is not empty*, *matches* a regex; value) joined by **ALL (&&)** or **ANY (\|\|)**, and shows the expression it writes; **edit as expression** switches to writing it by hand (parentheses, arithmetic). THEN chooses where to go; ↑ ↓ reorder, **+ Case** adds one. The pipeline draws one purple arrow per case.
+
 ### 4.12 Timeouts
 
 ```sql

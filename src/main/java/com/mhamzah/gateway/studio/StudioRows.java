@@ -72,7 +72,8 @@ final class StudioRows {
                                         s.timeoutMs(), s.responseSchemaCode(), s.requestHandler(),
                                         s.responseHandler(), s.bodyCodec(), s.enabled(),
                                         rules(rulesByStep.getOrDefault(s.id(), List.of())), s.sqlText(),
-                                        s.bodyTemplate(), s.nextOnSuccess(), s.nextOnFailure(), s.responseExample()))
+                                        s.bodyTemplate(), s.nextOnSuccess(), s.nextOnFailure(), s.responseExample(),
+                                        cases(s.cases())))
                                 .toList(),
                         rules(responseByFlow.getOrDefault(f.id(), List.of())), f.applicationCode(),
                         responsesByFlow.getOrDefault(f.id(), List.of())))
@@ -117,6 +118,43 @@ final class StudioRows {
         return new StudioConfig(null, flows, targets, lookups, schemas, storages, applications);
     }
 
+    /** {@code gw_flow_step.cases} (JSON) to the cases of a condition step; unreadable text gives none. */
+    private static List<StudioConfig.Case> cases(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<StudioConfig.Case> out = new ArrayList<>();
+            for (tools.jackson.databind.JsonNode c : com.mhamzah.gateway.mapping.JsonValues.MAPPER.readTree(json)) {
+                out.add(new StudioConfig.Case(c.path("when").asString(null), c.path("then").asString(null),
+                        c.path("label").asString(null), c.has("builder") ? c.get("builder") : null));
+            }
+            return out;
+        } catch (RuntimeException e) {
+            return List.of();
+        }
+    }
+
+    /** The cases as stored: [{"when", "then", "label"}], blank fields left out; null when there are none. */
+    static String casesJson(List<StudioConfig.Case> cases) {
+        if (cases == null || cases.isEmpty()) {
+            return null;
+        }
+        tools.jackson.databind.node.ArrayNode out = com.mhamzah.gateway.mapping.JsonValues.MAPPER.createArrayNode();
+        for (StudioConfig.Case c : cases) {
+            tools.jackson.databind.node.ObjectNode o = out.addObject();
+            o.put("when", text(c.when()));
+            o.put("then", text(c.then()));
+            if (text(c.label()) != null) {
+                o.put("label", text(c.label()));
+            }
+            if (c.builder() != null && !c.builder().isNull()) {
+                o.set("builder", c.builder());
+            }
+        }
+        return out.toString();
+    }
+
     private static List<Rule> rules(List<RuleRow> rows) {
         return rows.stream()
                 .sorted(Comparator.comparingInt(RuleRow::seq))
@@ -150,13 +188,19 @@ final class StudioRows {
                 stepId++;
                 // a database query step has no HTTP method, path or wire format
                 boolean sql = text(s.sql()) != null;
+                // a transform calls nothing: no method, path, codec, template or example
+                boolean transform = !sql && com.mhamzah.gateway.config.StepDefinition.TRANSFORM.equals(text(s.targetSystem()));
+                boolean condition = !sql && com.mhamzah.gateway.config.StepDefinition.CONDITION.equals(text(s.targetSystem()));
+                boolean bare = sql || transform || condition;
+                transform = transform || condition;
                 steps.add(new StepRow(stepId, flowId, text(s.name()), s.order(), text(s.targetSystem()),
-                        sql ? null : text(s.method()), sql ? null : text(s.path()), text(s.condition()),
-                        text(s.success()), or(s.onFailure(), "STOP"), s.timeoutMs(), text(s.responseSchema()),
-                        text(s.requestHandler()), text(s.responseHandler()), sql ? null : text(s.bodyCodec()),
-                        s.enabled(), sql ? s.sql().strip() : null, sql || s.bodyTemplate() == null || s.bodyTemplate().isBlank() ? null : s.bodyTemplate(),
+                        bare ? null : text(s.method()), bare ? null : text(s.path()), text(s.condition()),
+                        text(s.success()), or(s.onFailure(), "STOP"), transform ? null : s.timeoutMs(), text(s.responseSchema()),
+                        transform ? null : text(s.requestHandler()), text(s.responseHandler()), bare ? null : text(s.bodyCodec()),
+                        s.enabled(), sql ? s.sql().strip() : null, sql || condition || s.bodyTemplate() == null || s.bodyTemplate().isBlank() ? null : s.bodyTemplate(),
                         text(s.nextOnSuccess()), text(s.nextOnFailure()),
-                        s.responseExample() == null || s.responseExample().isBlank() ? null : s.responseExample()));
+                        s.responseExample() == null || s.responseExample().isBlank() ? null : s.responseExample(),
+                        condition ? casesJson(s.cases()) : null));
                 addRules(rules, s.rules(), flowId, stepId, STEP_REQUEST);
             }
             addRules(rules, f.response(), flowId, null, FLOW_RESPONSE);
@@ -274,10 +318,10 @@ final class StudioRows {
             if (s.targetSystem() == null) {
                 errors.add(where + ": target_system is required");
             }
-            if (s.httpMethod() == null && !s.isSql()) {
+            if (s.httpMethod() == null && !s.isSql() && !s.isTransform() && !s.isCondition()) {
                 errors.add(where + ": http_method is required");
             }
-            if (s.pathTemplate() == null && !s.isSql()) {
+            if (s.pathTemplate() == null && !s.isSql() && !s.isTransform() && !s.isCondition()) {
                 errors.add(where + ": path_template is required");
             }
         }

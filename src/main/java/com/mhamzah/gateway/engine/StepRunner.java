@@ -17,6 +17,7 @@ import com.mhamzah.gateway.invoke.DownstreamRequest;
 import com.mhamzah.gateway.invoke.DownstreamResponse;
 import com.mhamzah.gateway.invoke.TlsContexts;
 import com.mhamzah.gateway.mapping.BodyTemplate;
+import com.mhamzah.gateway.mapping.JsonValues;
 import com.mhamzah.gateway.mapping.MappedMessage;
 import com.mhamzah.gateway.mapping.MappingEngine;
 import com.mhamzah.gateway.storage.FileStore;
@@ -51,7 +52,8 @@ import tools.jackson.databind.node.ObjectNode;
 final class StepRunner {
 
     /** Result of one step. {@code error} is null on success. */
-    record StepOutcome(StepDefinition step, GatewayError error, StepRecord record) {
+    /** {@code route}: where a condition step's matching case sends the flow (null = its default route). */
+    record StepOutcome(StepDefinition step, GatewayError error, StepRecord record, String route) {
         boolean stopsFlow() {
             // a failure routed elsewhere (next_on_failure) is handled, like CONTINUE
             return error != null && step.onFailure() == OnFailure.STOP && step.nextOnFailure() == null;
@@ -93,6 +95,14 @@ final class StepRunner {
         }
         if (step.isStorage()) {
             store(step, ctx, deadlineNanos, a);
+            return;
+        }
+        if (step.isTransform()) {
+            transform(step, ctx, a);
+            return;
+        }
+        if (step.isCondition()) {
+            decide(step, ctx, a);
             return;
         }
         GatewayProperties.TargetSystem target = step.targetSystem();
@@ -201,6 +211,79 @@ final class StepRunner {
      * {@code name} of the mapped body), the request handler may still change them, and the result
      * ({@code {rows, rowCount, truncated}} or {@code {updated}}) is the step's response body.
      */
+    /**
+     * A transform step: its BODY rules build its result from the request and the earlier steps; nothing is called.
+     * The result is {@code $.steps.<name>.body} for later steps, conditions, templates and the response.
+     */
+    private void transform(StepDefinition step, ExecutionContext ctx, Attempt a) {
+        MappedMessage mapped;
+        try {
+            mapped = withStep(step, () -> mapping.apply(step.requestRules(), ctx));
+        } finally {
+            a.finishCall();
+        }
+        JsonNode built = mapped.body() == null ? F.objectNode() : mapped.body();
+        if (step.bodyTemplate() != null) {
+            // the template is the result; its ${body.x} placeholders read what the BODY rules built
+            String text = withStep(step, () -> step.bodyTemplate().render(ctx, mapped.body()));
+            try {
+                built = JsonValues.MAPPER.readTree(text);
+            } catch (RuntimeException e) {
+                a.responsePayload = F.stringNode(text);
+                throw GatewayError.of(ErrorType.MAPPING_ERROR).step(step.name())
+                        .message("body_template of transform '" + step.name() + "' did not give valid JSON: " + e.getMessage())
+                        .build();
+            }
+        }
+        MessageView result = new MessageView(new LinkedHashMap<>(), built);
+        if (step.responseHandler() != null) {
+            FlowExecutor.invoke(step.responseHandler(), result, ctx, "response_handler of step '" + step.name() + "'", false);
+        }
+        a.responsePayload = result.body();
+        if (step.responseSchema() != null) {
+            List<String> errors = step.responseSchema().validate(result.body());
+            if (!errors.isEmpty()) {
+                throw GatewayError.of(ErrorType.MAPPING_ERROR).step(step.name())
+                        .message("Transform result failed schema " + step.responseSchema().code()).details(errors).build();
+            }
+        }
+        a.outcome = "SUCCESS";
+        ctx.putStepResult(step.name(), a.result(null));
+        if (step.success() != null && !withStep(step, () -> step.success().evaluate(ctx))) {
+            a.outcome = "FAILED";
+            throw GatewayError.of(ErrorType.DOWNSTREAM_BUSINESS_ERROR).step(step.name())
+                    .message("success_expr of step '" + step.name() + "' is false").build();
+        }
+    }
+
+    /**
+     * A condition step: the first case whose expression is true chooses the route; none = the default route. Its
+     * result ({@code $.steps.<name>.body}) records which case matched.
+     */
+    private void decide(StepDefinition step, ExecutionContext ctx, Attempt a) {
+        ObjectNode body = F.objectNode();
+        try {
+            int n = 0;
+            for (StepDefinition.Case c : step.cases()) {
+                n++;
+                if (withStep(step, () -> c.when().evaluate(ctx))) {
+                    body.put("matched", c.label()).put("case", n).put("route", c.route());
+                    a.route = c.route();
+                    break;
+                }
+            }
+        } finally {
+            a.finishCall();
+        }
+        if (a.route == null) {
+            body.put("matched", "otherwise").putNull("case")
+                    .put("route", step.nextOnSuccess() == null ? "next step" : step.nextOnSuccess());
+        }
+        a.responsePayload = body;
+        a.outcome = "SUCCESS";
+        ctx.putStepResult(step.name(), a.result(null));
+    }
+
     private void query(StepDefinition step, ExecutionContext ctx, long deadlineNanos, Attempt a) {
         MappedMessage mapped = withStep(step, () -> mapping.apply(step.requestRules(), ctx));
         MessageView request = new MessageView(new LinkedHashMap<>(), mapped.body() == null ? F.objectNode() : mapped.body());
@@ -459,6 +542,8 @@ final class StepRunner {
         Map<String, String> headers = Map.of();
         JsonNode requestPayload;
         JsonNode responsePayload;
+        /** The route chosen by a condition step's matching case. */
+        String route;
         /** The body as it was on the wire, for the audit, when the step's codec is not JSON. */
         String wireRequest;
         String wireResponse;
@@ -495,7 +580,7 @@ final class StepRunner {
             StepRecord record = new StepRecord(step.name(), step.targetSystemName(), step.methodName(), url,
                     status, outcome, wireRequest != null ? F.stringNode(wireRequest) : requestPayload,
                     wireResponse != null ? F.stringNode(wireResponse) : responsePayload, startedAt, durationMs);
-            return new StepOutcome(step, error, record);
+            return new StepOutcome(step, error, record, route);
         }
     }
 }

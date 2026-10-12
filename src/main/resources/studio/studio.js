@@ -2,7 +2,7 @@
 // through /studio/api (StudioController). Everything is edited in memory; "Save & reload" writes it in one go.
 import { html, render, Component } from './vendor/htm-preact.js';
 
-const C = { in: 'oklch(0.56 0.13 255)', call: 'oklch(0.62 0.17 42)', step: 'oklch(0.53 0.15 300)', out: 'oklch(0.55 0.12 160)', err: 'oklch(0.57 0.19 25)', flow: 'oklch(0.45 0.02 260)', java: 'oklch(0.7 0.13 85)', sql: 'oklch(0.52 0.12 200)', file: 'oklch(0.55 0.14 135)' };
+const C = { in: 'oklch(0.56 0.13 255)', call: 'oklch(0.62 0.17 42)', step: 'oklch(0.53 0.15 300)', out: 'oklch(0.55 0.12 160)', err: 'oklch(0.57 0.19 25)', flow: 'oklch(0.45 0.02 260)', java: 'oklch(0.7 0.13 85)', sql: 'oklch(0.52 0.12 200)', file: 'oklch(0.55 0.14 135)', tf: 'oklch(0.5 0.13 330)', cond: 'oklch(0.5 0.14 285)' };
 const MC = { GET: 'oklch(0.52 0.11 160)', POST: 'oklch(0.6 0.17 42)', PUT: 'oklch(0.52 0.13 255)', PATCH: 'oklch(0.5 0.15 300)', DELETE: 'oklch(0.55 0.19 25)' };
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 const MONO = "'Geist Mono',ui-monospace,Menlo,monospace";
@@ -33,7 +33,7 @@ function fromApi(c) {
       timeout: str(f.timeoutMs), audit: f.auditMode || 'INHERIT', enabled: f.enabled, application: str(f.application) || 'DEFAULT',
       steps: f.steps.map(s => ({ id: uid('s'), name: str(s.name), order: s.order, target: str(s.targetSystem), method: s.method || 'GET', path: str(s.path), onFailure: s.onFailure || 'STOP',
         timeout: str(s.timeoutMs), condition: str(s.condition), success: str(s.success), reqHandler: str(s.requestHandler), respHandler: str(s.responseHandler),
-        respSchema: str(s.responseSchema), bodyCodec: str(s.bodyCodec), enabled: s.enabled, rules: s.rules.map(ruleIn), sql: s.sql == null ? null : String(s.sql), bodyTemplate: str(s.bodyTemplate), nextOk: str(s.nextOnSuccess), nextFail: str(s.nextOnFailure), example: str(s.responseExample) })),
+        respSchema: str(s.responseSchema), bodyCodec: str(s.bodyCodec), enabled: s.enabled, rules: s.rules.map(ruleIn), sql: s.sql == null ? null : String(s.sql), bodyTemplate: str(s.bodyTemplate), nextOk: str(s.nextOnSuccess), nextFail: str(s.nextOnFailure), example: str(s.responseExample), cases: (s.cases || []).map(c => ({ id: uid('c'), when: str(c.when), then: str(c.then), label: str(c.label), builder: c.builder || null })) })),
       response: f.response.map(ruleIn),
       responses: (f.responses || []).map(r => ({ id: uid('o'), name: str(r.name), status: str(r.status || 200), description: str(r.description), rules: (r.rules || []).map(ruleIn) }))
     })),
@@ -89,6 +89,12 @@ const fileField = st => { const r = st.rules.find(x => x.type === 'BODY' && x.ta
 
 /** A database query step (it has SQL; may be empty while being written). */
 const isSql = s => s.sql != null;
+/** A transform step re-maps what the flow has so far (request + earlier steps) into $.steps.<name>.body; it calls nothing. */
+const isTransform = s => !isSql(s) && s.target === 'TRANSFORM';
+/** A condition step checks values and routes: the first true case chooses where the flow goes; it calls nothing. */
+const isCondition = s => !isSql(s) && s.target === 'CONDITION';
+/** Steps that call nothing (no method, path, codec, template, example). */
+const isLocal = s => isTransform(s) || isCondition(s);
 /** The distinct :name parameters of a SQL text, skipping literals, quoted names, comments and :: casts (like the server). */
 function sqlParams(sql) {
   const out = []; const re = /'(?:[^']|'')*'|"(?:[^"]|"")*"|--[^\n]*|\/\*[\s\S]*?\*\/|::|:([A-Za-z_]\w*)/g; let m;
@@ -182,9 +188,9 @@ function toApi(cfg) {
     flows: cfg.flows.map(f => ({
       code: f.code, name: nn(f.name), method: f.method, path: f.path, requestSchema: nn(f.reqSchema), responseSchema: nn(f.respSchema), requestHandler: nn(f.reqHandler),
       responseHandler: nn(f.respHandler), errorHandler: nn(f.errorHandler), successStatus: int(f.successStatus) || 200, timeoutMs: int(f.timeout), auditMode: f.audit, enabled: f.enabled, application: nn(f.application),
-      steps: [...f.steps].sort((a, b) => a.order - b.order).map(s => ({ name: s.name, order: s.order, targetSystem: s.target, method: isSql(s) ? null : s.method, path: isSql(s) ? null : s.path, sql: isSql(s) ? s.sql : null, bodyTemplate: isSql(s) || isStore(s) ? null : nn(s.bodyTemplate), condition: nn(s.condition), success: nn(s.success),
+      steps: [...f.steps].sort((a, b) => a.order - b.order).map(s => ({ name: s.name, order: s.order, targetSystem: s.target, method: isSql(s) || isLocal(s) ? null : s.method, path: isSql(s) || isLocal(s) ? null : s.path, sql: isSql(s) ? s.sql : null, bodyTemplate: isSql(s) || isStore(s) || isCondition(s) ? null : nn(s.bodyTemplate), condition: nn(s.condition), success: nn(s.success),
         onFailure: s.onFailure, timeoutMs: int(s.timeout), responseSchema: nn(s.respSchema), requestHandler: nn(s.reqHandler), responseHandler: nn(s.respHandler), bodyCodec: nn(s.bodyCodec),
-        enabled: s.enabled, rules: s.rules.map(ruleOut), nextOnSuccess: nn(s.nextOk), nextOnFailure: nn(s.nextFail), responseExample: isSql(s) || isStore(s) ? null : nn(s.example) })),
+        enabled: s.enabled, rules: s.rules.map(ruleOut), nextOnSuccess: nn(s.nextOk), nextOnFailure: nn(s.nextFail), responseExample: isSql(s) || isStore(s) || isLocal(s) ? null : nn(s.example), cases: isCondition(s) ? (s.cases || []).map(c => ({ when: c.when, then: c.then, label: nn(c.label), builder: c.builder || null })) : [] })),
       response: f.response.map(ruleOut),
       responses: (f.responses || []).map(r => ({ name: r.name, status: int(r.status) || 200, description: nn(r.description), rules: r.rules.map(ruleOut) }))
     })),
@@ -252,6 +258,12 @@ function synthSample(f, lookups) {
   (f.path.match(/\{([^}]+)\}/g) || []).forEach(v => { const k = v.slice(1, -1); ctx.request.path[k] = guess(k, allRules.find(r => r.source === '$.request.path.' + k) || null, lookups); });
   f.steps.forEach(s => {
     if (isStore(s)) { ctx.steps[s.name] = { outcome: 'SUCCESS', headers: {}, body: s.method === 'DELETE' ? { storage: s.target, key: '2026/10/sample.pdf', deleted: true } : { storage: s.target, key: '2026/10/0b6c-sample.pdf', location: 'file:/data/files/2026/10/0b6c-sample.pdf', filename: 'sample.pdf', contentType: 'application/pdf', size: 24680, sha256: fileSample('x').sha256 } }; return; }
+    if (isCondition(s)) { ctx.steps[s.name] = { outcome: 'SUCCESS', headers: {}, body: { matched: (s.cases[0] && s.cases[0].label) || 'case 1', case: 1, route: (s.cases[0] && s.cases[0].then) || '' } }; return; }
+    if (isTransform(s)) {
+      ctx.steps[s.name] = { outcome: 'SUCCESS', headers: {}, body: {} };
+      s.rules.forEach(r => { if (r.type === 'BODY' && /^\$\./.test(r.target || '')) { const tk = toks(r.target).filter(x => typeof x === 'string' && x !== '*'); place(ctx, '$.steps.' + s.name + '.body' + r.target.slice(1), r.constant !== '' && r.constant != null ? r.constant : guess(String(tk[tk.length - 1] || 'value'), r, lookups)); } });
+      return;
+    }
     if (!isSql(s)) {
       ctx.steps[s.name] = { outcome: 'SUCCESS', status: 200, headers: {}, body: {} };
       // what the downstream answers: the step's response schema, then its example (both only describe; rules add the rest)
@@ -272,6 +284,8 @@ function synthSample(f, lookups) {
   f.steps.forEach(s => templateSlots(s.bodyTemplate).forEach(x => { const p = x.split(':')[0].trim(); if (/^(request|steps)\./.test(p)) { const tk = toks('$.' + p); place(ctx, '$.' + p, guess(String(tk[tk.length - 1]), null, lookups)); } }));
   f.steps.forEach(s => [s.condition, s.success].forEach(e => (String(e || '').match(/\$\{([^}]+)\}/g) || []).forEach(x => { const p = '$.' + x.slice(2, -1); const t = toks(p); place(ctx, p, guess(String(t[t.length - 1]), null, lookups)); })));
   files();
+  // a transform written as a JSON template: its result is the filled template (so later steps see its fields)
+  f.steps.filter(x => isTransform(x) && x.bodyTemplate).forEach(x => { try { ctx.steps[x.name].body = JSON.parse(renderTemplate(x.bodyTemplate, ctx, ctx.steps[x.name].body)); } catch (e) { /* not valid JSON yet */ } });
   return ctx;
 }
 const resolveEnv = b => String(b).replace(/\$\{([^}:]+)(?::([^}]*))?\}/g, (m, k, d) => (d !== undefined ? d : '<' + k + '>'));
@@ -369,10 +383,10 @@ function flowSql(f, lookupsUsed) {
   out.push('-- ' + (f.name || f.code) + '\nINSERT INTO gw_flow (' + fc.join(', ') + ')\nVALUES (' + fv.join(', ') + ');');
   const steps = [...f.steps].sort((a, b) => a.order - b.order);
   steps.forEach(st => {
-    const c = isSql(st) ? ['flow_id', 'name', 'step_order', 'target_system', 'sql_text'] : ['flow_id', 'name', 'step_order', 'target_system', 'http_method', 'path_template'];
-    const v = isSql(st) ? ['id', q(st.name), st.order, q(st.target), q(st.sql)] : ['id', q(st.name), st.order, q(st.target), q(st.method), q(st.path)];
+    const c = isSql(st) ? ['flow_id', 'name', 'step_order', 'target_system', 'sql_text'] : isLocal(st) ? ['flow_id', 'name', 'step_order', 'target_system'] : ['flow_id', 'name', 'step_order', 'target_system', 'http_method', 'path_template'];
+    const v = isSql(st) ? ['id', q(st.name), st.order, q(st.target), q(st.sql)] : isLocal(st) ? ['id', q(st.name), st.order, q(st.target)] : ['id', q(st.name), st.order, q(st.target), q(st.method), q(st.path)];
     opt('condition_expr', st.condition, 0, c, v); opt('success_expr', st.success, 0, c, v); if (st.onFailure !== 'STOP') opt('on_failure', st.onFailure, 0, c, v); opt('timeout_ms', st.timeout, 1, c, v);
-    opt('response_schema_code', st.respSchema, 0, c, v); opt('request_handler', st.reqHandler, 0, c, v); opt('response_handler', st.respHandler, 0, c, v); if (!isSql(st)) opt('body_codec', st.bodyCodec, 0, c, v); if (!isSql(st)) opt('body_template', st.bodyTemplate, 0, c, v); opt('next_on_success', st.nextOk, 0, c, v); opt('next_on_failure', st.nextFail, 0, c, v); if (!st.enabled) opt('enabled', 'false', 1, c, v);
+    opt('response_schema_code', st.respSchema, 0, c, v); opt('request_handler', st.reqHandler, 0, c, v); opt('response_handler', st.respHandler, 0, c, v); if (!isSql(st) && !isLocal(st)) opt('body_codec', st.bodyCodec, 0, c, v); if (!isSql(st) && !isCondition(st)) opt('body_template', st.bodyTemplate, 0, c, v); if (isCondition(st) && st.cases.length) opt('cases', JSON.stringify(st.cases.map(x => ({ when: x.when, then: x.then, ...(x.label ? { label: x.label } : {}), ...(x.builder ? { builder: x.builder } : {}) }))), 0, c, v); opt('next_on_success', st.nextOk, 0, c, v); opt('next_on_failure', st.nextFail, 0, c, v); if (!st.enabled) opt('enabled', 'false', 1, c, v);
     out.push('INSERT INTO gw_flow_step (' + c.join(', ') + ')\nSELECT ' + v.join(', ') + '\nFROM gw_flow WHERE code = ' + q(f.code) + ';');
   });
   const ruleSql = (r, i, st, resp) => {
@@ -411,9 +425,32 @@ const toggle = (on, onClick, w = 38, h = 22, cls = '', title = '') => html`
 // ---------- branching: where the flow goes after a step ----------
 const OK_C = 'oklch(0.5 0.13 155)', FAIL_C = 'oklch(0.55 0.18 25)';
 /** Renames a step and the routes of other steps that point at it. */
-const renameStep = (fl, st, v) => { const old = st.name; st.name = v; fl.steps.forEach(x => { if (x.nextOk === old) x.nextOk = v; if (x.nextFail === old) x.nextFail = v; }); };
+const renameStep = (fl, st, v) => { const old = st.name; st.name = v; fl.steps.forEach(x => { if (x.nextOk === old) x.nextOk = v; if (x.nextFail === old) x.nextFail = v; (x.cases || []).forEach(c => { if (c.then === old) c.then = v; }); }); };
 /** A route as shown to people: RESPOND:x → "respond x". */
 const routeLabel = v => (v && v.startsWith('RESPOND:') ? '⇒ ' + v.slice(8) : v);
+// ---------- condition builder: rows (field, operator, value) joined by && or || → a WHEN expression ----------
+const COND_OPS = [['==', 'equals'], ['!=', 'not equal'], ['>', 'greater than'], ['>=', 'at least'], ['<', 'less than'], ['<=', 'at most'], ['empty', 'is empty'], ['notEmpty', 'is not empty'], ['matches', 'matches regex']];
+/** A value as an expression literal: numbers, true/false/null and ${…} as they are, anything else quoted. */
+const condLiteral = v => { const t = String(v == null ? '' : v).trim(); return /^-?\d+(\.\d+)?$/.test(t) || /^(true|false|null)$/.test(t) || /^\$\{[^}]+\}$/.test(t) ? t : "'" + t.replace(/'/g, "''") + "'"; };
+/** The WHEN expression of builder rows; '' when no row has a field. */
+const condExpr = b => {
+  const parts = ((b && b.rows) || []).filter(r => (r.field || '').trim()).map(r => {
+    const f = '${' + r.field.trim().replace(/^\$\.?/, '') + '}';
+    if (r.op === 'empty') return '(' + f + ' == null || ' + f + " == '')";
+    if (r.op === 'notEmpty') return '(' + f + ' != null && ' + f + " != '')";
+    if (r.op === 'matches') return f + " matches '" + String(r.value || '').replace(/'/g, "''") + "'";
+    return f + ' ' + (r.op || '==') + ' ' + condLiteral(r.value);
+  });
+  return parts.join(b && b.join === '||' ? ' || ' : ' && ');
+};
+/** Every leaf path of a sample context under request and the given steps, for the field suggestions. */
+const leafPaths = (ctx, stepNames) => {
+  const out = []; const walk = (v, p, d) => { if (d > 6) return; if (v !== null && typeof v === 'object' && !Array.isArray(v)) { Object.keys(v).forEach(k => walk(v[k], p + '.' + k, d + 1)); } else out.push(p); };
+  walk((ctx && ctx.request) || {}, 'request', 0); stepNames.forEach(n => walk(((ctx && ctx.steps) || {})[n], 'steps.' + n, 0));
+  return out;
+};
+/** " → step" or " ⇒ response": a route after a label. */
+const via = v => (v && v.startsWith('RESPOND:') ? ' ' + routeLabel(v) : ' → ' + (v || '?'));
 /** The routes of a step for its card: ✓ target / ✗ target, else its on_failure. */
 const routeTag = st => {
   if (!st.nextOk && !st.nextFail) return html`<span style=${`color:${st.onFailure === 'CONTINUE' ? C.out : '#9A9CA2'}`}>${st.onFailure}</span>`;
@@ -426,24 +463,29 @@ const drawRoutes = (svg, f) => {
   const card = name => box.querySelector(name === 'END' ? '[data-node="out"]' : name.startsWith('RESPOND:') ? `[data-resp="${CSS.escape(name.slice(8))}"]` : `[data-step="${CSS.escape(name)}"]`);
   const at = (el, side) => { const r = el.getBoundingClientRect(); return { x: r.left - b.left + r.width / 2, y: (side === 'top' ? r.top : r.bottom) - b.top, w: r.width }; };
   let out = '';
-  const arc = (from, to, ok, label, k) => {
+  const arc = (from, to, ok, label, k, isCase) => {
     const side = ok ? 'top' : 'bottom'; const s = at(from, side), t = at(to, side); const dir = ok ? -1 : 1;
-    const sx = s.x + (ok ? 16 : -16) + k * 6, tx = t.x - t.w / 2 + 18 + k * 6, lift = 34 + k * 8;
+    const sx = s.x + (ok ? 16 : -16) + k * 6, tx = t.x - t.w / 2 + 18 + k * 6, lift = 34 + k * 15;
     const ys = s.y, yt = t.y, peak = (ok ? Math.min(ys, yt) : Math.max(ys, yt)) + dir * lift;
-    const c = ok ? OK_C : FAIL_C;
-    out += `<path d="M${sx},${ys} C${sx},${peak} ${tx},${peak} ${tx},${yt}" fill="none" stroke="${c}" stroke-width="1.6" stroke-dasharray="${ok ? '' : '5 3'}" marker-end="url(#arr-${ok ? 'ok' : 'fail'})"/>`;
-    out += `<text x="${(sx + tx) / 2}" y="${peak + (ok ? -4 : 12)}" text-anchor="middle" font-size="10.5" font-family="${MONO.replace(/"/g, '')}" fill="${c}">${ok ? '✓' : '✗'} ${label}</text>`;
+    const c = isCase ? C.cond : ok ? OK_C : FAIL_C;
+    const esc = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    out += `<path d="M${sx},${ys} C${sx},${peak} ${tx},${peak} ${tx},${yt}" fill="none" stroke="${c}" stroke-width="1.6" stroke-dasharray="${ok ? '' : '5 3'}" marker-end="url(#arr-${isCase ? 'case' : ok ? 'ok' : 'fail'})"/>`;
+    out += `<text x="${(sx + tx) / 2}" y="${peak + (ok ? -4 : 12)}" text-anchor="middle" font-size="10.5" font-family="${MONO.replace(/"/g, '')}" fill="${c}">${isCase ? '◆' : ok ? '✓' : '✗'} ${esc(label)}</text>`;
   };
   let k = 0;
   f.steps.forEach(st => {
     const from = box.querySelector(`[data-step="${CSS.escape(st.name)}"]`); if (!from) return;
     [[st.nextOk, true], [st.nextFail, false]].forEach(([to, ok]) => {
       if (!to || to === 'FAIL') return; const el = card(to); if (!el) return;
-      arc(from, el, ok, to === 'END' ? 'END' : st.name + ' → ' + routeLabel(to), k++ % 3);
+      arc(from, el, ok, to === 'END' ? 'END' : (isCondition(st) ? 'otherwise' : st.name) + via(to), k++ % 4);
+    });
+    (isCondition(st) ? st.cases : []).forEach((c, n) => {
+      if (!c.then || c.then === 'FAIL') return; const el = card(c.then); if (!el) return;
+      arc(from, el, true, (c.label || 'case ' + (n + 1)) + via(c.then), k++ % 4, true);
     });
   });
   svg.setAttribute('width', box.scrollWidth); svg.setAttribute('height', box.scrollHeight);
-  svg.innerHTML = `<defs><marker id="arr-ok" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="${OK_C}"/></marker><marker id="arr-fail" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="${FAIL_C}"/></marker></defs>` + out;
+  svg.innerHTML = `<defs><marker id="arr-ok" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="${OK_C}"/></marker><marker id="arr-fail" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="${FAIL_C}"/></marker><marker id="arr-case" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="${C.cond}"/></marker></defs>` + out;
 };
 const errList = errs => errs.length > 0 && html`<div style="display:flex;flex-direction:column;gap:3px">${errs.map(e => html`<div style=${`font:11px/1.45 ${MONO};color:oklch(0.5 0.18 25)`}>${e}</div>`)}</div>`;
 const pageHead = (title, desc, btnLabel, onBtn) => html`
@@ -580,7 +622,7 @@ class App extends Component {
       }
       const t = e.target; const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
       if (e.key === '/' && !typing && !e.metaKey && !e.ctrlKey) {
-        const el = document.getElementById('palette-search');
+        const el = document.getElementById('palette-search') || document.getElementById('target-search') || document.getElementById('list-search');
         if (el) { e.preventDefault(); el.focus(); el.select(); }
       }
     });
@@ -693,7 +735,7 @@ class App extends Component {
     // a route to a deleted step goes back to the default (the server would reject it)
     const names = new Set(f.steps.map(x => x.name)); const resps = new Set((f.responses || []).map(r => 'RESPOND:' + r.name));
     const keep = v => !v || v === 'END' || v === 'FAIL' || names.has(v) || resps.has(v);
-    f.steps.forEach(x => { if (!keep(x.nextOk)) x.nextOk = ''; if (!keep(x.nextFail)) x.nextFail = ''; });
+    f.steps.forEach(x => { if (!keep(x.nextOk)) x.nextOk = ''; if (!keep(x.nextFail)) x.nextFail = ''; (x.cases || []).forEach(c => { if (!keep(c.then)) c.then = ''; }); });
   }
   ds(payload) { if (this.ro) return e => e.preventDefault(); return e => { e.dataTransfer.effectAllowed = 'copyMove'; try { e.dataTransfer.setData('text/plain', payload.kind); } catch (_) { /* ignore */ } setTimeout(() => this.setState({ drag: payload, over: null }), 0); }; }
   dragEnd = () => this.setState({ drag: null, over: null });
@@ -751,10 +793,11 @@ class App extends Component {
     return [...db, ...yml];
   }
   newStep(f, target, order, sql, store) {
-    const base = sql ? 'query' : store ? 'store' : String(target).toLowerCase().split('_')[0] || 'call';
+    const base = sql ? 'query' : store ? 'store' : target === 'TRANSFORM' ? 'transform' : target === 'CONDITION' ? 'check' : String(target).toLowerCase().split('_')[0] || 'call';
     let name = base, i = 2; while (f.steps.some(x => x.name === name)) name = base + (i++);
     return { id: uid('s'), name, order, target, method: 'GET', path: '/', onFailure: 'STOP', nextOk: '', nextFail: '', timeout: '', condition: '', success: '', reqHandler: '', respHandler: '', respSchema: '', bodyCodec: '', enabled: true, rules: [],
       sql: sql ? 'SELECT *\nFROM my_table\nWHERE id = :id' : null,
+      cases: target === 'CONDITION' ? [{ id: uid('c'), when: '${request.body.amount} <= 0', then: '', label: 'not positive', builder: { join: '&&', rows: [{ field: 'request.body.amount', op: '<=', value: '0' }] } }] : [],
       ...(store ? { method: 'PUT', path: '/{yyyy}/{MM}/{uuid}-{filename}', rules: [ruleIn({ type: 'BODY', target: '$.file', source: '$.request.files.file', required: true })] } : {}) };
   }
   place(d, order, insert) {
@@ -787,6 +830,8 @@ class App extends Component {
         ...cat.messageHandlers.map(h => ({ label: h, sub: 'request_handler', java: true, zone: 'in', apply: f => { f.reqHandler = h; } }))] },
       { cat: 'Downstream call', color: C.call, items: this.allTargets().map(t => ({ label: 'Call ' + t.code, sub: resolveEnv(t.base).replace(/^https?:\/\//, ''), kind: 'call', target: t.code })) },
       { cat: 'File storage', color: C.file, items: this.allStorages().map(d => ({ label: 'Store file · ' + d.name, sub: d.type + ' · ' + d.location.replace(/^file:/, ''), kind: 'call', target: d.name, store: true })) },
+      { cat: 'Transform', color: C.tf, items: [{ label: 'Transform', sub: 're-map request + earlier steps for the next ones', kind: 'call', target: 'TRANSFORM' }] },
+      { cat: 'Condition', color: C.cond, items: [{ label: 'Condition', sub: 'check values, route to a step or response', kind: 'call', target: 'CONDITION' }] },
       { cat: 'Database query', color: C.sql, items: (cat.sqlDatasources || []).map(d => ({ label: 'Query ' + d.name, sub: (d.gatewayDatabase ? 'gateway database' : 'datasource') + (d.readOnly ? ' · read-only' : ''), kind: 'call', target: d.name, sql: true })) },
       { cat: 'Step policy', color: C.step, items: [
         { label: 'Run only if…', sub: 'condition_expr', zone: 'step', apply: (st, f) => { const p = prevName(st, f); st.condition = p ? '${steps.' + p + ".status} == 200" : '${request.body.amount} > 0'; } },
@@ -1138,23 +1183,64 @@ class App extends Component {
     const used = code => s.cfg.flows.reduce((a, x) => a + x.steps.filter(y => y.target === code).length, 0);
     const T = (i, fn) => this.mutCfg(cfg => fn(cfg.targets[i], cfg));
     const val = e => e.currentTarget.value;
-    const newTarget = () => this.mutCfg(cfg => { let k = 1; while (cfg.targets.some(x => x.code === 'NEW_SYSTEM_' + k)) k++; cfg.targets.push({ code: 'NEW_SYSTEM_' + k, base: '${NEW_SYSTEM_' + k + '_URL:http://localhost:9000}', connect: '3000', read: '10000', bodyCodec: '', enabled: true, headers: [], tls: { ...TLS0 } }); });
+    const newTarget = () => { let k = 1; while (s.cfg.targets.some(x => x.code === 'NEW_SYSTEM_' + k)) k++; const code = 'NEW_SYSTEM_' + k;
+      this.mutCfg(cfg => { cfg.targets.push({ code, base: '${' + code + '_URL:http://localhost:9000}', connect: '3000', read: '10000', bodyCodec: '', enabled: true, headers: [], tls: { ...TLS0 } }); });
+      this.setState({ tgtOpen: code, tgtQ: '' }); };
     const yml = (cat.configTargets || []);
+    const q = (s.tgtQ || '').trim().toLowerCase();
+    const hit = (...parts) => !q || parts.some(x => String(x == null ? '' : x).toLowerCase().includes(q));
+    const rows = [
+      ...s.cfg.targets.map((t, i) => ({ t, i, db: true, code: t.code, base: t.base, resolved: resolveEnv(t.base), connect: t.connect, read: t.read, codec: t.bodyCodec, tls: (t.tls && t.tls.mode) || 'VERIFY', headers: t.headers.map(h => h.n).filter(Boolean), enabled: t.enabled !== false })),
+      ...yml.map(t => ({ t, db: false, code: t.code, base: t.baseUrl, resolved: t.baseUrl, connect: t.connectTimeoutMs, read: t.readTimeoutMs, codec: t.bodyCodec, tls: '', headers: t.headers || [], enabled: true,
+        overridden: s.cfg.targets.some(d => d.code === t.code && d.enabled !== false) }))
+    ].filter(r => hit(r.code, r.base, r.resolved, r.codec, r.tls, r.headers.join(' '), r.db ? '' : 'application.yml'));
+    const total = s.cfg.targets.length + yml.length;
+    const grid = 'display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,2.2fr) 110px minmax(0,0.9fr) 70px minmax(0,1fr) 60px 64px;gap:12px;align-items:center';
+    const th = t => html`<span>${t}</span>`;
+    const chipS = (t, c, b) => html`<span style=${`font:600 10px ${MONO};color:${c};background:${b};padding:2px 6px;border-radius:4px;white-space:nowrap`}>${t}</span>`;
     return html`
       <div style="flex:1;min-height:0;overflow:auto;padding:28px 32px 60px">
-        <div style="max-width:1080px;margin:0 auto">
+        <div style="max-width:1180px;margin:0 auto">
           ${pageHead('Target systems', html`Downstream base URLs, timeouts and fixed headers. A change takes effect on save. Use ${mono('${ENV:default}')} to keep secrets and per-environment addresses out of the database; placeholders resolve on the server. ${mono('gw_target_system')}`, '+ New target system', newTarget)}
-          <div style="margin-top:20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(360px,100%),1fr));gap:14px">
-            ${s.cfg.targets.map((t, i) => {
-              const errs = s.problems.filter(m => m.includes(`target system '${t.code}'`) && !m.includes('(application config)'));
-              const resolved = resolveEnv(t.base);
+          <div style="margin-top:18px;display:flex;align-items:center;gap:10px">
+            <input id="target-search" class="inp ro-ok" value=${s.tgtQ || ''} onInput=${e => this.setState({ tgtQ: e.currentTarget.value })} onKeyDown=${e => { if (e.key === 'Escape') this.setState({ tgtQ: '' }); }}
+              placeholder="Search code, URL, codec, TLS or header…  ( / )" style=${inputStyle(34, 12.5) + ';max-width:420px'}/>
+            <span style=${`font:11.5px ${MONO};color:#9A9CA2`}>${q ? rows.length + ' of ' + total : total} target system${total === 1 ? '' : 's'}</span>
+          </div>
+          <div style="margin-top:12px;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:auto">
+            <div style=${`${grid};min-width:940px;padding:10px 16px;font:600 10px ${MONO};letter-spacing:.06em;color:#9A9CA2;border-bottom:1px solid #EFEDE6`}>
+              ${th('CODE')}${th('BASE URL')}${th('TIMEOUTS (MS)')}${th('CODEC')}${th('TLS')}${th('HEADERS')}${th('USED BY')}${th('ENABLED')}
+            </div>
+            ${rows.length === 0 && html`<div style="padding:22px 16px;color:#6A6D75;font-size:12.5px">${q ? html`Nothing matches “${s.tgtQ}”.` : 'No target systems yet.'}</div>`}
+            ${rows.map(r => {
+              const t = r.t, i = r.i;
+              const errs = r.db ? s.problems.filter(m => m.includes(`target system '${t.code}'`) && !m.includes('(application config)')) : [];
+              const open = r.db && s.tgtOpen === t.code;
+              const resolved = r.resolved;
               return html`
-              <div style=${`background:#fff;border:1px solid ${errs.length ? 'oklch(0.85 0.06 25)' : '#E4E1D8'};border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px`}>
-                <div style="display:flex;align-items:center;gap:10px">
-                  <input class="inp inp-ghost" value=${t.code} onInput=${e => { const v = val(e).toUpperCase().replace(/[^A-Z0-9_]/g, '_'); T(i, (x, cfg) => { cfg.flows.forEach(f2 => f2.steps.forEach(st => { if (st.target === x.code) st.target = v; })); x.code = v; }); }} style=${`flex:1;min-width:0;height:32px;border:1px solid transparent;border-radius:6px;padding:0 8px;margin-left:-8px;font:600 13px ${MONO};background:transparent`}/>
-                  <span style=${`font:11px ${MONO};color:#9A9CA2;white-space:nowrap`}>${used(t.code)} steps</span>
-                  ${toggle(t.enabled !== false, () => T(i, x => { x.enabled = x.enabled === false; }), 34, 20)}
+              <div class="row" onClick=${() => r.db && this.setState({ tgtOpen: open ? null : t.code })} style=${`${grid};min-width:940px;padding:11px 16px;border-bottom:1px solid #F3F1EC;cursor:${r.db ? 'pointer' : 'default'};background:${open ? '#FAF9F6' : r.db ? '' : '#FCFBF8'};opacity:${r.overridden ? 0.55 : 1}`}>
+                <div style="display:flex;align-items:center;gap:7px;min-width:0">
+                  <span style=${`font:${r.db ? 600 : 500} 12.5px ${MONO};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>${r.code}</span>
+                  ${errs.length > 0 && html`<span title=${errs.join('\n')} style=${`flex:none;min-width:16px;height:16px;border-radius:8px;padding:0 4px;background:${C.err};color:#fff;display:grid;place-items:center;font:700 10px ${MONO}`}>${errs.length}</span>`}
+                  ${!r.db && chipS(r.overridden ? 'yml · overridden' : 'application.yml', '#6A6D75', '#EFEDE6')}
                 </div>
+                <div style="min-width:0">
+                  <div class="hscroll" style=${`font:11.5px ${MONO};color:#3E4047;white-space:nowrap`}>${r.base}</div>
+                  ${r.db && r.base !== resolved && html`<div class="hscroll" style=${`font:11px ${MONO};color:oklch(0.5 0.12 160);white-space:nowrap`}>→ ${resolved || '(empty)'}</div>`}
+                </div>
+                <span style=${`font:11.5px ${MONO};color:#6A6D75`}>${r.connect == null || r.connect === '' ? 'default' : r.connect} / ${r.read == null || r.read === '' ? 'default' : r.read}</span>
+                <span style=${`font:11.5px ${MONO};color:#6A6D75;overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>${r.codec || 'JSON'}</span>
+                <span>${r.db ? (/^https:/i.test(resolved) ? chipS(r.tls, r.tls === 'INSECURE' ? 'oklch(0.48 0.17 25)' : 'oklch(0.4 0.12 155)', r.tls === 'INSECURE' ? 'oklch(0.95 0.04 25)' : 'oklch(0.94 0.05 155)') : chipS('HTTP', '#6A6D75', '#EFEDE6')) : ''}</span>
+                <span class="hscroll" style=${`font:11px ${MONO};color:#6A6D75;white-space:nowrap`}>${r.headers.length ? r.headers.join(', ') : '—'}</span>
+                <span style=${`font:11.5px ${MONO};color:#6A6D75`}>${used(r.code)} step${used(r.code) === 1 ? '' : 's'}</span>
+                <span onClick=${e => e.stopPropagation()}>${r.db ? toggle(t.enabled !== false, () => T(i, x => { x.enabled = x.enabled === false; }), 34, 20) : ''}</span>
+              </div>
+              ${open && html`
+              <div style="padding:16px 18px 18px;border-bottom:1px solid #E4E1D8;background:#FAF9F6;display:flex;flex-direction:column;gap:12px;min-width:940px">
+                <label style="display:flex;flex-direction:column;gap:5px;max-width:420px">${label10('CODE')}
+                  <input class="inp" value=${t.code} onInput=${e => { const v = val(e).toUpperCase().replace(/[^A-Z0-9_]/g, '_'); T(i, (x, cfg) => { cfg.flows.forEach(f2 => f2.steps.forEach(st => { if (st.target === x.code) st.target = v; })); x.code = v; }); this.setState({ tgtOpen: v }); }} style=${inputStyle(32, 12.5)}/>
+                  <span style="font-size:11px;color:#9A9CA2">Renaming updates the steps that call it.</span>
+                </label>
                 <label style="display:flex;flex-direction:column;gap:5px">
                   ${label10('BASE_URL')}
                   <input class="inp" value=${t.base} onInput=${e => { const v = val(e); T(i, x => { x.base = v; }); }} placeholder="http://10.20.30.40:9080" style=${inputStyle()}/>
@@ -1185,22 +1271,9 @@ class App extends Component {
                 <div style="display:flex;justify-content:flex-end">
                   <button class="del" onClick=${() => { const n = s.cfg.flows.reduce((a, fl) => a + fl.steps.filter(x => x.target === t.code).length, 0); this.ask(`Delete target system ${t.code || '(unnamed)'}?`, `Removes it with its ${t.headers.length} fixed header(s).` + (n ? ` ${n} step(s) still call it: the save will be rejected until they point elsewhere (unless application.yml also defines it).` : '') + ` Nothing changes in the database until Save & reload.`, () => this.mutCfg(cfg => { cfg.targets.splice(i, 1); })); }} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px;padding:2px 0">Delete target</button>
                 </div>
-              </div>`;
+              </div>`}`;
             })}
           </div>
-          ${yml.length > 0 && html`
-            <div style="margin-top:28px;font:600 10px ${MONO};letter-spacing:.08em;color:#6A6D75">FROM APPLICATION CONFIG · gateway.target-systems (read-only here; a database row with the same code wins)</div>
-            <div style="margin-top:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(360px,100%),1fr));gap:14px">
-              ${yml.map(t => {
-                const overridden = s.cfg.targets.some(d => d.code === t.code && d.enabled !== false);
-                return html`
-                <div style=${`background:#FAF9F6;border:1px dashed #D9D6CC;border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:6px;opacity:${overridden ? 0.6 : 1}`}>
-                  <div style="display:flex;gap:10px;align-items:center"><span style=${`font:600 13px ${MONO};flex:1`}>${t.code}</span><span style=${`font:11px ${MONO};color:#9A9CA2`}>${overridden ? 'overridden by database' : used(t.code) + ' steps'}</span></div>
-                  <div style=${`font:11.5px ${MONO};color:#3E4047;word-break:break-all`}>${t.baseUrl}</div>
-                  <div style=${`font:11px ${MONO};color:#9A9CA2`}>connect ${t.connectTimeoutMs}ms · read ${t.readTimeoutMs == null ? 'default' : t.readTimeoutMs + 'ms'}${t.bodyCodec ? ' · ' + t.bodyCodec : ''}${t.headers.length ? ' · headers ' + t.headers.join(', ') : ''}</div>
-                </div>`;
-              })}
-            </div>`}
         </div>
       </div>`;
   }
@@ -1242,32 +1315,65 @@ class App extends Component {
     const usedBy = code => s.cfg.flows.reduce((a, x) => a + [...x.response, ...x.steps.flatMap(y => y.rules), ...(x.responses || []).flatMap(y => y.rules)].filter(r => r.lookup === code).length, 0);
     const handlers = code => s.catalog.errorHandlers.filter(h => h.lookupCode === code).map(h => h.name);
     const upd = (code, fn) => this.mutCfg(cfg => fn(cfg.lookups[code], cfg));
-    const newLookup = () => this.mutCfg(cfg => { let k = 1; while (cfg.lookups['NEW_LOOKUP_' + k]) k++; cfg.lookups['NEW_LOOKUP_' + k] = [{ src: '', tgt: '' }]; });
+    const newLookup = () => { let k = 1; while (L['NEW_LOOKUP_' + k]) k++; const code = 'NEW_LOOKUP_' + k;
+      this.mutCfg(cfg => { cfg.lookups[code] = [{ src: '', tgt: '' }]; }); this.setState({ lkOpen: code, lkQ: '' }); };
     const rename = (code, v) => this.mutCfg(cfg => {
       if (!v || (v !== code && cfg.lookups[v])) return;
       const nl = {}; Object.keys(cfg.lookups).forEach(k => { nl[k === code ? v : k] = cfg.lookups[k]; }); cfg.lookups = nl;
       cfg.flows.forEach(f2 => [...f2.response, ...f2.steps.flatMap(st => st.rules), ...(f2.responses || []).flatMap(y => y.rules)].forEach(r => { if (r.lookup === code) r.lookup = v; }));
+      setTimeout(() => this.setState({ lkOpen: v }), 0);
     });
+    const q = (s.lkQ || '').trim().toLowerCase();
+    const has = v => String(v == null ? '' : v).toLowerCase().includes(q);
+    const hitEntry = r => !!q && (has(r.src) || has(r.tgt));
+    const codes = Object.keys(L).filter(code => !q || has(code) || L[code].some(hitEntry) || handlers(code).some(has));
+    const total = Object.keys(L).length;
+    const grid = 'display:grid;grid-template-columns:minmax(0,1.3fr) 70px minmax(0,2.6fr) minmax(0,1fr) minmax(0,1.3fr);gap:12px;align-items:center';
     const cols = 'display:grid;grid-template-columns:96px 14px 1fr 22px;gap:6px';
     return html`
       <div style="flex:1;min-height:0;overflow:auto;padding:28px 32px 60px">
-        <div style="max-width:1080px;margin:0 auto">
+        <div style="max-width:1180px;margin:0 auto">
           ${pageHead('Lookups', html`Code translation tables used by mapping rules and error handlers. ${mono('*')} is the fallback. Targets are parsed as JSON when valid, otherwise used as text. ${mono('gw_lookup_entry')}`, '+ New lookup', newLookup)}
-          <div style="margin-top:20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(400px,100%),1fr));gap:14px">
-            ${Object.keys(L).map(code => {
+          <div style="margin-top:18px;display:flex;align-items:center;gap:10px">
+            <input id="list-search" class="inp ro-ok" value=${s.lkQ || ''} onInput=${e => this.setState({ lkQ: e.currentTarget.value })} onKeyDown=${e => { if (e.key === 'Escape') this.setState({ lkQ: '' }); }}
+              placeholder="Search a lookup code, or any source or target value…  ( / )" style=${inputStyle(34, 12.5) + ';max-width:440px'}/>
+            <span style=${`font:11.5px ${MONO};color:#9A9CA2`}>${q ? codes.length + ' of ' + total : total} lookup${total === 1 ? '' : 's'}</span>
+          </div>
+          <div style="margin-top:12px;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:auto">
+            <div style=${`${grid};min-width:860px;padding:10px 16px;font:600 10px ${MONO};letter-spacing:.06em;color:#9A9CA2;border-bottom:1px solid #EFEDE6`}>
+              <span>CODE</span><span>ENTRIES</span><span>VALUES</span><span>FALLBACK *</span><span>USED BY</span>
+            </div>
+            ${codes.length === 0 && html`<div style="padding:22px 16px;color:#6A6D75;font-size:12.5px">${q ? html`Nothing matches “${s.lkQ}”.` : 'No lookups yet.'}</div>`}
+            ${codes.map(code => {
               const rows = L[code]; const errs = s.problems.filter(m => m.includes(`lookup '${code}'`));
               const dupe = v => rows.filter(r => r.src === v).length > 1; const hs = handlers(code);
+              const open = s.lkOpen === code; const star = rows.find(r => r.src === '*');
+              const shown = rows.filter(r => r.src !== '*'); const hits = q ? shown.filter(hitEntry) : [];
+              const preview = (hits.length ? hits : shown).slice(0, 4).map(r => r.src + ' → ' + r.tgt).join(', ') + ((hits.length ? hits : shown).length > 4 ? ', …' : '');
+              const n = usedBy(code);
               return html`
-              <div key=${code} style=${`background:#fff;border:1px solid ${errs.length ? 'oklch(0.85 0.06 25)' : '#E4E1D8'};border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:10px`}>
-                <div style="display:flex;align-items:center;gap:10px">
-                  <input class="inp inp-ghost" value=${code} onChange=${e => rename(code, val(e).toUpperCase().replace(/[^A-Z0-9_]/g, '_'))} title="Rename (applies when the field loses focus)" style=${`flex:1;min-width:0;height:32px;border:1px solid transparent;border-radius:6px;padding:0 8px;margin-left:-8px;font:600 13px ${MONO};background:transparent`}/>
-                  <span style=${`font:11px ${MONO};color:#9A9CA2;white-space:nowrap`}>${usedBy(code)} rules${hs.length ? ' · ' + hs.join(', ') : ''}</span>
+              <div class="row" onClick=${() => this.setState({ lkOpen: open ? null : code })} style=${`${grid};min-width:860px;padding:11px 16px;border-bottom:1px solid #F3F1EC;cursor:pointer;background:${open ? '#FAF9F6' : ''}`}>
+                <div style="display:flex;align-items:center;gap:7px;min-width:0">
+                  <span style=${`font:600 12.5px ${MONO};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>${code}</span>
+                  ${errs.length > 0 && html`<span title=${errs.join('\n')} style=${`flex:none;min-width:16px;height:16px;border-radius:8px;padding:0 4px;background:${C.err};color:#fff;display:grid;place-items:center;font:700 10px ${MONO}`}>${errs.length}</span>`}
                 </div>
+                <span style=${`font:11.5px ${MONO};color:#6A6D75`}>${rows.length}</span>
+                <span class="hscroll" style=${`font:11.5px ${MONO};color:${hits.length ? '#17181C' : '#3E4047'};white-space:nowrap`}>${preview || '—'}${hits.length ? html` <span style=${`color:#9A9CA2`}>(${hits.length} match${hits.length === 1 ? '' : 'es'})</span>` : ''}</span>
+                <span class="hscroll" style=${`font:11.5px ${MONO};color:#6A6D75;white-space:nowrap`}>${star ? star.tgt : '—'}</span>
+                <span class="hscroll" style=${`font:11.5px ${MONO};color:#6A6D75;white-space:nowrap`}>${n} rule${n === 1 ? '' : 's'}${hs.length ? ' · ' + hs.join(', ') : ''}</span>
+              </div>
+              ${open && html`
+              <div style="padding:14px 18px 16px;border-bottom:1px solid #E4E1D8;background:#FAF9F6;display:flex;flex-direction:column;gap:10px;min-width:860px">
+                <label style="display:flex;flex-direction:column;gap:5px;max-width:420px">${label10('CODE')}
+                  <input class="inp" value=${code} onChange=${e => rename(code, val(e).toUpperCase().replace(/[^A-Z0-9_]/g, '_'))} title="Rename (applies when the field loses focus)" style=${inputStyle(32, 12.5)}/>
+                  <span style="font-size:11px;color:#9A9CA2">Renaming updates the rules that use it (applies when the field loses focus).</span>
+                </label>
+                <div style="max-width:720px;display:flex;flex-direction:column;gap:10px">
                 <div style=${`${cols};font:10px ${MONO};letter-spacing:.06em;color:#9A9CA2`}><span>SOURCE_VALUE</span><span></span><span>TARGET_VALUE</span><span></span></div>
                 <div style="display:flex;flex-direction:column;gap:5px">
                   ${rows.map((r, j) => html`
                     <div style=${`${cols};align-items:center`}>
-                      <input class="inp" value=${r.src} onInput=${e => { const v = val(e); upd(code, x => { x[j].src = v; }); }} style=${inputStyle(28, 11.5) + `;border-color:${!r.src || dupe(r.src) ? 'oklch(0.75 0.12 25)' : '#E4E1D8'}`}/>
+                      <input class="inp" data-hit=${hitEntry(r) ? '1' : ''} value=${r.src} onInput=${e => { const v = val(e); upd(code, x => { x[j].src = v; }); }} style=${inputStyle(28, 11.5) + `;border-color:${!r.src || dupe(r.src) ? 'oklch(0.75 0.12 25)' : '#E4E1D8'}` + (hitEntry(r) ? ';background:oklch(0.96 0.06 95)' : '')}/>
                       <span style="color:#ADA99E;text-align:center">→</span>
                       <input class="inp" value=${r.tgt} onInput=${e => { const v = val(e); upd(code, x => { x[j].tgt = v; }); }} style=${inputStyle(28, 11.5)}/>
                       <button class="del" onClick=${() => this.ask(`Delete entry ${r.src || '(empty)'} → ${r.tgt || '(empty)'}?`, `Removes this row from lookup ${code}. Nothing changes in the database until Save & reload.`, () => upd(code, x => { x.splice(j, 1); }))} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:14px;padding:0">×</button>
@@ -1279,8 +1385,9 @@ class App extends Component {
                   <span style="flex:1"></span>
                   <button class="del" onClick=${() => this.ask(`Delete lookup ${code}?`, `Removes all ${rows.length} entr${rows.length === 1 ? 'y' : 'ies'}.` + (usedBy(code) ? ` ${usedBy(code)} mapping rule(s) still use it: the save will be rejected until they no longer do.` : '') + ` Nothing changes in the database until Save & reload.`, () => this.mutCfg(cfg => { delete cfg.lookups[code]; }))} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px">Delete lookup</button>
                 </div>
+                </div>
                 ${errList(errs)}
-              </div>`;
+              </div>`}`;
             })}
           </div>
         </div>
@@ -1552,7 +1659,7 @@ class App extends Component {
     const s = this.state;
     const val = e => e.currentTarget.value;
     const upd = (i, fn) => this.mutCfg(cfg => fn(cfg.schemas[i], cfg));
-    const newSchema = () => { let k = 1; while (this.schemaCodes().includes('NEW_SCHEMA_' + k)) k++; const code = 'NEW_SCHEMA_' + k; this.mutCfg(cfg => { cfg.schemas.push({ code, desc: '', text: SCHEMA_TEMPLATE }); }); this.openSchema(code); };
+    const newSchema = () => { let k = 1; while (this.schemaCodes().includes('NEW_SCHEMA_' + k)) k++; const code = 'NEW_SCHEMA_' + k; this.mutCfg(cfg => { cfg.schemas.push({ code, desc: '', text: SCHEMA_TEMPLATE }); }); this.setState({ schQ: '' }); this.openSchema(code); };
     const rename = (i, old, v) => this.mutCfg(cfg => {
       if (!v || (v !== old && cfg.schemas.some(x => x.code === v))) return;
       cfg.schemas[i].code = v;
@@ -1560,22 +1667,50 @@ class App extends Component {
       setTimeout(() => this.setState({ focusSchema: v }), 0);
     });
     const ex = s.example || {};
+    const q = (s.schQ || '').trim().toLowerCase();
+    const has = v => String(v == null ? '' : v).toLowerCase().includes(q);
+    // every property name in a schema (nested ones too), for the FIELDS column and the search
+    const fieldsOf = text => { const out = []; const walk = (n, d) => { if (!n || typeof n !== 'object' || d > 8) return; if (n.properties) Object.keys(n.properties).forEach(k => { out.push({ k, d }); walk(n.properties[k], d + 1); }); if (n.items) walk(n.items, d); ['$defs', 'definitions'].forEach(x => n[x] && Object.values(n[x]).forEach(v => walk(v, d))); }; try { walk(JSON.parse(text), 0); } catch (e) { /* invalid: shown in its editor */ } return out; };
+    const rows = s.cfg.schemas.map((x, i) => ({ x, i, fields: fieldsOf(x.text), uses: schemaUses(s.cfg, x.code) }))
+      .filter(r => !q || has(r.x.code) || has(r.x.desc) || r.uses.some(has) || r.fields.some(f => has(f.k)));
+    const grid = 'display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1.6fr) minmax(0,2fr) minmax(0,1.6fr);gap:12px;align-items:center';
     return html`
       <div style="flex:1;min-height:0;overflow:auto;padding:28px 32px 60px">
-        <div style="max-width:1080px;margin:0 auto">
+        <div style="max-width:1180px;margin:0 auto">
           ${pageHead('JSON schemas', html`Validators for request bodies, client responses and downstream answers (JSON Schema draft 2020-12). An invalid inbound body is answered with 400, an invalid client response with 500. Pick them on a flow's Inbound, Client response or step. ${mono('gw_json_schema')}`, '+ New schema', newSchema)}
-          ${s.cfg.schemas.length === 0 && html`<div style="margin-top:20px;padding:22px;border:1.5px dashed #C9C6BC;border-radius:10px;color:#6A6D75;text-align:center">No schemas yet. Create one here, or with <b>+ New schema</b> under a schema field in a flow's inspector (it starts from that flow's sample data).</div>`}
-          <div style="margin-top:20px;display:flex;flex-direction:column;gap:14px">
-            ${s.cfg.schemas.map((x, i) => {
+          <div style="margin-top:18px;display:flex;align-items:center;gap:10px">
+            <input id="list-search" class="inp ro-ok" value=${s.schQ || ''} onInput=${e => this.setState({ schQ: e.currentTarget.value })} onKeyDown=${e => { if (e.key === 'Escape') this.setState({ schQ: '' }); }}
+              placeholder="Search code, description, field name or the flow using it…  ( / )" style=${inputStyle(34, 12.5) + ';max-width:460px'}/>
+            <span style=${`font:11.5px ${MONO};color:#9A9CA2`}>${q ? rows.length + ' of ' + s.cfg.schemas.length : s.cfg.schemas.length} schema${s.cfg.schemas.length === 1 ? '' : 's'}</span>
+          </div>
+          ${s.cfg.schemas.length === 0 ? html`<div style="margin-top:14px;padding:22px;border:1.5px dashed #C9C6BC;border-radius:10px;color:#6A6D75;text-align:center">No schemas yet. Create one here, or with <b>+ New schema</b> under a schema field in a flow's inspector (it starts from that flow's sample data).</div>` : html`
+          <div style="margin-top:12px;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:auto">
+            <div style=${`${grid};min-width:860px;padding:10px 16px;font:600 10px ${MONO};letter-spacing:.06em;color:#9A9CA2;border-bottom:1px solid #EFEDE6`}>
+              <span>CODE</span><span>DESCRIPTION</span><span>FIELDS</span><span>USED BY</span>
+            </div>
+            ${rows.length === 0 && html`<div style="padding:22px 16px;color:#6A6D75;font-size:12.5px">Nothing matches “${s.schQ}”.</div>`}
+            ${rows.map(({ x, i, fields, uses }) => {
               const errs = s.problems.filter(m => m.includes(`json schema '${x.code}'`) || m.includes(`Schema '${x.code}'`));
-              const parseErr = jsonError(x.text); const uses = schemaUses(s.cfg, x.code);
-              const focused = s.focusSchema === x.code; const exOpen = ex.i === i;
+              const parseErr = jsonError(x.text);
+              const focused = s.focusSchema === x.code; const exOpen = ex.i === i; const open = focused;
+              const top = fields.filter(f => f.d === 0).map(f => f.k); const hitFields = q ? fields.filter(f => has(f.k)).map(f => f.k) : [];
+              const shownFields = hitFields.length ? hitFields : top;
               return html`
-              <div id=${'schema-' + x.code} key=${i} style=${`background:#fff;border:1px solid ${errs.length || parseErr ? 'oklch(0.85 0.06 25)' : focused ? C.call : '#E4E1D8'};box-shadow:${focused ? '0 0 0 3px oklch(0.62 0.17 42 / 0.15)' : 'none'};border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:10px;scroll-margin-top:16px`}>
-                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-                  <input class="inp inp-ghost" value=${x.code} onChange=${e => rename(i, x.code, val(e).toUpperCase().replace(/[^A-Z0-9_]/g, '_'))} title="Rename (applies when the field loses focus; references follow)" style=${`flex:1;min-width:200px;height:32px;border:1px solid transparent;border-radius:6px;padding:0 8px;margin-left:-8px;font:600 13px ${MONO};background:transparent`}/>
-                  <span style=${`font:11px ${MONO};color:#9A9CA2`}>${uses.length ? 'used by ' + uses.join(', ') : 'not used'}</span>
+              <div id=${'schema-' + x.code} class="row" onClick=${() => this.setState({ focusSchema: open ? null : x.code })} style=${`${grid};min-width:860px;padding:11px 16px;border-bottom:1px solid #F3F1EC;cursor:pointer;scroll-margin-top:16px;background:${open ? '#FAF9F6' : ''}`}>
+                <div style="display:flex;align-items:center;gap:7px;min-width:0">
+                  <span style=${`font:600 12.5px ${MONO};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>${x.code}</span>
+                  ${(errs.length > 0 || parseErr) && html`<span title=${parseErr ? 'Not valid JSON: ' + parseErr : errs.join('\n')} style=${`flex:none;min-width:16px;height:16px;border-radius:8px;padding:0 4px;background:${C.err};color:#fff;display:grid;place-items:center;font:700 10px ${MONO}`}>${parseErr ? '!' : errs.length}</span>`}
                 </div>
+                <span class="hscroll" style="font-size:12px;color:#6A6D75;white-space:nowrap">${x.desc || '—'}</span>
+                <span class="hscroll" style=${`font:11.5px ${MONO};color:${hitFields.length ? '#17181C' : '#3E4047'};white-space:nowrap`}>${shownFields.slice(0, 6).join(', ') || '—'}${shownFields.length > 6 ? ', …' : ''}${hitFields.length ? html` <span style="color:#9A9CA2">(${hitFields.length} match${hitFields.length === 1 ? '' : 'es'})</span>` : html` <span style="color:#9A9CA2">${fields.length > top.length ? '· ' + fields.length + ' in all' : ''}</span>`}</span>
+                <span class="hscroll" style=${`font:11.5px ${MONO};color:#6A6D75;white-space:nowrap`}>${uses.length ? uses.join(', ') : 'not used'}</span>
+              </div>
+              ${open && html`
+              <div style="padding:14px 18px 16px;border-bottom:1px solid #E4E1D8;background:#FAF9F6;display:flex;flex-direction:column;gap:10px;min-width:860px">
+                <label style="display:flex;flex-direction:column;gap:5px;max-width:420px">${label10('CODE')}
+                  <input class="inp" value=${x.code} onChange=${e => rename(i, x.code, val(e).toUpperCase().replace(/[^A-Z0-9_]/g, '_'))} title="Rename (applies when the field loses focus; references follow)" style=${inputStyle(32, 12.5)}/>
+                  <span style="font-size:11px;color:#9A9CA2">Renaming updates the flows and steps that use it (applies when the field loses focus).</span>
+                </label>
                 <input class="inp" value=${x.desc} onInput=${e => { const v = val(e); upd(i, y => { y.desc = v; }); }} placeholder="description (optional)" style=${inputStyle(30, 12)}/>
                 <textarea class="inp" value=${x.text} onInput=${e => { const v = val(e); upd(i, y => { y.text = v; }); }} spellcheck="false" rows=${Math.min(24, Math.max(8, x.text.split('\n').length + 1))} style=${`border:1px solid #E4E1D8;border-radius:6px;padding:9px 11px;font:12px/1.5 ${MONO};background:#FAF9F6;resize:vertical;width:100%;tab-size:2`}></textarea>
                 ${parseErr ? html`<div style=${`font:11px/1.45 ${MONO};color:oklch(0.5 0.18 25)`}>Not valid JSON: ${parseErr}</div>` : errList(errs)}
@@ -1595,9 +1730,9 @@ class App extends Component {
                   <span style="flex:1"></span>
                   <button class="del" onClick=${() => this.ask(`Delete schema ${x.code || '(unnamed)'}?`, (uses.length ? `Still used by ${uses.join(', ')}: the save will be rejected until those references are removed.` : 'No flow or step uses it.') + ` Nothing changes in the database until Save & reload.`, () => this.mutCfg(cfg => { cfg.schemas.splice(i, 1); }))} title=${uses.length ? 'Still used: the save will be rejected until the references are removed' : ''} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px">Delete schema</button>
                 </div>
-              </div>`;
+              </div>`}`;
             })}
-          </div>
+          </div>`}
         </div>
       </div>`;
   }
@@ -1766,16 +1901,16 @@ class App extends Component {
                       ${g.steps.map(x => html`
                         <div data-step=${x.st.name} draggable="true" onDragStart=${this.ds({ kind: 'move', id: x.st.id })} onDragEnd=${this.dragEnd} onClick=${select({ kind: 'step', id: x.st.id })} ...${zoneProps(x.zone)} style=${card(x.on, 'padding:10px 12px;opacity:' + (x.st.enabled ? 1 : 0.55))}>
                           <div style="display:flex;align-items:center;gap:7px">
-                            <span style=${`font:600 10px ${MONO};color:#fff;background:${isSql(x.st) ? C.sql : isStore(x.st) ? C.file : MC[x.st.method] || '#555'};padding:2px 5px;border-radius:4px`}>${isSql(x.st) ? 'SQL' : isStore(x.st) ? (x.st.method === 'DELETE' ? 'DELETE FILE' : 'STORE FILE') : x.st.method}</span>
+                            <span style=${`font:600 10px ${MONO};color:#fff;background:${isSql(x.st) ? C.sql : isStore(x.st) ? C.file : isTransform(x.st) ? C.tf : isCondition(x.st) ? C.cond : MC[x.st.method] || '#555'};padding:2px 5px;border-radius:4px`}>${isSql(x.st) ? 'SQL' : isStore(x.st) ? (x.st.method === 'DELETE' ? 'DELETE FILE' : 'STORE FILE') : isTransform(x.st) ? 'TRANSFORM' : isCondition(x.st) ? 'CONDITION' : x.st.method}</span>
                             <span style="font-weight:600;font-size:13.5px">${x.st.name}</span>
                             <span style="flex:1"></span>
                             ${!x.st.enabled && html`<span style=${`font:10px ${MONO};color:#9A9CA2`}>disabled</span>`}
                             ${x.problem && html`<span style=${`width:16px;height:16px;border-radius:50%;background:${C.err};color:#fff;display:grid;place-items:center;font:700 10px ${MONO}`}>!</span>`}
                           </div>
-                          <div style=${`margin-top:6px;font:11px/1.4 ${MONO};color:#6A6D75;word-break:break-all`}><span style="color:#17181C">${x.st.target}</span> ${isSql(x.st) ? html`<span class="code-light" style="display:block;margin-top:3px;max-height:44px;overflow:hidden;word-break:normal;overflow-wrap:anywhere">${hl(x.st.sql.replace(/\s+/g, ' ').slice(0, 140), 'sql')}</span>` : x.st.path}</div>
+                          <div style=${`margin-top:6px;font:11px/1.4 ${MONO};color:#6A6D75;word-break:break-all`}><span style="color:#17181C">${isTransform(x.st) ? 'no call · builds $.steps.' + x.st.name + '.body' : isCondition(x.st) ? 'no call · first true case routes' : x.st.target}</span> ${isCondition(x.st) ? html`<span style="display:flex;flex-direction:column;gap:2px;margin-top:4px">${x.st.cases.slice(0, 4).map((c, n) => html`<span class="hscroll" style=${`white-space:nowrap;color:${C.cond}`}>◆ ${c.label || 'case ' + (n + 1)}${via(c.then)}</span>`)}${x.st.cases.length > 4 ? html`<span>… ${x.st.cases.length - 4} more</span>` : ''}<span style="white-space:nowrap;color:#9A9CA2">otherwise${x.st.nextOk ? via(x.st.nextOk) : ' → next step'}</span></span>` : isTransform(x.st) ? '' : isSql(x.st) ? html`<span class="code-light" style="display:block;margin-top:3px;max-height:44px;overflow:hidden;word-break:normal;overflow-wrap:anywhere">${hl(x.st.sql.replace(/\s+/g, ' ').slice(0, 140), 'sql')}</span>` : x.st.path}</div>
                           ${x.chips.length > 0 && html`<div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">${x.chips.map(chipView)}</div>`}
                           <div style=${`margin-top:9px;padding-top:8px;border-top:1px solid #EFEDE6;display:flex;justify-content:space-between;font:10.5px ${MONO};color:#9A9CA2`}>
-                            <span>${x.st.bodyTemplate ? templateKind(x.st.bodyTemplate).toUpperCase() + ' template · ' : ''}${isStore(x.st) && fileField(x.st) ? 'file ← ' + fileField(x.st) + ' · ' : ''}${x.st.rules.length} ${isSql(x.st) ? 'parameter' : 'request'} rule${x.st.rules.length === 1 ? '' : 's'}</span>${routeTag(x.st)}
+                            <span>${x.st.bodyTemplate ? templateKind(x.st.bodyTemplate).toUpperCase() + ' template · ' : ''}${isStore(x.st) && fileField(x.st) ? 'file ← ' + fileField(x.st) + ' · ' : ''}${isCondition(x.st) ? x.st.cases.length + ' case' + (x.st.cases.length === 1 ? '' : 's') : x.st.rules.length + ' ' + (isSql(x.st) ? 'parameter' : isTransform(x.st) ? 'field' : 'request') + ' rule' + (x.st.rules.length === 1 ? '' : 's')}</span>${routeTag(x.st)}
                           </div>
                           ${zoneOverlay(x.zone, C.step, 'attach to ' + x.st.name)}
                         </div>`)}
@@ -1806,7 +1941,7 @@ class App extends Component {
                 ${(f.responses || []).map(r => html`
                   <div data-resp=${r.name} onClick=${select({ kind: 'resp', id: r.id })} style=${card(sel.kind === 'resp' && sel.id === r.id, 'width:216px')}>
                     <div style="display:flex;align-items:center;gap:7px"><span style=${`width:7px;height:7px;border-radius:2px;background:${C.out}`}></span><span style="font-weight:600">${r.name}</span><span style="flex:1"></span><span style=${`font:600 10.5px ${MONO};color:${parseInt(r.status, 10) >= 400 ? C.err : '#6A6D75'}`}>HTTP ${r.status || 200}</span></div>
-                    <div style=${`margin-top:4px;font:11px ${MONO};color:#6A6D75`}>${r.rules.length} FLOW_RESPONSE rules · ${f.steps.some(x => x.nextOk === 'RESPOND:' + r.name || x.nextFail === 'RESPOND:' + r.name) ? 'answered by a branch' : 'no step responds with it'}</div>
+                    <div style=${`margin-top:4px;font:11px ${MONO};color:#6A6D75`}>${r.rules.length} FLOW_RESPONSE rules · ${f.steps.some(x => x.nextOk === 'RESPOND:' + r.name || x.nextFail === 'RESPOND:' + r.name || (x.cases || []).some(c => c.then === 'RESPOND:' + r.name)) ? 'answered by a branch' : 'no step responds with it'}</div>
                     <button class="btn-line" onClick=${toMap('resp:' + r.id)} style="margin-top:9px;width:100%;border:1px solid #E4E1D8;background:#FAF9F6;border-radius:6px;padding:6px 8px;cursor:pointer;font-size:12px;font-weight:500;text-align:left;display:flex;justify-content:space-between">Edit response mapping<span>→</span></button>
                   </div>`)}
                 <button class="btn-line ro-hide" title="Another response a branch can answer with (its own status and mapping)" onClick=${e => { e.stopPropagation(); this.mut(fl => { fl.responses = fl.responses || []; let k = 1; while (fl.responses.some(x => x.name === 'response' + k)) k++; const r = { id: uid('o'), name: 'response' + k, status: '200', description: '', rules: [] }; fl.responses.push(r); return { sel: { kind: 'resp', id: r.id } }; }); }} style="width:216px;border:1.5px dashed #C9C6BC;background:transparent;border-radius:9px;padding:8px;cursor:pointer;font-size:12px;color:#6A6D75">+ Response</button>
@@ -1977,6 +2112,74 @@ class App extends Component {
   }
 
   /** The :parameters of a SQL step and the rule that sets each; adds rules for the missing ones, guessing the source. */
+  /** Where a branch can go from {@code st}: later steps and the flow's named responses (plus FAIL). */
+  routeTargets(f, st) {
+    const later = f.steps.filter(x => x.order > st.order).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+    return [...later.map(x => ({ v: x.name, l: 'Go to ' + x.name + ' · step_order ' + x.order })),
+      ...(f.responses || []).map(r => ({ v: 'RESPOND:' + r.name, l: 'Respond · ' + r.name + ' · HTTP ' + (r.status || 200) }))];
+  }
+
+  /** The cases of a condition step: when (expression) → then (route), with a label; first true wins. */
+  renderCases(st, f) {
+    const C2 = fn => this.mut(fl => { fn(fl.steps.find(x => x.id === st.id).cases); });
+    const opts = [{ v: '', l: '— choose where to go' }, { v: 'END', l: 'END · stop here, send the response' }, { v: 'FAIL', l: 'FAIL · end with 422 GW-422-BUSINESS' }, ...this.routeTargets(f, st)];
+    const field = 'border:1px solid #E4E1D8;border-radius:6px;padding:5px 8px;background:#FAF9F6;width:100%;min-width:0';
+    const noRoute = !st.cases.length || st.cases.some(c => !c.when.trim() || !c.then);
+    return html`
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <span style="display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:500">Cases<span style=${`font:10.5px ${MONO};color:#9A9CA2;font-weight:400`}>checked top to bottom · first true wins</span></span>
+        ${st.cases.map((c, n) => html`
+          <div style=${`display:flex;flex-direction:column;gap:5px;padding:8px;border:1px solid ${!c.when.trim() || !c.then ? 'oklch(0.85 0.06 25)' : '#E4E1D8'};border-left:3px solid ${C.cond};border-radius:7px;background:#fff`}>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style=${`font:600 10px ${MONO};color:${C.cond}`}>${n + 1}</span>
+              <input class="inp" value=${c.label} placeholder="label, e.g. too large" onInput=${e => { const v = e.currentTarget.value; C2(cs => { cs[n].label = v; }); }} style=${field + `;font:12px ${MONO};height:28px`}/>
+              <button class="ro-hide" title="Move up" disabled=${n === 0} onClick=${() => C2(cs => { cs.splice(n - 1, 0, cs.splice(n, 1)[0]); })} style="border:0;background:none;cursor:pointer;color:#6A6D75">↑</button>
+              <button class="ro-hide" title="Move down" disabled=${n === st.cases.length - 1} onClick=${() => C2(cs => { cs.splice(n + 1, 0, cs.splice(n, 1)[0]); })} style="border:0;background:none;cursor:pointer;color:#6A6D75">↓</button>
+              <button class="del" title="Delete case" onClick=${() => this.ask('Delete case ' + (c.label || n + 1) + '?', 'This check is removed from ' + st.name + '. Nothing changes in the database until Save & reload.', () => C2(cs => { cs.splice(n, 1); }))} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:14px">×</button>
+            </div>
+            <span style=${`display:flex;align-items:center;gap:8px;font:10px ${MONO};color:#9A9CA2`}>WHEN<span style="flex:1"></span>
+              ${c.builder ? html`<button class="ro-hide" title="Edit the generated expression by hand (parentheses, arithmetic, …)" onClick=${() => C2(cs => { cs[n].builder = null; })} style="border:0;background:none;color:#6A6D75;cursor:pointer;font:10.5px inherit;text-decoration:underline">edit as expression</button>`
+                : html`<button class="ro-hide" title="Build it from rows instead (replaces the expression)" onClick=${() => this.ask('Use the builder?', 'The rows replace the current expression of this case.', () => C2(cs => { cs[n].builder = { join: '&&', rows: [{ field: '', op: '==', value: '' }] }; cs[n].when = ''; }), 'Use builder')} style="border:0;background:none;color:#6A6D75;cursor:pointer;font:10.5px inherit;text-decoration:underline">use builder</button>`}</span>
+            ${c.builder ? this.renderCaseBuilder(st, f, n, c, C2) : html`<textarea class="inp" rows="2" spellcheck="false" value=${c.when} placeholder="\${request.body.amount} > 50000000 && \${request.body.currency} == 'IDR'" onInput=${e => { const v = e.currentTarget.value; C2(cs => { cs[n].when = v; }); }} style=${field + `;font:11.5px/1.45 ${MONO};resize:vertical`}></textarea>`}
+            <span style=${`font:10px ${MONO};color:#9A9CA2`}>THEN</span>
+            <select class="inp" value=${c.then} onChange=${e => { const v = e.currentTarget.value; C2(cs => { cs[n].then = v; }); }} style=${inputStyle(30, 11.5)}>
+              ${(c.then && !opts.some(o => o.v === c.then) ? [...opts, { v: c.then, l: c.then + ' (unknown)' }] : opts).map(o => html`<option value=${o.v}>${o.l}</option>`)}
+            </select>
+          </div>`)}
+        <button class="ro-hide" onClick=${() => C2(cs => { cs.push({ id: uid('c'), when: '', then: '', label: '', builder: { join: '&&', rows: [{ field: '', op: '==', value: '' }] } }); })} style="align-self:flex-start;border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">+ Case</button>
+        <span style="font-size:11px;color:#9A9CA2;line-height:1.45">${noRoute ? 'Every case needs a WHEN expression and where to go. ' : ''}${'Build each case from rows joined by ALL (&&) or ANY (||), or edit it as an expression: ${request.body.x}, ${request.headers.x}, ${steps.a.body.y} with == != > >= < <=, && || ! and parentheses, null.'} To answer a validation error, add a response (Client response → + Response, e.g. 400) and choose Respond · it.</span>
+      </div>`;
+  }
+
+  /** Rows of one case: field (with suggestions), operator, value; ALL (&&) / ANY (||); writes the WHEN expression. */
+  renderCaseBuilder(st, f, n, c, C2) {
+    const b = c.builder;
+    const set = fn => C2(cs => { const x = cs[n]; x.builder = JSON.parse(JSON.stringify(x.builder || { join: '&&', rows: [] })); fn(x.builder); x.when = condExpr(x.builder); });
+    let sample = null; try { sample = this.sampleText(f) ? JSON.parse(this.sampleText(f)) : synthSample(f, this.state.cfg.lookups); } catch (e) { /* invalid edited sample */ }
+    const paths = leafPaths(sample, f.steps.filter(x => x.order < st.order).map(x => x.name));
+    const listId = 'cond-fields-' + st.id;
+    const box = 'border:1px solid #E4E1D8;border-radius:6px;background:#FAF9F6;min-width:0;height:28px;padding:0 6px';
+    return html`
+      <div style="display:flex;flex-direction:column;gap:5px">
+        <datalist id=${listId}>${paths.map(p => html`<option value=${p}/>`)}</datalist>
+        ${b.rows.length > 1 && html`<div style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#6A6D75">match
+          <select class="inp" value=${b.join} onChange=${e => { const v = e.currentTarget.value; set(x => { x.join = v; }); }} style=${box + `;font:600 11px ${MONO};width:auto`}>
+            <option value="&&">ALL of these (&&)</option><option value="||">ANY of these (||)</option>
+          </select></div>`}
+        ${b.rows.map((r, j) => html`
+          <div style="display:grid;grid-template-columns:minmax(0,0.9fr) minmax(0,1fr) 18px;gap:4px;align-items:center;padding:5px;border:1px solid #EFEDE6;border-radius:6px;background:#fff">
+            <input class="inp" list=${listId} value=${r.field} placeholder="field, e.g. request.body.amount" spellcheck="false" onInput=${e => { const v = e.currentTarget.value; set(x => { x.rows[j].field = v; }); }} style=${box + `;font:11px ${MONO};grid-column:1 / span 2`}/>
+            <span></span>
+            <select class="inp" value=${r.op} onChange=${e => { const v = e.currentTarget.value; set(x => { x.rows[j].op = v; }); }} style=${box + ';font-size:11px'}>${COND_OPS.map(([v, l]) => html`<option value=${v}>${v.length <= 2 ? v + ' ' + l : l}</option>`)}</select>
+            ${r.op === 'empty' || r.op === 'notEmpty' ? html`<span></span>` : html`<input class="inp" value=${r.value} placeholder=${r.op === 'matches' ? '^[0-9]{10}$' : "0, 'IDR' or \${request.body.x}"} spellcheck="false" onInput=${e => { const v = e.currentTarget.value; set(x => { x.rows[j].value = v; }); }} style=${box + `;font:11px ${MONO}`}/>`}
+            <button class="del" title="Remove this condition" onClick=${() => set(x => { x.rows.splice(j, 1); })} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:13px;padding:0">×</button>
+          </div>
+          ${j < b.rows.length - 1 && html`<span style=${`font:600 10px ${MONO};color:${C.cond};padding-left:4px`}>${b.join === '||' ? 'OR' : 'AND'}</span>`}`)}
+        <button class="ro-hide" onClick=${() => set(x => { x.rows.push({ field: '', op: '==', value: '' }); })} style="align-self:flex-start;border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-size:11px;color:#6A6D75">+ ${b.rows.length ? (b.join === '||' ? 'OR' : 'AND') + ' condition' : 'Condition'}</button>
+        ${c.when && html`<code class="code-light" style=${`display:block;padding:5px 7px;background:#F4F3EF;border-radius:5px;font:10.5px/1.45 ${MONO};word-break:break-word`}>${hl(c.when, 'auto')}</code>`}
+      </div>`;
+  }
+
   renderSqlParams(st, f, toMap) {
     const params = sqlParams(st.sql);
     const ruleFor = p => st.rules.find(r => r.type === 'BODY' && (r.target === '$.' + p || r.target === p));
@@ -2080,6 +2283,31 @@ class App extends Component {
         fld('Enabled', 'enabled', String(st.enabled), 'select', (fl, v) => { S2(fl).enabled = v === 'true'; }, { options: [{ v: 'true', l: 'true' }, { v: 'false', l: 'false · skipped with its rules' }] })
       ], mapping: { label: 'Edit parameter mapping · ' + st.rules.length + ' rules', go: toMap(st.id) },
         del: { label: 'Delete step', body: `Step ${st.name} (its SQL and ${st.rules.length} parameter rule(s)) is removed; later steps keep their order. Nothing changes in the database until Save & reload.`, go: () => this.mut(fl => { fl.steps = fl.steps.filter(x => x.id !== st.id); this.norm(fl); return { sel: { kind: 'flow' } }; }) } };
+    } else if (st && isCondition(st)) {
+      const S2 = fl => fl.steps.find(x => x.id === st.id);
+      insp = { kind: 'Condition', color: C.cond, title: st.name, table: 'gw_flow_step · target_system CONDITION · cases', fields: [
+        fld('Name', 'name', st.name, 'text', (fl, v) => renameStep(fl, S2(fl), v), { hint: 'Later steps can read which case matched: $.steps.' + st.name + '.body.matched' }),
+        fld('Order', 'step_order', st.order, 'text', (fl, v) => { const n = parseInt(v, 10); if (n > 0) S2(fl).order = n; }, { hint: 'Its cases can read the request and every step with a lower order. It runs alone in its order.' }),
+        { kind: 'cases', st, f },
+        fld('Otherwise', 'next_on_success', st.nextOk || '', 'select', (fl, v) => { S2(fl).nextOk = v; }, { options: withCurrent([{ v: '', l: 'Next step (default)' }, { v: 'END', l: 'END · stop here, send the response' }, ...this.routeTargets(f, st)], st.nextOk || ''), hint: 'Where the flow goes when no case is true' }),
+        fld('Run only if', 'condition_expr', st.condition, 'area', (fl, v) => { S2(fl).condition = v; }, { placeholder: "${request.body.amount} != null", hint: 'False = the whole check is skipped and the flow goes on to the next step' }),
+        fld('Enabled', 'enabled', String(st.enabled), 'select', (fl, v) => { S2(fl).enabled = v === 'true'; }, { options: [{ v: 'true', l: 'true' }, { v: 'false', l: 'false · skipped' }] })
+      ],
+        del: { label: 'Delete step', body: `Condition ${st.name} and its ${st.cases.length} case(s) are removed. Nothing changes in the database until Save & reload.`, go: () => this.mut(fl => { fl.steps = fl.steps.filter(x => x.id !== st.id); this.norm(fl); return { sel: { kind: 'flow' } }; }) } };
+    } else if (st && isTransform(st)) {
+      const S2 = fl => fl.steps.find(x => x.id === st.id);
+      insp = { kind: 'Transform', color: C.tf, title: st.name, table: 'gw_flow_step · target_system TRANSFORM', fields: [
+        fld('Name', 'name', st.name, 'text', (fl, v) => renameStep(fl, S2(fl), v), { hint: 'Later steps, conditions, templates and the response read what it builds as $.steps.' + st.name + '.body.<field>' }),
+        fld('Order', 'step_order', st.order, 'text', (fl, v) => { const n = parseInt(v, 10); if (n > 0) S2(fl).order = n; }, { hint: 'It can read the request and every step with a lower order' }),
+        ...routeFields(st, f, S2),
+        fld('Run only if', 'condition_expr', st.condition, 'area', (fl, v) => { S2(fl).condition = v; }, { placeholder: "${steps.account.status} == 200" }),
+        fld('Body template', 'body_template', st.bodyTemplate, 'template', (fl, v) => { S2(fl).bodyTemplate = v; }, { hint: 'Optional. Write the result as JSON with placeholders: ${request.body.x}, ${request.headers.x}, ${steps.a.body.y}, ${body.z} (what this step\'s rules built, with converters and lookups) and ${x:default}. Text goes inside quotes ("${…}"), numbers and arrays without. Empty = the rules alone build the result.' }), { kind: 'slots', st, f },
+        fld('Success when', 'success_expr', st.success, 'area', (fl, v) => { S2(fl).success = v; }, { placeholder: '${steps.' + st.name + '.body.amount} > 0', hint: 'Checks what it built; false = the step fails (422, or its If it fails route)' }),
+        fld('Result schema', 'response_schema_code', st.respSchema, 'select', (fl, v) => { S2(fl).respSchema = v; }, { options: withCurrent(none(this.schemaCodes()), st.respSchema), hint: 'Validates what it built; invalid → 500 GW-500-MAPPING' }),
+        fld('Post-process handler', 'response_handler', st.respHandler, 'select', (fl, v) => { S2(fl).respHandler = v; }, { options: withCurrent(none(cat.messageHandlers), st.respHandler), hint: 'Optional Java MessageHandler that can change the result after the rules' }),
+        fld('Enabled', 'enabled', String(st.enabled), 'select', (fl, v) => { S2(fl).enabled = v === 'true'; }, { options: [{ v: 'true', l: 'true' }, { v: 'false', l: 'false · skipped with its rules' }] })
+      ], mapping: { label: 'Edit transform mapping · ' + st.rules.length + ' rules', go: toMap(st.id) },
+        del: { label: 'Delete step', body: `Transform ${st.name} and its ${st.rules.length} rule(s) are removed; steps and rules that read $.steps.${st.name} will need another source. Nothing changes in the database until Save & reload.`, go: () => this.mut(fl => { fl.steps = fl.steps.filter(x => x.id !== st.id); this.norm(fl); return { sel: { kind: 'flow' } }; }) } };
     } else if (st && isStore(st)) {
       const S2 = fl => fl.steps.find(x => x.id === st.id);
       const stores = this.allStorages();
@@ -2146,9 +2374,9 @@ class App extends Component {
     } else if (sel.kind === 'resp' && (f.responses || []).some(r => r.id === sel.id)) {
       const r = f.responses.find(x => x.id === sel.id);
       const R = fl => fl.responses.find(x => x.id === r.id);
-      const used = f.steps.filter(x => x.nextOk === 'RESPOND:' + r.name || x.nextFail === 'RESPOND:' + r.name).map(x => x.name);
+      const used = f.steps.filter(x => x.nextOk === 'RESPOND:' + r.name || x.nextFail === 'RESPOND:' + r.name || (x.cases || []).some(c => c.then === 'RESPOND:' + r.name)).map(x => x.name);
       insp = { kind: 'Client response', color: C.out, title: r.name + ' · HTTP ' + (r.status || 200), table: 'gw_flow_response', fields: [
-        fld('Name', 'name', r.name, 'text', (fl, v) => { const x = R(fl); const old = 'RESPOND:' + x.name; x.name = v.replace(/[^A-Za-z0-9_-]/g, '_'); fl.steps.forEach(y => { if (y.nextOk === old) y.nextOk = 'RESPOND:' + x.name; if (y.nextFail === old) y.nextFail = 'RESPOND:' + x.name; }); }, { hint: used.length ? 'Answered by: ' + used.join(', ') + ' (their routes follow a rename)' : 'No step responds with it yet: set a step\'s If it succeeds / If it fails to Respond · ' + r.name }),
+        fld('Name', 'name', r.name, 'text', (fl, v) => { const x = R(fl); const old = 'RESPOND:' + x.name; x.name = v.replace(/[^A-Za-z0-9_-]/g, '_'); fl.steps.forEach(y => { if (y.nextOk === old) y.nextOk = 'RESPOND:' + x.name; if (y.nextFail === old) y.nextFail = 'RESPOND:' + x.name; (y.cases || []).forEach(c => { if (c.then === old) c.then = 'RESPOND:' + x.name; }); }); }, { hint: used.length ? 'Answered by: ' + used.join(', ') + ' (their routes follow a rename)' : 'No step responds with it yet: set a step\'s If it succeeds / If it fails to Respond · ' + r.name }),
         fld('Status', 'status_code', r.status, 'select', (fl, v) => { R(fl).status = v; }, { options: withCurrent(plain(['200', '201', '202', '204', '400', '404', '409', '422', '500', '502', '503']), String(r.status)), hint: 'The HTTP status the client gets with this response' }),
         fld('Description', 'description', r.description, 'area', (fl, v) => { R(fl).description = v; })
       ], mapping: { label: 'Edit response mapping · ' + r.rules.length + ' rules', go: toMap('resp:' + r.id) },
@@ -2178,7 +2406,7 @@ class App extends Component {
           <div style=${`margin-top:3px;font:11px ${MONO};color:#9A9CA2`}>${insp.table}</div>
         </div>
         <div style="padding:14px 16px 28px;display:flex;flex-direction:column;gap:13px">
-          ${insp.fields.map(fd => fd.kind === 'params' ? this.renderSqlParams(fd.st, fd.f, toMap) : fd.kind === 'keyvars' ? this.renderKeyVars(fd.st, fd.f, toMap) : fd.kind === 'slots' ? this.renderTemplateSlots(fd.st, fd.f) : html`
+          ${insp.fields.map(fd => fd.kind === 'cases' ? this.renderCases(fd.st, fd.f) : fd.kind === 'params' ? this.renderSqlParams(fd.st, fd.f, toMap) : fd.kind === 'keyvars' ? this.renderKeyVars(fd.st, fd.f, toMap) : fd.kind === 'slots' ? this.renderTemplateSlots(fd.st, fd.f) : html`
             <label style="display:flex;flex-direction:column;gap:5px">
               <span style="display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:500">${fd.label}<span style=${`font:10.5px ${MONO};color:#9A9CA2;font-weight:400`}>${fd.col}</span></span>
               ${fd.kind === 'text' && html`<input class="inp" value=${fd.value} onInput=${onSet(fd)} style=${inputStyle()}/>`}
@@ -2225,7 +2453,7 @@ class App extends Component {
       flat(visible, '$', 0);
     }
     const sorted = [...f.steps].sort((a, b) => a.order - b.order);
-    const scopes = [...sorted.map(st => ({ id: st.id, label: st.name, sub: st.order + ' ·' })), { id: 'resp', label: 'Client response', sub: '→' },
+    const scopes = [...sorted.filter(st => !isCondition(st)).map(st => ({ id: st.id, label: st.name, sub: st.order + ' ·' })), { id: 'resp', label: 'Client response', sub: '→' },
       ...(f.responses || []).map(r => ({ id: 'resp:' + r.id, label: r.name + ' · ' + (r.status || 200), sub: '⇒' }))];
     /** A field the client sends, typed in the CONTEXT tree: a new rule reading it, into the current scope. */
     const addField = (section, raw) => {
@@ -2237,11 +2465,11 @@ class App extends Component {
       this.mut(fl => {
         let type = 'BODY', target = '$.' + (section === '$.request.body' ? name : camel);
         const st = scopeStep && fl.steps.find(x => x.id === scopeStep.id);
-        if (st && !isSql(st) && !isStore(st)) {
+        if (st && !isSql(st) && !isStore(st) && !isTransform(st)) {
           if (section === '$.request.headers') { type = 'HEADER'; target = name; }
           if (section === '$.request.query') { type = 'QUERY'; target = name; }
           if (section === '$.request.path') { type = 'PATH'; target = name; }
-        } else if (st && isSql(st)) {
+        } else if (st && (isSql(st) || isTransform(st))) {
           target = '$.' + camel;
         } else if (st && isStore(st) && section === '$.request.path') {
           type = 'PATH'; target = name;
@@ -2252,7 +2480,7 @@ class App extends Component {
       });
     };
     const ruleAccept = d => ['src', 'conv', 'lookup', 'fh'].includes(d.kind);
-    const types = scopeStep ? (isSql(scopeStep) ? ['BODY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes) : ['BODY', 'HEADER'];
+    const types = scopeStep ? (isSql(scopeStep) || isTransform(scopeStep) ? ['BODY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes) : ['BODY', 'HEADER'];
 
     const pv = s.preview && s.preview.key === f.code + '/' + (scopeStep ? scopeStep.name : respSel ? '@' + respSel.name : '') ? s.preview : null;
     const resText = (r, i) => {
@@ -2296,6 +2524,11 @@ class App extends Component {
       if (sto.maxSize) headers.push({ n: 'max size', v: sto.maxSize + ' bytes' });
       body = out ? pretty(out.body) : ''; bodyLang = 'json';
       note = 'Built by the server from the rules; <uuid>, <yyyy> … are filled when the request runs. Nothing is stored by the preview.';
+    } else if (scopeStep && isTransform(scopeStep)) {
+      line = 'TRANSFORM → $.steps.' + scopeStep.name + '.body' + (scopeStep.bodyTemplate ? ' · from its body template' : '');
+      if (scopeStep.bodyTemplate) { const filled = renderTemplate(scopeStep.bodyTemplate, sample || {}, out && out.body); try { body = pretty(JSON.parse(filled)); } catch (e) { body = filled; note = 'The body template does not give valid JSON yet: ' + e.message; } bodyLang = 'json'; }
+      else body = out ? pretty(out.body) : '';
+      if (!note) note = (scopeStep.bodyTemplate ? 'The step\'s body template, filled from the sample context; ${body.…} come from these rules (built by the server with the real converters, lookups and field handlers).' : 'Built by the server from these rules with the real converters, lookups and field handlers.') + ' Nothing is called. Later steps, conditions, templates and the response read it as $.steps.' + scopeStep.name + '.body.<field>. It can read ' + (sorted.filter(x => x.order < scopeStep.order).map(x => x.name).join(', ') || 'only the inbound request') + '.';
     } else if (scopeStep) {
       const t = this.allTargets().find(x => x.code === scopeStep.target);
       const baseUrl = t ? resolveEnv(t.base) : '<' + scopeStep.target + '?>';
@@ -2327,7 +2560,7 @@ class App extends Component {
               <div class="ctx" draggable="true" onDragStart=${this.ds({ kind: 'src', path: n.path })} onDragEnd=${this.dragEnd} title=${n.path} style=${`display:flex;align-items:center;gap:8px;padding:4px 6px 4px ${6 + n.depth * 14}px;border-radius:5px;cursor:grab;font:11.5px ${MONO}`}>
                 <span style=${`color:${n.depth === 0 ? '#17181C' : n.sample === '' ? '#3E4047' : 'oklch(0.42 0.12 255)'};font-weight:${n.depth === 0 ? 600 : 400}`}>${n.key}</span>
                 <span class="hscroll" style="flex:1;min-width:0;text-align:right;color:#9A9CA2">${n.sample}</span>
-                ${(() => { const m = /^\$\.steps\.([^.\[]+)\.body$/.exec(n.path); const st = m && f.steps.find(x => x.name === m[1] && !isSql(x) && !isStore(x)); return st && html`<button class="ro-hide" title=${'Teach Studio what ' + st.target + ' answers: paste an example response (JSON, XML or SOAP) or take the last real one'} onClick=${e => { e.stopPropagation(); this.setState({ exEdit: s.exEdit && s.exEdit.step === st.id ? null : { step: st.id, text: st.example || '', error: '', busy: false, note: '' } }); }} style=${`flex:none;border:1px solid ${st.example ? 'oklch(0.85 0.06 160)' : '#E4E1D8'};background:${s.exEdit && s.exEdit.step === st.id ? '#17181C' : '#fff'};color:${s.exEdit && s.exEdit.step === st.id ? '#fff' : st.example ? 'oklch(0.45 0.11 160)' : '#6A6D75'};border-radius:4px;padding:0 6px;height:18px;cursor:pointer;font:10px ${MONO}`}>${st.example ? 'example ✓' : 'example'}</button>`; })()}
+                ${(() => { const m = /^\$\.steps\.([^.\[]+)\.body$/.exec(n.path); const st = m && f.steps.find(x => x.name === m[1] && !isSql(x) && !isStore(x) && !isLocal(x)); return st && html`<button class="ro-hide" title=${'Teach Studio what ' + st.target + ' answers: paste an example response (JSON, XML or SOAP) or take the last real one'} onClick=${e => { e.stopPropagation(); this.setState({ exEdit: s.exEdit && s.exEdit.step === st.id ? null : { step: st.id, text: st.example || '', error: '', busy: false, note: '' } }); }} style=${`flex:none;border:1px solid ${st.example ? 'oklch(0.85 0.06 160)' : '#E4E1D8'};background:${s.exEdit && s.exEdit.step === st.id ? '#17181C' : '#fff'};color:${s.exEdit && s.exEdit.step === st.id ? '#fff' : st.example ? 'oklch(0.45 0.11 160)' : '#6A6D75'};border-radius:4px;padding:0 6px;height:18px;cursor:pointer;font:10px ${MONO}`}>${st.example ? 'example ✓' : 'example'}</button>`; })()}
                 ${sec && html`<button class="ro-hide" title=${'Add a ' + sec.what + ' the client sends (creates a rule that reads it)'} onClick=${e => { e.stopPropagation(); this.setState({ ctxAdd: s.ctxAdd === n.path ? null : n.path, ctxAddName: '' }); }} style=${`flex:none;border:1px solid #E4E1D8;background:${s.ctxAdd === n.path ? '#17181C' : '#fff'};color:${s.ctxAdd === n.path ? '#fff' : '#6A6D75'};border-radius:4px;width:18px;height:18px;line-height:14px;padding:0;cursor:pointer;font-size:13px`}>+</button>`}
               </div>
               ${(() => { const m = /^\$\.steps\.([^.\[]+)\.body$/.exec(n.path); const st = m && f.steps.find(x => x.name === m[1]); const ex = s.exEdit; return st && ex && ex.step === st.id && html`
@@ -2365,10 +2598,10 @@ class App extends Component {
             ${scopes.map(x => html`<button onClick=${() => this.setState({ scope: x.id, preview: null }, () => this.changed())} style=${`display:flex;align-items:center;gap:7px;border:1px solid ${x.id === scope ? '#17181C' : '#E4E1D8'};background:${x.id === scope ? '#17181C' : '#fff'};color:${x.id === scope ? '#fff' : '#17181C'};border-radius:7px;padding:6px 10px;cursor:pointer;font-weight:500`}><span style=${`font:10.5px ${MONO};opacity:.7`}>${x.sub}</span>${x.label}</button>`)}
           </div>
           <div style="margin-top:20px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
-            <div style="font-size:18px;font-weight:600;letter-spacing:-0.01em">${scopeStep ? (isSql(scopeStep) ? 'Parameters of ' + scopeStep.name : isStore(scopeStep) ? 'What ' + scopeStep.name + (scopeStep.method === 'DELETE' ? ' deletes' : ' stores') : 'What ' + scopeStep.name + ' sends') : respSel ? 'What the client gets · ' + respSel.name + ' (HTTP ' + (respSel.status || 200) + ')' : 'What the client gets'}</div>
-            <div style=${`font:11.5px ${MONO};color:#9A9CA2`}>${scopeStep ? (isSql(scopeStep) ? 'STEP_REQUEST · SQL · ' + scopeStep.target + ' · ' + (sqlParams(scopeStep.sql).map(p => ':' + p).join(' ') || 'no parameters') : 'STEP_REQUEST · ' + scopeStep.method + ' ' + scopeStep.target + scopeStep.path) : respSel ? 'FLOW_RESPONSE · response_name ' + respSel.name + ' · answered when a branch routes to Respond · ' + respSel.name : 'FLOW_RESPONSE'}</div>
+            <div style="font-size:18px;font-weight:600;letter-spacing:-0.01em">${scopeStep ? (isSql(scopeStep) ? 'Parameters of ' + scopeStep.name : isTransform(scopeStep) ? 'What ' + scopeStep.name + ' builds' : isStore(scopeStep) ? 'What ' + scopeStep.name + (scopeStep.method === 'DELETE' ? ' deletes' : ' stores') : 'What ' + scopeStep.name + ' sends') : respSel ? 'What the client gets · ' + respSel.name + ' (HTTP ' + (respSel.status || 200) + ')' : 'What the client gets'}</div>
+            <div style=${`font:11.5px ${MONO};color:#9A9CA2`}>${scopeStep ? (isSql(scopeStep) ? 'STEP_REQUEST · SQL · ' + scopeStep.target + ' · ' + (sqlParams(scopeStep.sql).map(p => ':' + p).join(' ') || 'no parameters') : isTransform(scopeStep) ? 'STEP_REQUEST · TRANSFORM → $.steps.' + scopeStep.name + '.body · no call' : 'STEP_REQUEST · ' + scopeStep.method + ' ' + scopeStep.target + scopeStep.path) : respSel ? 'FLOW_RESPONSE · response_name ' + respSel.name + ' · answered when a branch routes to Respond · ' + respSel.name : 'FLOW_RESPONSE'}</div>
           </div>
-          <div style="margin-top:4px;font-size:12px;color:#6A6D75;max-width:640px;line-height:1.45">${scopeStep && isSql(scopeStep) ? html`Each rule sets one SQL parameter: target ${mono('$.id')} is bound to ${mono(':id')}. ` : ''}${scopeStep && scopeStep.bodyTemplate && !isSql(scopeStep) && !isStore(scopeStep) ? html`This step sends its <b>body template</b> (Pipeline → step); BODY rules here only feed its ${mono('${body.<field>}')} placeholders, HEADER / QUERY / PATH rules apply as usual. ` : ''}${scopeStep && isStore(scopeStep) ? html`BODY ${mono('$.file')} ← the upload (${mono('$.request.files.<field>')}), optional BODY ${mono('$.contentType')}; a PATH rule fills a key variable ${mono('{name}')} (built-ins need none: ${(cat.storageKeyVariables || []).join(', ')}). ` : ''}Rules run top to bottom: value → default → lookup → converter → field handler → required check → write. Drop a field on a rule to replace its source, or a converter / lookup / handler to add it.</div>
+          <div style="margin-top:4px;font-size:12px;color:#6A6D75;max-width:640px;line-height:1.45">${scopeStep && isSql(scopeStep) ? html`Each rule sets one SQL parameter: target ${mono('$.id')} is bound to ${mono(':id')}. ` : ''}${scopeStep && isTransform(scopeStep) ? html`Each rule writes a field of this step's result${scopeStep.bodyTemplate ? html`; with a <b>body template</b> (Pipeline → step) the template is the result and these rules only feed its ${mono('${body.<field>}')} placeholders` : ''}. ` : ''}${scopeStep && scopeStep.bodyTemplate && !isSql(scopeStep) && !isStore(scopeStep) && !isTransform(scopeStep) ? html`This step sends its <b>body template</b> (Pipeline → step); BODY rules here only feed its ${mono('${body.<field>}')} placeholders, HEADER / QUERY / PATH rules apply as usual. ` : ''}${scopeStep && isStore(scopeStep) ? html`BODY ${mono('$.file')} ← the upload (${mono('$.request.files.<field>')}), optional BODY ${mono('$.contentType')}; a PATH rule fills a key variable ${mono('{name}')} (built-ins need none: ${(cat.storageKeyVariables || []).join(', ')}). ` : ''}Rules run top to bottom: value → default → lookup → converter → field handler → required check → write. Drop a field on a rule to replace its source, or a converter / lookup / handler to add it.</div>
 
           <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;max-width:880px">
             ${rules.map((r, i) => {

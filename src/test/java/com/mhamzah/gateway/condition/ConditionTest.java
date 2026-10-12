@@ -52,6 +52,25 @@ class ConditionTest {
     }
 
     @Test
+    void symbolicAndOrNotWithParentheses() {
+        assertThat(eval("${request.body.amount} > 100 && ${steps.inquiry.body.status} == 'ACTIVE'")).isTrue();
+        assertThat(eval("${request.body.amount} > 1000000 || ${request.body.count} == 3")).isTrue();
+        assertThat(eval("!(${request.body.amount} > 100) && ${request.body.count} == 3")).isFalse();
+        assertThat(eval("(${request.body.amount} > 1000000 || ${request.body.count} == 3) && ${request.body.vip}")).isTrue();
+    }
+
+    @Test
+    void whatTheStudioBuilderWrites() {
+        // rows joined by && / ||, "is empty", "matches", a field compared with another, quoted text
+        assertThat(eval("${request.body.amount} > 100 && ${steps.inquiry.body.status} == 'ACTIVE'"
+                + " && (${request.body.note} == null || ${request.body.note} == '')")).isTrue();
+        assertThat(eval("(${request.headers['x-id']} != null && ${request.headers['x-id']} != '')"
+                + " || ${steps.inquiry.body.responseCode} matches '^[0-9]{2}$'")).isTrue();
+        assertThat(eval("${steps.inquiry.body.responseCode} matches '^[A-Z]+$'")).isFalse();
+        assertThat(eval("${request.body.count} == ${request.body.count} && 'it''s' == 'it''s'")).isTrue();
+    }
+
+    @Test
     void missingValuesAreNull() {
         assertThat(eval("${request.body.nope} == null")).isTrue();
         assertThat(eval("${steps.notRunYet.outcome} == 'SKIPPED'")).isFalse();

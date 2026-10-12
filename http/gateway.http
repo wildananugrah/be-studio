@@ -339,3 +339,25 @@ POST {{baseUrl}}/api/v1/transfers/with-reversal
 Content-Type: application/json
 
 {"fromAccount": "1001", "toAccount": "2002", "amount": 999999999}
+
+### ---------------------------------------------------------------------------------------------------------------
+### Condition step (TRANSFER_CHECKED): checks route to named responses, otherwise the debit runs
+### ---------------------------------------------------------------------------------------------------------------
+
+### otherwise → debit: 200 {"refNo":"TRX20261008001","status":"POSTED"}
+POST {{baseUrl}}/api/v1/transfers/checked
+Content-Type: application/json
+
+{"fromAccount": "1001", "toAccount": "2002", "amount": 150000}
+
+### amount <= 0 → 400 {"error":"INVALID_TRANSFER","reason":"amount must be positive"}
+POST {{baseUrl}}/api/v1/transfers/checked
+Content-Type: application/json
+
+{"fromAccount": "1001", "toAccount": "2002", "amount": 0}
+
+### amount > 50000000 → 202 {"status":"PENDING_APPROVAL","amount":60000000}
+POST {{baseUrl}}/api/v1/transfers/checked
+Content-Type: application/json
+
+{"fromAccount": "1001", "toAccount": "2002", "amount": 60000000}

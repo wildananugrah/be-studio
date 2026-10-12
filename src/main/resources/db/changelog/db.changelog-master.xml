@@ -35,6 +35,7 @@
     <include file="changes/010-applications.xml" relativeToChangelogFile="true"/>
     <include file="changes/011-flow-responses.xml" relativeToChangelogFile="true"/>
     <include file="changes/012-step-response-example.xml" relativeToChangelogFile="true"/>
+    <include file="changes/013-step-cases.xml" relativeToChangelogFile="true"/>
     <include file="changes/100-dev-demo-flows.xml" relativeToChangelogFile="true"/>
     <include file="changes/101-dev-demo-target-systems.xml" relativeToChangelogFile="true"/>
     <include file="changes/102-dev-demo-ms-user.xml" relativeToChangelogFile="true"/>
@@ -45,4 +46,6 @@
     <include file="changes/107-dev-demo-branching.xml" relativeToChangelogFile="true"/>
     <include file="changes/108-dev-demo-applications.xml" relativeToChangelogFile="true"/>
     <include file="changes/109-dev-demo-named-response.xml" relativeToChangelogFile="true"/>
+    <include file="changes/110-dev-demo-transform.xml" relativeToChangelogFile="true"/>
+    <include file="changes/111-dev-demo-condition.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

@@ -53,6 +53,32 @@ class StudioRowsTest {
     }
 
     @Test
+    void conditionCasesKeepTheirBuilderRows() {
+        tools.jackson.databind.JsonNode builder = com.mhamzah.gateway.mapping.JsonValues.MAPPER.readTree(
+                "{\"join\":\"||\",\"rows\":[{\"field\":\"request.body.a\",\"op\":\">\",\"value\":\"1\"}]}");
+        Step check = new Step("check", 1, "CONDITION", "GET", "/", null, null, "STOP", 5000, null, "h", null, "xmlCodec", true,
+                List.of(), null, null, "END", null, null,
+                List.of(new StudioConfig.Case("${request.body.a} > 1", "END", "big", builder)));
+        Flow flow = new Flow("F", "F", "GET", "/f", null, null, null, null, null, 200, null, "INHERIT", true, List.of(check),
+                List.of(), "APP");
+        StudioConfig config = new StudioConfig(null, List.of(flow), List.of(), List.of(), List.of(), List.of(),
+                List.of(new StudioConfig.Application("APP", null, null)));
+
+        ConfigRows rows = StudioRows.toRows(config);
+        ConfigRows.StepRow row = rows.steps().getFirst();
+        // a condition step calls nothing: no method, path, codec, timeout or request handler is stored
+        assertThat(row.httpMethod()).isNull();
+        assertThat(row.pathTemplate()).isNull();
+        assertThat(row.bodyCodec()).isNull();
+        assertThat(row.timeoutMs()).isNull();
+        assertThat(row.requestHandler()).isNull();
+        assertThat(StudioRows.problems(rows)).isEmpty();
+        StudioConfig.Case back = StudioRows.fromRows(rows, Map.of()).flows().getFirst().steps().getFirst().cases().getFirst();
+        assertThat(back.when()).isEqualTo("${request.body.a} > 1");
+        assertThat(back.builder()).isEqualTo(builder);
+    }
+
+    @Test
     void ruleIdsAreTheirPositionSoCompilerMessagesMatchTheStudio() {
         ConfigRows rows = StudioRows.toRows(config(List.of(), List.of()));
         assertThat(rows.rules()).extracting(ConfigRows.RuleRow::id).containsExactly(1L, 1L, 1L, 2L);

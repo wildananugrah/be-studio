@@ -113,12 +113,13 @@ class StudioWriter {
                             + " (flow_id, name, step_order, target_system, http_method, path_template, condition_expr,"
                             + " success_expr, on_failure, timeout_ms, response_schema_code, request_handler,"
                             + " response_handler, body_codec, enabled, sql_text, body_template, next_on_success,"
-                            + " next_on_failure, response_example)"
-                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            + " next_on_failure, response_example, cases)"
+                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     flowIds.get(r.flowId()), r.name(), r.stepOrder(), r.targetSystem(), r.httpMethod(),
                     r.pathTemplate(), r.conditionExpr(), r.successExpr(), r.onFailure(), r.timeoutMs(),
                     r.responseSchemaCode(), r.requestHandler(), r.responseHandler(), r.bodyCodec(), r.enabled(),
-                    r.sqlText(), r.bodyTemplate(), r.nextOnSuccess(), r.nextOnFailure(), r.responseExample()));
+                    r.sqlText(), r.bodyTemplate(), r.nextOnSuccess(), r.nextOnFailure(), r.responseExample(),
+                    r.cases()));
         }
         for (ConfigRows.ResponseRow r : rows.responses()) {
             jdbc.sql("INSERT INTO " + db.qualify(t.flowResponse())

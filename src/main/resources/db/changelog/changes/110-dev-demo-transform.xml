@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Dev data: a transform step (target_system TRANSFORM). It calls nothing: its rules re-map the request and
+        the earlier steps into its own result, $.steps.summary.body, which the next step and the response use.
+
+        GET /api/v1/accounts/{accountNo}/summary   (header X-Channel optional)
+
+          account (1, CORE_BANKING)  ──►  summary (2, TRANSFORM)  ──►  notify (3, POST /notifications, body = summary)
+                                               └──► client response = summary
+    -->
+    <changeSet id="110-demo-transform" author="json-gateway" context="dev">
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="ACCOUNT_SUMMARY"/>
+            <column name="name" value="Account summary (transform step)"/>
+            <column name="http_method" value="GET"/>
+            <column name="path_pattern" value="/v1/accounts/{accountNo}/summary"/>
+            <column name="application_code" value="CORE_BANKING_API"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_SUMMARY')"/>
+            <column name="name" value="account"/><column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="CORE_BANKING"/><column name="http_method" value="GET"/>
+            <column name="path_template" value="/core/accounts/{acc}"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_SUMMARY')"/>
+            <column name="name" value="summary"/><column name="step_order" valueNumeric="2"/>
+            <column name="target_system" value="TRANSFORM"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_SUMMARY')"/>
+            <column name="name" value="notify"/><column name="step_order" valueNumeric="3"/>
+            <column name="target_system" value="CORE_BANKING"/><column name="http_method" value="POST"/>
+            <column name="path_template" value="/notifications"/>
+            <column name="on_failure" value="CONTINUE"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_SUMMARY')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'ACCOUNT_SUMMARY' AND s.name = 'account')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/><column name="target_type" value="PATH"/>
+            <column name="target_path" value="acc"/><column name="source_path" value="$.request.path.accountNo"/>
+            <column name="required" valueBoolean="true"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_SUMMARY')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'ACCOUNT_SUMMARY' AND s.name = 'summary')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/><column name="target_type" value="BODY"/>
+            <column name="target_path" value="$.account.number"/><column name="source_path" value="$.steps.account.body.acctNo"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_SUMMARY')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'ACCOUNT_SUMMARY' AND s.name = 'summary')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="2"/><column name="target_type" value="BODY"/>
+            <column name="target_path" value="$.account.holder"/><column name="source_path" value="$.steps.account.body.acctName"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_SUMMARY')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'ACCOUNT_SUMMARY' AND s.name = 'summary')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="3"/><column name="target_type" value="BODY"/>
+            <column name="target_path" value="$.account.status"/><column name="source_path" value="$.steps.account.body.statusCd"/>
+            <column name="lookup_code" value="ACCOUNT_STATUS"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_SUMMARY')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'ACCOUNT_SUMMARY' AND s.name = 'summary')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="4"/><column name="target_type" value="BODY"/>
+            <column name="target_path" value="$.balance"/><column name="source_path" value="$.steps.account.body.availBal"/>
+            <column name="converter" value="DECIMAL_SCALE:2"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_SUMMARY')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'ACCOUNT_SUMMARY' AND s.name = 'summary')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="5"/><column name="target_type" value="BODY"/>
+            <column name="target_path" value="$.channel"/><column name="source_path" value="$.request.headers.x-channel"/>
+            <column name="default_value" value="API"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_SUMMARY')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'ACCOUNT_SUMMARY' AND s.name = 'summary')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="6"/><column name="target_type" value="BODY"/>
+            <column name="target_path" value="$.source"/>
+            <column name="constant_value" value="CORE_BANKING"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_SUMMARY')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'ACCOUNT_SUMMARY' AND s.name = 'notify')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/><column name="target_type" value="BODY"/>
+            <column name="target_path" value="$.event"/>
+            <column name="constant_value" value="ACCOUNT_VIEWED"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_SUMMARY')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'ACCOUNT_SUMMARY' AND s.name = 'notify')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="2"/><column name="target_type" value="BODY"/>
+            <column name="target_path" value="$.summary"/><column name="source_path" value="$.steps.summary.body"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_SUMMARY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/><column name="target_type" value="BODY"/>
+            <column name="target_path" value="$"/><column name="source_path" value="$.steps.summary.body"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_SUMMARY')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/><column name="target_type" value="BODY"/>
+            <column name="target_path" value="$.notified"/><column name="source_path" value="$.steps.notify.outcome"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

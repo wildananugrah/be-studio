@@ -129,6 +129,13 @@ public class ConfigCompiler {
             lookups = buildLookups(rows.lookups());
             targets = resolveTargets();
             storages = resolveStorages();
+            // TRANSFORM and CONDITION mark steps that call nothing: nothing else may take those names
+            for (String reserved : List.of(StepDefinition.TRANSFORM, StepDefinition.CONDITION)) {
+                if (targets.containsKey(reserved) || storages.containsKey(reserved) || sqlDatasources.find(reserved) != null) {
+                    errors.add("'" + reserved + "' is reserved for " + reserved.toLowerCase(java.util.Locale.ROOT)
+                            + " steps: rename the target system, storage or SQL datasource of that code");
+                }
+            }
             checkFlowCodes();
 
             Map<Long, List<StepRow>> stepsByFlow = rows.steps().stream()
@@ -550,7 +557,8 @@ public class ConfigCompiler {
                     String sw = where + " step '" + s.name() + "'";
                     String onSuccess = route(s.nextOnSuccess(), true, s, stepOrders, sw + " next_on_success");
                     String onFailure = route(s.nextOnFailure(), false, s, stepOrders, sw + " next_on_failure");
-                    if ((onSuccess != null || onFailure != null) && groupSizes.getOrDefault(s.stepOrder(), 0L) > 1) {
+                    if ((onSuccess != null || onFailure != null || !def.cases().isEmpty())
+                            && groupSizes.getOrDefault(s.stepOrder(), 0L) > 1) {
                         errors.add(sw + ": a step that chooses the next step (next_on_success / next_on_failure) must"
                                 + " run alone: give it a step_order no other step uses");
                     }
@@ -639,6 +647,12 @@ public class ConfigCompiler {
             String where = flowWhere + " step '" + s.name() + "'";
             if (s.isSql()) {
                 return sqlStep(s, where, ruleRows, orders);
+            }
+            if (StepDefinition.TRANSFORM.equals(s.targetSystem())) {
+                return transformStep(s, where, ruleRows, orders);
+            }
+            if (StepDefinition.CONDITION.equals(s.targetSystem())) {
+                return conditionStep(s, where, ruleRows, orders);
             }
             if (storages.containsKey(s.targetSystem())) {
                 return storageStep(s, where, ruleRows, orders);
@@ -846,6 +860,116 @@ public class ConfigCompiler {
             return new StepDefinition(s.name(), s.stepOrder(), s.targetSystem(), null, null, null, condition, success,
                     onFailure, timeout, responseSchema, requestHandler, responseHandler, JsonCodec.INSTANCE,
                     JsonCodec.BEAN_NAME, rules, new SqlStatement(sql, ds, sqlDatasources.maxRows()), null, null);
+        }
+
+        /**
+         * A transform step ({@code target_system = TRANSFORM}): no call; its BODY rules re-map the request and the
+         * earlier steps into its result {@code $.steps.<name>.body}. http_method, path_template, body codec and
+         * template, request handler and timeout do not apply; a response handler may post-process the result.
+         */
+        private StepDefinition transformStep(StepRow s, String where, List<RuleRow> ruleRows, Map<String, Integer> orders) {
+            BodyTemplate template = null;
+            if (s.bodyTemplate() != null && !s.bodyTemplate().isBlank()) {
+                // the result is the template with its placeholders filled; ${body.x} reads what the BODY rules built
+                try {
+                    template = BodyTemplate.parse(s.bodyTemplate());
+                    if (template.kind() != BodyTemplate.Kind.JSON) {
+                        errors.add(where + ": body_template of a transform step must be JSON (start with { or [);"
+                                + " its result is a JSON document");
+                        template = null;
+                    } else {
+                        template.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), null, where + " body_template"));
+                    }
+                } catch (IllegalArgumentException e) {
+                    errors.add(where + ": body_template: " + e.getMessage());
+                }
+            }
+            if (s.requestHandler() != null && !s.requestHandler().isBlank()) {
+                errors.add(where + ": a transform step has no request_handler; use a response_handler to post-process"
+                        + " what its rules built");
+            }
+            Condition condition = condition(s.conditionExpr(), where, "condition_expr");
+            if (condition != null) {
+                condition.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), null, where + " condition_expr"));
+            }
+            Condition success = condition(s.successExpr(), where, "success_expr");
+            if (success != null) {
+                success.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), s.name(), where + " success_expr"));
+            }
+            OnFailure onFailure = enumValue(OnFailure.class, s.onFailure() == null ? "STOP" : s.onFailure(), where, "on_failure");
+            CompiledSchema responseSchema = schema(s.responseSchemaCode(), where, "response_schema_code");
+            MessageHandler responseHandler = handler(s.responseHandler(), MessageHandler.class, where, "response_handler");
+            List<CompiledRule> rules = new ArrayList<>();
+            for (RuleRow r : ruleRows) {
+                String rw = "mapping rule " + r.id() + " of " + where;
+                CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY), "a transform step (its rules build its result)");
+                if (rule != null) {
+                    checkStepRefs(rule.source(), orders, s.stepOrder(), null, rw);
+                    rules.add(rule);
+                }
+            }
+            return new StepDefinition(s.name(), s.stepOrder(), StepDefinition.TRANSFORM, null, null, null, condition,
+                    success, onFailure, defaultStepTimeout, responseSchema, null, responseHandler, JsonCodec.INSTANCE,
+                    JsonCodec.BEAN_NAME, rules, null, null, template);
+        }
+
+        /**
+         * A condition step ({@code target_system = CONDITION}): no call; {@code cases} is a JSON array of
+         * {@code {"when": "<expression>", "then": "<route>", "label": "..."}}, checked in order, and the first true one
+         * routes the flow (a later step, END, FAIL or RESPOND:<name>). No case true: next_on_success, or the next step.
+         */
+        private StepDefinition conditionStep(StepRow s, String where, List<RuleRow> ruleRows, Map<String, Integer> orders) {
+            if (!ruleRows.isEmpty()) {
+                errors.add(where + ": a condition step has no mapping rules (its cases read the request and earlier"
+                        + " steps directly; add a transform step before it to prepare values)");
+            }
+            Condition condition = condition(s.conditionExpr(), where, "condition_expr");
+            if (condition != null) {
+                condition.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), null, where + " condition_expr"));
+            }
+            List<StepDefinition.Case> cases = new ArrayList<>();
+            tools.jackson.databind.JsonNode json = null;
+            if (s.cases() == null || s.cases().isBlank()) {
+                errors.add(where + ": a condition step needs at least one case (cases)");
+            } else {
+                try {
+                    json = com.mhamzah.gateway.mapping.JsonValues.MAPPER.readTree(s.cases());
+                } catch (RuntimeException e) {
+                    errors.add(where + ": cases is not valid JSON: " + e.getMessage());
+                }
+                if (json != null && !json.isArray()) {
+                    errors.add(where + ": cases must be a JSON array of {\"when\", \"then\", \"label\"}");
+                    json = null;
+                }
+            }
+            if (json != null) {
+                int n = 0;
+                for (tools.jackson.databind.JsonNode c : json) {
+                    n++;
+                    String label = c.path("label").asString("");
+                    String cw = where + " case " + n + (label.isBlank() ? "" : " '" + label + "'");
+                    String whenText = c.path("when").asString("");
+                    String thenText = c.path("then").asString("");
+                    if (whenText.isBlank() || thenText.isBlank()) {
+                        errors.add(cw + ": needs both when (an expression) and then (where to go)");
+                        continue;
+                    }
+                    Condition when = condition(whenText, cw, "when");
+                    if (when != null) {
+                        when.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), null, cw + " when"));
+                    }
+                    String route = route(thenText, true, s, orders, cw + " then");
+                    if (when != null && route != null) {
+                        cases.add(new StepDefinition.Case(label.isBlank() ? "case " + n : label, when, route));
+                    }
+                }
+                if (n == 0) {
+                    errors.add(where + ": a condition step needs at least one case (cases)");
+                }
+            }
+            return new StepDefinition(s.name(), s.stepOrder(), StepDefinition.CONDITION, null, null, null, condition,
+                    null, OnFailure.STOP, defaultStepTimeout, null, null, null, JsonCodec.INSTANCE, JsonCodec.BEAN_NAME,
+                    List.of(), null, null, null, null, null, cases);
         }
 
         private CompiledRule rule(RuleRow r, String where, Set<TargetType> allowedTargets, String phase) {

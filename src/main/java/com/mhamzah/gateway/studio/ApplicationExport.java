@@ -80,7 +80,10 @@ final class ApplicationExport {
             f.response().forEach(r -> rule(r, lookupCodes, handlers));
             f.responses().forEach(x -> x.rules().forEach(r -> rule(r, lookupCodes, handlers)));
             for (Step s : f.steps()) {
-                addIf(targetCodes, s.targetSystem());
+                if (!com.mhamzah.gateway.config.StepDefinition.TRANSFORM.equals(s.targetSystem())
+                        && !com.mhamzah.gateway.config.StepDefinition.CONDITION.equals(s.targetSystem())) {
+                    addIf(targetCodes, s.targetSystem()); // a transform step names no target system
+                }
                 addIf(schemaCodes, s.responseSchema());
                 addIf(handlers, s.requestHandler());
                 addIf(handlers, s.responseHandler());
@@ -275,7 +278,7 @@ final class ApplicationExport {
                     Col.v("response_handler", s.responseHandler()), Col.v("body_codec", s.bodyCodec()),
                     Col.v("enabled", s.enabled()), Col.v("sql_text", s.sqlText()), Col.v("body_template", s.bodyTemplate()),
                     Col.v("next_on_success", s.nextOnSuccess()), Col.v("next_on_failure", s.nextOnFailure()),
-                    Col.v("response_example", s.responseExample()))));
+                    Col.v("response_example", s.responseExample()), Col.v("cases", s.cases()))));
         }
         for (ConfigRows.ResponseRow r : rows.responses()) {
             flows.add(new Insert("flow_response", List.of(Col.expr("flow_id", flowId(flowCode.get(r.flowId()))),

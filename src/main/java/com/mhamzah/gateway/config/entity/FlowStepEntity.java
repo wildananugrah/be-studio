@@ -35,12 +35,14 @@ public class FlowStepEntity {
     private String nextOnFailure;
     /** CLOB / text: an example downstream response, for Studio only. */
     private String responseExample;
+    /** CLOB / text: the JSON cases of a condition step. */
+    private String cases;
 
     protected FlowStepEntity() {}
 
     public StepRow toRow() {
         return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                 successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample);
+                bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases);
     }
 }

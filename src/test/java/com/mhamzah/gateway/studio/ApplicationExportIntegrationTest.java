@@ -92,6 +92,9 @@ class ApplicationExportIntegrationTest {
         assertThat(d.get("lookups").toString()).contains("ACCOUNT_STATUS");
         assertThat(d.get("schemas").toString()).contains("TRANSFER_REQUEST");
         assertThat(d.get("requires").get("handlerBeans").toString()).contains("coreBankingErrorHandler");
+        // ACCOUNT_SUMMARY's transform step needs no target system
+        assertThat(d.get("flows").toString()).contains("ACCOUNT_SUMMARY");
+        assertThat(d.get("requires").toString()).doesNotContain("TRANSFORM");
         // the named response of TRANSFER_WITH_REVERSAL travels with its flow
         assertThat(d.get("flows").toString()).contains("\"responses\":[{\"name\":\"reversed\",\"status\":422");
 

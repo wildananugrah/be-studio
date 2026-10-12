@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Dev data: a condition step (target_system CONDITION) validating the request before anything is called.
+
+        POST /api/v1/transfers/checked  {"fromAccount": "1001", "toAccount": "2002", "amount": 150000}
+
+          check (1, CONDITION), first true case wins:
+            amount missing or <= 0            → RESPOND:invalid          400 {"error": "INVALID_TRANSFER", "reason": ...}
+            fromAccount == toAccount          → RESPOND:invalid
+            amount > 50000000                 → RESPOND:needs_approval   202 {"status": "PENDING_APPROVAL", ...}
+            otherwise                         → debit (2, CORE_BANKING)  200 {"refNo": ..., "status": "POSTED"}
+    -->
+    <changeSet id="111-demo-condition" author="json-gateway" context="dev">
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="TRANSFER_CHECKED"/>
+            <column name="name" value="Transfer with checks (condition step)"/>
+            <column name="http_method" value="POST"/>
+            <column name="path_pattern" value="/v1/transfers/checked"/>
+            <column name="application_code" value="CORE_BANKING_API"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_CHECKED')"/>
+            <column name="name" value="check"/><column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="CONDITION"/>
+            <column name="cases" valueComputed="'[{&quot;when&quot;: &quot;$' || '{request.body.amount} == null or $' || '{request.body.amount} &lt;= 0&quot;, &quot;then&quot;: &quot;RESPOND:invalid&quot;, &quot;label&quot;: &quot;amount must be positive&quot;}, {&quot;when&quot;: &quot;$' || '{request.body.fromAccount} == $' || '{request.body.toAccount}&quot;, &quot;then&quot;: &quot;RESPOND:invalid&quot;, &quot;label&quot;: &quot;same account&quot;}, {&quot;when&quot;: &quot;$' || '{request.body.amount} &gt; 50000000&quot;, &quot;then&quot;: &quot;RESPOND:needs_approval&quot;, &quot;label&quot;: &quot;needs approval&quot;}]'"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_CHECKED')"/>
+            <column name="name" value="debit"/><column name="step_order" valueNumeric="2"/>
+            <column name="target_system" value="CORE_BANKING"/><column name="http_method" value="POST"/>
+            <column name="path_template" value="/core/transfers"/>
+            <column name="success_expr" valueComputed="'$' || '{steps.debit.body.responseCode} == ''00'''"/>
+        </insert>
+        <insert tableName="${tbl.flow_response}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_CHECKED')"/>
+            <column name="name" value="invalid"/><column name="status_code" valueNumeric="400"/>
+            <column name="description" value="The request failed a check"/>
+        </insert>
+        <insert tableName="${tbl.flow_response}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_CHECKED')"/>
+            <column name="name" value="needs_approval"/><column name="status_code" valueNumeric="202"/>
+            <column name="description" value="Accepted, waiting for approval"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_CHECKED')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER_CHECKED' AND s.name = 'debit')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_path" value="$.fromAcct"/><column name="source_path" value="$.request.body.fromAccount"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_CHECKED')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER_CHECKED' AND s.name = 'debit')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="2"/>
+            <column name="target_path" value="$.toAcct"/><column name="source_path" value="$.request.body.toAccount"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_CHECKED')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'TRANSFER_CHECKED' AND s.name = 'debit')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="3"/>
+            <column name="target_path" value="$.amount"/><column name="source_path" value="$.request.body.amount"/>
+            <column name="converter" value="PAD_LEFT:15:0"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_CHECKED')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_path" value="$.refNo"/><column name="source_path" value="$.steps.debit.body.refNo"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_CHECKED')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_path" value="$.status"/>
+            <column name="constant_value" value="POSTED"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_CHECKED')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="response_name" value="invalid"/>
+            <column name="target_path" value="$.error"/>
+            <column name="constant_value" value="INVALID_TRANSFER"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_CHECKED')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="response_name" value="invalid"/>
+            <column name="target_path" value="$.reason"/><column name="source_path" value="$.steps.check.body.matched"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_CHECKED')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="response_name" value="needs_approval"/>
+            <column name="target_path" value="$.status"/>
+            <column name="constant_value" value="PENDING_APPROVAL"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER_CHECKED')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="response_name" value="needs_approval"/>
+            <column name="target_path" value="$.amount"/><column name="source_path" value="$.request.body.amount"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

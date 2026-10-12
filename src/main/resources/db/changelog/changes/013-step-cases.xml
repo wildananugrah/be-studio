@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        The cases of a condition step (target_system CONDITION): a JSON array, checked in order, the first true one
+        routes the flow:  [{"when": "${request.body.amount} > 50000000", "then": "approval", "label": "large"}, ...]
+        "then" is a later step, END, FAIL or RESPOND:<response>; when no case matches, next_on_success (or the next
+        step) is taken.
+    -->
+    <changeSet id="013-gw-flow-step-cases" author="json-gateway">
+        <addColumn tableName="${tbl.flow_step}">
+            <column name="cases" type="clob"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

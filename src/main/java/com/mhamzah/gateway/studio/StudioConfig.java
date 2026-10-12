@@ -120,6 +120,17 @@ public record StudioConfig(
         }
     }
 
+    /**
+     * A case of a condition step: when {@code when} is true, go to {@code then}; {@code label} names it.
+     * {@code builder} keeps Studio's rows ({@code {"join": "&&", "rows": [{"field", "op", "value"}]}}) that generated
+     * {@code when}; the gateway only uses {@code when}.
+     */
+    public record Case(String when, String then, String label, tools.jackson.databind.JsonNode builder) {
+        public Case(String when, String then, String label) {
+            this(when, then, label, null);
+        }
+    }
+
     /** {@code gw_flow_step} plus its {@code STEP_REQUEST} rules. */
     public record Step(
             String name,
@@ -141,7 +152,17 @@ public record StudioConfig(
             String bodyTemplate,
             String nextOnSuccess,
             String nextOnFailure,
-            String responseExample) {
+            String responseExample,
+            List<Case> cases) {
+
+        public Step(String name, int order, String targetSystem, String method, String path, String condition,
+                String success, String onFailure, Integer timeoutMs, String responseSchema, String requestHandler,
+                String responseHandler, String bodyCodec, Boolean enabled, List<Rule> rules, String sql,
+                String bodyTemplate, String nextOnSuccess, String nextOnFailure, String responseExample) {
+            this(name, order, targetSystem, method, path, condition, success, onFailure, timeoutMs, responseSchema,
+                    requestHandler, responseHandler, bodyCodec, enabled, rules, sql, bodyTemplate, nextOnSuccess,
+                    nextOnFailure, responseExample, List.of());
+        }
 
         public Step(String name, int order, String targetSystem, String method, String path, String condition,
                 String success, String onFailure, Integer timeoutMs, String responseSchema, String requestHandler,
@@ -155,6 +176,7 @@ public record StudioConfig(
         public Step {
             enabled = enabled == null || enabled;
             rules = rules == null ? List.of() : List.copyOf(rules);
+            cases = cases == null ? List.of() : List.copyOf(cases);
         }
 
         /** An HTTP step. */

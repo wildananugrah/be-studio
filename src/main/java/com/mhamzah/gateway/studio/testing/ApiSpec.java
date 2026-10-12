@@ -380,7 +380,7 @@ public final class ApiSpec {
             put(out, ErrorType.DOWNSTREAM_BUSINESS_ERROR, "The downstream system refused the request (its result code"
                     + " is not a success)");
         }
-        if (steps.stream().anyMatch(s -> !s.isSql() && !s.isStorage())) {
+        if (steps.stream().anyMatch(s -> !s.isSql() && !s.isStorage() && !s.isTransform())) {
             put(out, ErrorType.DOWNSTREAM_HTTP_ERROR, "The downstream system answered with an HTTP error");
             put(out, ErrorType.DOWNSTREAM_CONNECTION, "The downstream system cannot be reached");
             put(out, ErrorType.DOWNSTREAM_INVALID_RESPONSE, "The downstream answer cannot be read");

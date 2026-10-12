@@ -301,7 +301,7 @@ public class StudioService {
         return new Step(s.name(), s.order(), s.targetSystem(), s.method(), s.path(), s.condition(), s.success(),
                 s.onFailure(), s.timeoutMs(), s.responseSchema(), s.requestHandler(), s.responseHandler(),
                 s.bodyCodec(), true, s.rules(), s.sql(), s.bodyTemplate(), s.nextOnSuccess(), s.nextOnFailure(),
-                s.responseExample());
+                s.responseExample(), s.cases());
     }
 
     private static ExecutionContext context(String flowCode, FlowRegistry registry, JsonNode sample) {
