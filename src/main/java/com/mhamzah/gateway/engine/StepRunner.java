@@ -136,6 +136,7 @@ final class StepRunner {
         request.headers().putIfAbsent("Accept", codec.accept());
         Map<String, String> outHeaders = new LinkedHashMap<>(request.headers());
         outHeaders.put("X-Correlation-Id", ctx.correlationId());
+        a.sentHeaders = outHeaders;
 
         long remainingNanos = deadlineNanos - System.nanoTime();
         if (remainingNanos <= 0) {
@@ -544,6 +545,8 @@ final class StepRunner {
         JsonNode responsePayload;
         /** The route chosen by a condition step's matching case. */
         String route;
+        /** What was sent downstream (HTTP steps); null when nothing was sent. */
+        Map<String, String> sentHeaders;
         /** The body as it was on the wire, for the audit, when the step's codec is not JSON. */
         String wireRequest;
         String wireResponse;
@@ -579,7 +582,8 @@ final class StepRunner {
                     step.methodName(), url, status, outcome, durationMs);
             StepRecord record = new StepRecord(step.name(), step.targetSystemName(), step.methodName(), url,
                     status, outcome, wireRequest != null ? F.stringNode(wireRequest) : requestPayload,
-                    wireResponse != null ? F.stringNode(wireResponse) : responsePayload, startedAt, durationMs);
+                    wireResponse != null ? F.stringNode(wireResponse) : responsePayload, startedAt, durationMs,
+                    sentHeaders, status == null || headers.isEmpty() ? null : headers);
             return new StepOutcome(step, error, record, route);
         }
     }

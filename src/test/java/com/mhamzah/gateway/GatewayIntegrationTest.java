@@ -200,10 +200,21 @@ class GatewayIntegrationTest {
     // ---- audit ----
 
     @Test
+    void aPlainGetWithoutContentTypeIsNotAnUpload() throws Exception {
+        // Spring matches a request without Content-Type as octet-stream; an empty body must not become a file
+        HttpResponse<String> r = HTTP.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v1/accounts/1001"))
+                .header("X-Correlation-Id", "plain-get-1").GET().build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(r.statusCode()).isEqualTo(200);
+        String payload = await(() -> jdbc.queryForList("SELECT request_payload FROM gw_audit_transaction WHERE correlation_id = ?",
+                String.class, "plain-get-1"), l -> !l.isEmpty()).getFirst();
+        assertThat(String.valueOf(payload)).doesNotContain("files", "upload");
+    }
+
+    @Test
     void auditRowsAreWrittenWithMaskedPayloads() throws Exception {
         call("POST", "/api/v1/transfers",
                 "{\"fromAccount\":\"1001\",\"toAccount\":\"2002\",\"amount\":1000,\"pin\":\"123456\"}",
-                "X-Correlation-Id", "audit-it-1");
+                "X-Correlation-Id", "audit-it-1", "Authorization", "Bearer secret-token", "X-Channel", "MOBILE");
 
         List<Map<String, Object>> tx = await(
                 () -> jdbc.queryForList("SELECT * FROM gw_audit_transaction WHERE correlation_id = ?", "audit-it-1"),
@@ -220,6 +231,18 @@ class GatewayIntegrationTest {
                 "SELECT s.step_name FROM gw_audit_step s JOIN gw_audit_transaction t ON t.id = s.transaction_id"
                         + " WHERE t.correlation_id = ? ORDER BY s.id", String.class, "audit-it-1");
         assertThat(steps).containsExactlyInAnyOrder("beneficiary", "source", "debit", "notify");
+
+        // headers: what the client sent (masked by name) and got, and per step what went downstream and came back
+        Map<String, Object> h = lower(jdbc.queryForMap(
+                "SELECT request_headers, response_headers FROM gw_audit_transaction WHERE correlation_id = ?", "audit-it-1"));
+        assertThat(String.valueOf(h.get("request_headers"))).contains("\"x-channel\":\"MOBILE\"", "\"authorization\":\"****\"")
+                .doesNotContain("secret-token");
+        assertThat(String.valueOf(h.get("response_headers"))).contains("\"X-Correlation-Id\":\"audit-it-1\"", "Content-Type");
+        Map<String, Object> debit = lower(jdbc.queryForMap("SELECT s.request_headers, s.response_headers FROM gw_audit_step s"
+                + " JOIN gw_audit_transaction t ON t.id = s.transaction_id WHERE t.correlation_id = ? AND s.step_name = 'debit'",
+                "audit-it-1"));
+        assertThat(String.valueOf(debit.get("request_headers"))).contains("\"X-Correlation-Id\":\"audit-it-1\"", "\"Content-Type\"");
+        assertThat(String.valueOf(debit.get("response_headers"))).containsIgnoringCase("content-type");
     }
 
     @Test

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Dev data: form data in, JSON out. A multipart upload (a file, a JSON "metadata" part, a "description" field)
+        is sent on to the core system as one JSON document, the file's content Base64-encoded.
+
+        curl -X POST localhost:8080/api/v1/documents/forward \
+             -F "file=@contract.pdf" \
+             -F 'metadata={"customer":{"id":"1001"},"tags":["contract"]};type=application/json' \
+             -F "description=Signed contract"
+    -->
+    <changeSet id="112-demo-document-forward" author="json-gateway" context="dev">
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="DOCUMENT_FORWARD"/>
+            <column name="name" value="Forward an upload as JSON (form data to JSON)"/>
+            <column name="http_method" value="POST"/>
+            <column name="path_pattern" value="/v1/documents/forward"/>
+            <column name="success_status" valueNumeric="201"/>
+            <column name="application_code" value="DOCUMENTS"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'DOCUMENT_FORWARD')"/>
+            <column name="name" value="archive"/><column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="CORE_BANKING"/><column name="http_method" value="POST"/>
+            <column name="path_template" value="/core/documents"/>
+            <column name="body_template"><![CDATA[{
+  "document": {
+    "name": "${request.files.file.filename}",
+    "contentType": "${request.files.file.contentType}",
+    "size": ${request.files.file.size},
+    "content": "${request.files.file.base64}"
+  },
+  "customerId": "${request.body.metadata.customer.id}",
+  "tags": ${request.body.metadata.tags:[]},
+  "description": "${request.body.description:}"
+}]]></column>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'DOCUMENT_FORWARD')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_path" value="$.documentId"/><column name="source_path" value="$.steps.archive.body.documentId"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'DOCUMENT_FORWARD')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_path" value="$.filename"/><column name="source_path" value="$.request.files.file.filename"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'DOCUMENT_FORWARD')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="3"/>
+            <column name="target_path" value="$.size"/><column name="source_path" value="$.request.files.file.size"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'DOCUMENT_FORWARD')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="4"/>
+            <column name="target_path" value="$.customerId"/><column name="source_path" value="$.request.body.metadata.customer.id"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

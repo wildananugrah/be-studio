@@ -83,7 +83,8 @@ const ADDABLE = {
 let STORE_NAMES = new Set();
 const isStore = s => !isSql(s) && STORE_NAMES.has(s.target);
 /** What a sample upload looks like at $.request.files.<field>. */
-const fileSample = field => ({ field, filename: 'sample.pdf', contentType: 'application/pdf', size: 24680, sha256: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08' });
+// base64 / text are the content, built by the server only when a rule or template reads them (e.g. to send the file on in JSON)
+const fileSample = field => ({ field, filename: 'sample.pdf', contentType: 'application/pdf', size: 24680, sha256: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08', base64: 'JVBERi0xLjcKJcfsj6IK…', text: '%PDF-1.7 …' });
 /** The form field of a step's file rule ($.file <- $.request.files.<field>). */
 const fileField = st => { const r = st.rules.find(x => x.type === 'BODY' && x.target === '$.file'); const m = r && /^\$\.request\.files\.([A-Za-z0-9_-]+)$/.exec(r.source || ''); return m ? m[1] : ''; };
 
@@ -1116,11 +1117,25 @@ class App extends Component {
     const other = s.problems.filter(m => !s.cfg.flows.some(f => m.includes(`flow '${f.code}'`)) && !/^(target system|lookup|json schema|storage) '/.test(m));
     const small = (label, onClick, disabled, title, cls = 'btn-line') => html`<button class=${cls} disabled=${disabled} title=${title || ''} onClick=${onClick} style="border:1px solid #E4E1D8;background:#fff;color:#17181C;border-radius:7px;padding:5px 10px;cursor:pointer;font-weight:500;font-size:12px;white-space:nowrap">${label}</button>`;
     const pickFile = () => { const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json'; inp.onchange = async () => { const f = inp.files && inp.files[0]; if (f) this.importApp(await f.text()); }; inp.click(); };
-    const sections = this.appSections();
+    const q = (s.flowQ || '').trim().toLowerCase();
+    const has = v => String(v == null ? '' : v).toLowerCase().includes(q);
+    const flowHit = x => has(x.code) || has(x.name) || has(x.method + ' ' + base + x.path) || has(x.path) || has(x.errorHandler || 'defaultErrorHandler')
+      || x.steps.some(st => has(st.target) || has(st.name));
+    const all = this.appSections();
+    const total = s.cfg.flows.length;
+    // an application that matches keeps all its flows; otherwise only its matching flows, and none = hidden
+    const sections = !q ? all : all.map(sec => (has(sec.app.code) || has(sec.app.name) ? sec : { ...sec, flows: sec.flows.filter(({ f }) => flowHit(f)) }))
+      .filter(sec => sec.flows.length > 0);
+    const shown = sections.reduce((a, sec) => a + sec.flows.length, 0);
     return html`
       <div style="flex:1;min-height:0;overflow:auto;padding:28px 32px 60px">
         <div style="max-width:1080px;margin:0 auto">
           ${pageHead('Flows', html`Flows grouped by application; one flow per inbound endpoint under ${mono(base)}. Rows in ${mono('gw_application')} and ${mono('gw_flow')}.`, '+ New flow', () => this.openAppModal('flow'))}
+          <div style="margin-top:16px;display:flex;align-items:center;gap:10px">
+            <input id="list-search" class="inp ro-ok" value=${s.flowQ || ''} onInput=${e => this.setState({ flowQ: e.currentTarget.value })} onKeyDown=${e => { if (e.key === 'Escape') this.setState({ flowQ: '' }); }}
+              placeholder="Search code, name, path, application or target system…  ( / )" style=${inputStyle(34, 12.5) + ';max-width:460px'}/>
+            <span style=${`font:11.5px ${MONO};color:#9A9CA2`}>${q ? shown + ' of ' + total : total} flow${total === 1 ? '' : 's'}${q ? ' in ' + sections.length + ' application' + (sections.length === 1 ? '' : 's') : ''}</span>
+          </div>
           <div style="margin-top:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:#6A6D75">
             <span class="ro-hide" style="display:flex;gap:8px">${small('+ New application', () => this.openAppModal('new'))}${small('Import application…', pickFile, false, 'Load a JSON export as unsaved changes')}</span>
             <span style="flex:1"></span>
@@ -1133,7 +1148,7 @@ class App extends Component {
               <span style=${`font:600 10px ${MONO};letter-spacing:.06em;color:#fff;background:#3E4047;padding:3px 7px;border-radius:4px`}>APP</span>
               <span style=${`font:600 13px ${MONO}`}>${app.code}</span>
               ${app.name && html`<span style="font-weight:500">${app.name}</span>`}
-              <span style=${`font:11px ${MONO};color:#9A9CA2`}>${flows.length} flow${flows.length === 1 ? '' : 's'}</span>
+              ${(() => { const n = s.cfg.flows.filter(x => (x.application || 'DEFAULT') === app.code).length; return html`<span style=${`font:11px ${MONO};color:#9A9CA2`}>${flows.length < n ? flows.length + ' of ' + n : n} flow${n === 1 ? '' : 's'}</span>`; })()}
               ${app.missing && html`<span style=${`font:11px ${MONO};color:${C.err}`}>not defined: + New application with this code</span>`}
               <span style="flex:1"></span>
               <span class="ro-hide" style="display:flex;gap:6px">
@@ -1167,7 +1182,7 @@ class App extends Component {
               </div>`;
             })}
           </div>`)}
-          ${sections.length === 0 && html`<div style="margin-top:20px;padding:26px;border:1.5px dashed #C9C6BC;border-radius:10px;color:#6A6D75;text-align:center;font-size:12.5px">No applications yet. <b>+ New flow</b> starts by naming its application.</div>`}
+          ${sections.length === 0 && html`<div style="margin-top:20px;padding:26px;border:1.5px dashed #C9C6BC;border-radius:10px;color:#6A6D75;text-align:center;font-size:12.5px">${q ? html`Nothing matches “${s.flowQ}”. Esc clears the search.` : html`No applications yet. <b>+ New flow</b> starts by naming its application.`}</div>`}
           ${other.length > 0 && html`
             <div style="margin-top:16px;background:#fff;border:1px solid oklch(0.85 0.06 25);border-radius:9px;overflow:hidden">
               <div style="padding:8px 12px;background:oklch(0.96 0.025 25);font-weight:600;color:oklch(0.45 0.17 25);font-size:12px">Other problems · a save would be rejected</div>
@@ -1446,6 +1461,18 @@ class App extends Component {
           : html`<div style="font-size:11.5px;color:#9A9CA2;padding:6px 0">${hint || 'No payload.'}</div>`}
       </div>`;
     const noPayload = st.storePayloads === false ? 'Not stored (gateway.audit.store-payloads=false).' : 'No body.';
+    /** Headers stored as a JSON object: name / value rows, names sorted; masked values stay masked. */
+    const headersBlock = (title, raw, hint) => {
+      let h = null; try { h = raw ? JSON.parse(raw) : null; } catch (e) { h = null; }
+      const names = h ? Object.keys(h).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })) : [];
+      return html`
+        <div style="min-width:0;display:flex;flex-direction:column;gap:4px">
+          <div style=${`font:600 10px ${MONO};letter-spacing:.06em;color:#6A6D75;text-transform:uppercase`}>${title}${names.length ? html` <span style="color:#9A9CA2;font-weight:400">· ${names.length}</span>` : ''}</div>
+          ${names.length ? html`<div style=${`display:grid;grid-template-columns:minmax(90px,max-content) minmax(0,1fr);gap:2px 12px;padding:7px 10px;background:#F4F3EF;border-radius:7px;font:11px/1.5 ${MONO}`}>
+            ${names.map(n => html`<span style="color:#3E4047;font-weight:600;white-space:nowrap">${n}</span><span style=${`color:${h[n] === '****' ? '#9A9CA2' : '#17181C'};word-break:break-all`}>${h[n]}</span>`)}
+          </div>` : html`<div style="font-size:11.5px;color:#9A9CA2;padding:2px 0">${raw === undefined || raw === null ? (st.storePayloads === false ? 'Not stored (gateway.audit.store-payloads=false).' : hint || 'Not recorded (calls from before headers were audited).') : 'None.'}</div>`}
+        </div>`;
+    };
     const flows = s.cfg.flows.map(f => f.code).sort();
     const d = a.detail; const tx = d && d.transaction;
     const sel = 'height:32px;border:1px solid #E4E1D8;border-radius:6px;padding:0 8px;background:#fff;font-size:12.5px';
@@ -1531,6 +1558,7 @@ class App extends Component {
                 <div style="display:flex;flex-direction:column;gap:12px;border-left:2px solid #E4E1D8;padding-left:14px;margin-left:4px">
                   <div style="display:flex;flex-direction:column;gap:6px">
                     <div style="font-weight:600;font-size:13px">1 · Client → gateway</div>
+                    ${headersBlock('Request headers', tx.request_headers)}
                     ${block('Request body', prettyText(tx.request_payload), noPayload)}
                   </div>
                   ${d.steps.length === 0 && html`<div style="font-size:12px;color:#9A9CA2">No downstream step ran (stopped before the first call, or the flow has no steps).</div>`}
@@ -1543,12 +1571,15 @@ class App extends Component {
                       </div>
                       ${x.url && html`<div class="hscroll" style=${`font:11.5px ${MONO};color:#3E4047`}><span style=${`font:600 10px ${MONO};color:#fff;background:${MC[x.http_method] || '#555'};padding:1px 5px;border-radius:4px;margin-right:6px`}>${x.http_method}</span>${x.url}</div>`}
                       <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px">
+                        ${x.url && (x.request_headers || x.http_status != null) ? headersBlock('Sent headers', x.request_headers) : ''}
+                        ${x.url && (x.request_headers || x.http_status != null) ? headersBlock('Received headers', x.response_headers, x.http_status == null ? 'No response.' : '') : ''}
                         ${block('Sent (after mapping)', prettyText(x.request_payload), x.http_method === 'GET' ? 'No body (GET).' : noPayload)}
                         ${block('Received', prettyText(x.response_payload), x.outcome === 'SKIPPED' ? 'Skipped: its condition was false.' : noPayload)}
                       </div>
                     </div>`)}
                   <div style="display:flex;flex-direction:column;gap:6px">
                     <div style="display:flex;align-items:center;gap:8px"><span style="font-weight:600;font-size:13px">${d.steps.length + 2} · Gateway → client</span>${statusChip(tx.client_status)}</div>
+                    ${headersBlock('Response headers', tx.response_headers)}
                     ${block('Response body', prettyText(tx.response_payload), noPayload)}
                   </div>
                 </div>

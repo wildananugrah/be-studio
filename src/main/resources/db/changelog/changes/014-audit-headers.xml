@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Headers in the audit trail, as JSON objects (name: value), masked with gateway.masking.fields and stored only
+        with gateway.audit.store-payloads: what the client sent and got, and per step what was sent downstream and
+        what came back.
+    -->
+    <changeSet id="014-gw-audit-headers" author="json-gateway">
+        <addColumn tableName="${tbl.audit_transaction}">
+            <column name="request_headers" type="clob"/>
+            <column name="response_headers" type="clob"/>
+        </addColumn>
+        <addColumn tableName="${tbl.audit_step}">
+            <column name="request_headers" type="clob"/>
+            <column name="response_headers" type="clob"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

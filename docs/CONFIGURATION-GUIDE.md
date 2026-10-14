@@ -519,7 +519,7 @@ Every response, error or not, carries the `X-Correlation-Id` header. The ID is t
 
 ### 3.10 Audit
 
-When audit is on for a flow, every request writes one `gw_audit_transaction` row, plus one `gw_audit_step` row per step, including skipped and cancelled ones. Payloads are stored with sensitive fields masked (`gateway.masking.fields`). Writing is asynchronous and never slows down or fails a request.
+When audit is on for a flow, every request writes one `gw_audit_transaction` row, plus one `gw_audit_step` row per step, including skipped and cancelled ones. Payloads and headers are stored with sensitive fields masked (`gateway.masking.fields`): `request_headers` / `response_headers` (JSON objects) hold what the client sent and got, and per step what was sent downstream and what came back. Writing is asynchronous and never slows down or fails a request.
 
 ```sql
 SELECT correlation_id, flow_code, client_status, error_code, duration_ms
@@ -1224,6 +1224,39 @@ curl -s -X DELETE localhost:8080/api/v1/files/2026/10/a5ac2518-6212-4783-9a94-a8
 In Gateway Studio, **Storages** lists the database storages (add with **+ Local storage** / **+ S3 storage**; a literal key gets a "stored as plain text" warning) and, read-only, those of `application.yml` (**Override in database** copies one into the table). Drag **Store file · LOCAL_FILES** (palette, *File storage*, which lists both kinds) onto the pipeline. The inspector has the storage (with its location, allowed types and limit), the operation, the form field of the upload, the object key, and the key's variables with **+ Add rule for {x}** for the ones that are neither built in nor set. The live preview shows the key, location and file the step would use. The flow's **Tests** tab sends JSON only, so generated cases for upload flows have no file; test them with curl, `http/gateway.http` or Swagger UI.
 
 ---
+
+#### Form data in, JSON out
+
+A multipart request's text fields are a JSON object in `$.request.body`, so a step's BODY rules or JSON body template send them on as JSON like any other field. Two more things make a whole upload forwardable as one JSON document:
+
+- **JSON parts become JSON.** A part sent with `Content-Type: application/json` (or any `+json` type) is parsed, so its nested fields can be mapped: `-F 'metadata={"customer":{"id":"1001"}};type=application/json'` → `$.request.body.metadata.customer.id`. Invalid JSON stays text. Parts without that type are always text.
+- **The file's content.** `$.request.files.<field>.base64` (the content Base64-encoded) and `$.request.files.<field>.text` (the content as UTF-8 text, for CSV / XML / JSON files) can be read by rules, body templates and conditions. They are built only when read, and are not part of the request in the audit trail (which keeps `filename`, `contentType`, `size`, `sha256`). The step that sends them records them in its own audit payload, so mind the size.
+
+The dev data has `DOCUMENT_FORWARD` (`POST /api/v1/documents/forward`, `112-dev-demo-document-forward.xml`): one step posts this JSON body template to the core system.
+
+```json
+{
+  "document": {
+    "name": "${request.files.file.filename}",
+    "contentType": "${request.files.file.contentType}",
+    "size": ${request.files.file.size},
+    "content": "${request.files.file.base64}"
+  },
+  "customerId": "${request.body.metadata.customer.id}",
+  "tags": ${request.body.metadata.tags:[]},
+  "description": "${request.body.description:}"
+}
+```
+
+```bash
+curl -X POST localhost:8080/api/v1/documents/forward \
+     -F "file=@contract.pdf" \
+     -F 'metadata={"customer":{"id":"1001"},"tags":["contract"]};type=application/json' \
+     -F "description=Signed contract"
+# 201 {"documentId":"DOC-0001",...}   (DOC-0001 for the stub's test file note.txt, DOC-0002 otherwise)
+```
+
+The same works with BODY rules instead of a template (`$.document.content ← $.request.files.file.base64`), and together with a storage step that keeps a copy.
 
 ## 5. Custom classes (Java)
 

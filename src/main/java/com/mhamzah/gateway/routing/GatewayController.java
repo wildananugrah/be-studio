@@ -75,12 +75,28 @@ public class GatewayController {
                 files.putIfAbsent(part.getName(), new InboundFile(part.getName(), part.getSubmittedFileName(),
                         part.getContentType(), part.getInputStream().readAllBytes()));
             } else if (!form.has(part.getName())) {
-                form.put(part.getName(), new String(part.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
+                String text = new String(part.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                form.set(part.getName(), formValue(text, part.getContentType()));
             }
         }
         files.values().forEach(f -> log.info("upload field={} filename={} contentType={} size={}", f.field(),
                 f.filename(), f.contentType(), f.size()));
         return route(request, null, form, files);
+    }
+
+    /**
+     * A text part of a multipart request: JSON when the part says so ({@code Content-Type: application/json}, or
+     * any {@code +json} type) and parses, so its nested fields can be mapped; otherwise the text as it is.
+     */
+    static tools.jackson.databind.JsonNode formValue(String text, String contentType) {
+        if (contentType != null && contentType.toLowerCase(Locale.ROOT).matches("application/([a-z0-9.+-]*\\+)?json.*")) {
+            try {
+                return com.mhamzah.gateway.mapping.JsonValues.MAPPER.readTree(text);
+            } catch (RuntimeException e) {
+                log.info("multipart part with Content-Type {} is not valid JSON; kept as text", contentType);
+            }
+        }
+        return JsonNodeFactory.instance.stringNode(text);
     }
 
     /** HTML-style forms: the fields (not the query string's) are the body. */
@@ -107,6 +123,10 @@ public class GatewayController {
         byte[] bytes = request.getInputStream().readNBytes((int) Math.min(Integer.MAX_VALUE - 8, maxRawBytes + 1));
         if (bytes.length > maxRawBytes) {
             throw new MaxUploadSizeExceededException(maxRawBytes);
+        }
+        if (bytes.length == 0) {
+            // no body at all: Spring matches a request without Content-Type (a plain GET) as octet-stream; not a file
+            return route(request, "", null, Map.of());
         }
         String name = request.getHeader("X-File-Name");
         String disposition = request.getHeader(HttpHeaders.CONTENT_DISPOSITION);

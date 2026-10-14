@@ -36,12 +36,12 @@ public class AuditWriter implements AuditService.BatchWriter {
         this.storePayloads = storePayloads;
         this.insertTransaction = "INSERT INTO " + db.qualify(db.tables().auditTransaction())
                 + " (correlation_id, flow_code, http_method, path, client_status, error_type, error_code,"
-                + " request_payload, response_payload, started_at, duration_ms)"
-                + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                + " request_payload, response_payload, started_at, duration_ms, request_headers, response_headers)"
+                + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         this.insertStep = "INSERT INTO " + db.qualify(db.tables().auditStep())
                 + " (transaction_id, step_name, target_system, http_method, url, http_status, outcome,"
-                + " request_payload, response_payload, started_at, duration_ms)"
-                + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                + " request_payload, response_payload, started_at, duration_ms, request_headers, response_headers)"
+                + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         this.keyColumn = generatedKeyColumn(dataSource);
     }
 
@@ -56,16 +56,28 @@ public class AuditWriter implements AuditService.BatchWriter {
         jdbc.sql(insertTransaction)
                 .params(r.correlationId(), r.flowCode(), r.httpMethod(), truncate(r.path(), 1000), r.clientStatus(),
                         r.errorType(), r.errorCode(), payload(r.requestPayload()), payload(r.responsePayload()),
-                        Timestamp.from(r.startedAt()), r.durationMs())
+                        Timestamp.from(r.startedAt()), r.durationMs(), headers(r.requestHeaders()),
+                        headers(r.responseHeaders()))
                 .update(key, keyColumn);
         long id = key.getKeyAs(Number.class).longValue();
         for (AuditRecord.StepRecord s : r.steps()) {
             jdbc.sql(insertStep)
                     .params(id, s.stepName(), s.targetSystem(), s.httpMethod(), truncate(s.url(), 2000), s.httpStatus(),
                             s.outcome(), payload(s.requestPayload()), payload(s.responsePayload()),
-                            s.startedAt() == null ? null : Timestamp.from(s.startedAt()), s.durationMs())
+                            s.startedAt() == null ? null : Timestamp.from(s.startedAt()), s.durationMs(),
+                            headers(s.requestHeaders()), headers(s.responseHeaders()))
                     .update();
         }
+    }
+
+    /** Headers as a JSON object, masked like payloads; stored only with store-payloads. */
+    private String headers(java.util.Map<String, String> headers) {
+        if (!storePayloads || headers == null) {
+            return null;
+        }
+        tools.jackson.databind.node.ObjectNode o = com.mhamzah.gateway.mapping.JsonValues.MAPPER.createObjectNode();
+        masker.maskHeaders(headers).forEach(o::put);
+        return o.toString();
     }
 
     private String payload(JsonNode node) {

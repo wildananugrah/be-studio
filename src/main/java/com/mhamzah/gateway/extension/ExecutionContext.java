@@ -14,7 +14,8 @@ import tools.jackson.databind.node.ObjectNode;
 /**
  * Per-request state that mappings, conditions and handlers read from (spec Section 6.1):
  * <pre>
- * $.request.headers / .path / .query / .body / .files.&lt;field&gt; (uploads: filename, contentType, size, sha256)
+ * $.request.headers / .path / .query / .body / .files.&lt;field&gt; (uploads: filename, contentType, size, sha256;
+ * {@code .base64} and {@code .text} give the content, produced only when read)
  * $.steps.&lt;name&gt;.outcome / .status / .headers / .body
  * $.correlationId
  * </pre>
@@ -73,12 +74,40 @@ public final class ExecutionContext {
     }
 
     public JsonNode read(JsonPath path) {
+        JsonNode content = fileContent(path);
+        if (content != null) {
+            return content;
+        }
         lock.readLock().lock();
         try {
             return path.read(root);
         } finally {
             lock.readLock().unlock();
         }
+    }
+
+    /**
+     * {@code $.request.files.<field>.base64} / {@code .text}: an uploaded file's content (Base64, or UTF-8 text),
+     * e.g. to send it on inside a JSON body. Built on demand, never kept in the context (nor in the audit trail of
+     * the request).
+     */
+    private JsonNode fileContent(JsonPath path) {
+        List<String> names = path.fieldNames();
+        if (names.size() != 4 || !"request".equals(names.get(0)) || !"files".equals(names.get(1))) {
+            return null;
+        }
+        String kind = names.get(3);
+        if (!"base64".equals(kind) && !"text".equals(kind)) {
+            return null;
+        }
+        InboundFile f = files.get(names.get(2));
+        if (f == null) {
+            return null;
+        }
+        byte[] bytes = f.bytes();
+        return com.mhamzah.gateway.mapping.JsonValues.MAPPER.getNodeFactory().stringNode("base64".equals(kind)
+                ? java.util.Base64.getEncoder().encodeToString(bytes)
+                : new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
     }
 
     public List<JsonPath.Match> readAll(JsonPath path) {

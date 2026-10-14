@@ -338,6 +338,16 @@ public class FlowExecutor implements AutoCloseable {
         }
     }
 
+    /** What the client receives: the response headers plus the JSON content type the gateway always sends. */
+    private static Map<String, String> clientHeaders(GatewayResponse response) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (response.headers().keySet().stream().noneMatch("Content-Type"::equalsIgnoreCase)) {
+            out.put("Content-Type", "application/json");
+        }
+        out.putAll(response.headers());
+        return out;
+    }
+
     private ExecutionResult finish(GatewayResponse response, GatewayError failure, ExecutionContext ctx,
             InboundRequest in, Instant startedAt, long start, List<StepRecord> records) {
         Map<String, String> headers = new LinkedHashMap<>(response.headers());
@@ -356,7 +366,7 @@ public class FlowExecutor implements AutoCloseable {
         AuditRecord audit = new AuditRecord(ctx.correlationId(), ctx.flowCode(), in.method().name(), in.path(),
                 finalResponse.status(), failure == null ? null : failure.type().name(), errorCode,
                 requestBody != null ? requestBody : F.stringNode(in.body()), finalResponse.body(), startedAt,
-                (System.nanoTime() - start) / 1_000_000, records);
+                (System.nanoTime() - start) / 1_000_000, records, new java.util.TreeMap<>(in.headers()), clientHeaders(finalResponse));
         return new ExecutionResult(finalResponse, audit);
     }
 
