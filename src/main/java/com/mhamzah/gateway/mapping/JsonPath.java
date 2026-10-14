@@ -186,19 +186,32 @@ public final class JsonPath {
     }
 
     /**
-     * Writes {@code value} at this path, creating intermediate objects and arrays.
-     * Writing to {@code $} merges the fields of an object value into the root.
+     * Writes {@code value} at this path, creating intermediate objects and arrays, and returns the root (which may be
+     * a new node). Writing an object to {@code $} merges its fields into an object root; any other value (an array,
+     * e.g. a list response) replaces an empty root. A path starting with {@code [n]} makes the root an array.
      */
-    public void write(ObjectNode root, JsonNode value) {
+    public JsonNode write(JsonNode root, JsonNode value) {
         if (wildcardCount() > 0) {
             throw new IllegalStateException("Cannot write to wildcard path " + text + "; resolve indices first");
         }
         if (segments.isEmpty()) {
-            if (!(value instanceof ObjectNode obj)) {
-                throw new IllegalArgumentException("Only an object can be written to '$'");
+            if (value instanceof ObjectNode obj && root instanceof ObjectNode r) {
+                r.setAll(obj);
+                return r;
             }
-            root.setAll(obj);
-            return;
+            if (root != null && !root.isEmpty() && !(root.isArray() && value.isArray())) {
+                throw new IllegalArgumentException("Cannot write " + kind(value) + " to '$': the body already has "
+                        + kind(root) + " content");
+            }
+            return value;
+        }
+        boolean rootArray = !(segments.get(0) instanceof Field);
+        if (root == null || (rootArray ? !root.isArray() : !root.isObject())) {
+            if (root != null && !root.isEmpty()) {
+                throw new IllegalArgumentException("Cannot write " + text + ": the body is " + kind(root)
+                        + ", not " + (rootArray ? "an array" : "an object"));
+            }
+            root = rootArray ? JsonNodeFactory.instance.arrayNode() : JsonNodeFactory.instance.objectNode();
         }
         JsonNode current = root;
         for (int i = 0; i < segments.size() - 1; i++) {
@@ -206,14 +219,21 @@ public final class JsonPath {
         }
         Segment last = segments.getLast();
         switch (last) {
-            case Field f -> ((ObjectNode) current).set(f.name(), value);
+            case Field f -> asObject(current, f.name()).set(f.name(), value);
             case Index ix -> {
-                ArrayNode arr = (ArrayNode) current;
+                if (!(current instanceof ArrayNode arr)) {
+                    throw new IllegalArgumentException("Expected array at index segment [" + ix.index() + "]");
+                }
                 pad(arr, ix.index(), null);
                 arr.set(ix.index(), value);
             }
             case Wildcard w -> throw new IllegalStateException("wildcard");
         }
+        return root;
+    }
+
+    private static String kind(JsonNode n) {
+        return n.isArray() ? "an array" : n.isObject() ? "an object" : "a single value";
     }
 
     /** Returns the container at {@code s} under {@code current}, creating it with the type {@code next} needs. */

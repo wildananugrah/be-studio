@@ -351,7 +351,7 @@ $.correlationId                request correlation ID
 
 | Syntax | Example | Meaning |
 |---|---|---|
-| `$` | `$` | the root (as a target: merge an object into the root) |
+| `$` | `$` | the root (as a target: merge an object into the root, or make the whole body an array) |
 | `.name` | `$.customer.name` | object field (letters, digits, `_`, `-`) |
 | `['name']` | `$['first name']` | object field with other characters |
 | `[n]` | `$.items[0].id` | array element |
@@ -393,6 +393,16 @@ For each rule, in `seq` order:
 - An empty source array produces an empty target array. A missing source array writes nothing (or raises an error if the rule is `required`).
 
 **Copy a whole object.** `target_path = $` with an object source merges every field into the target. Rules with a higher `seq` can then override single fields.
+
+**A list as the whole body (root array).** When the downstream answers with a JSON array, or the client response must be one (a response schema with `"type": "array"`), write to `$` itself:
+
+| target_path | source_path | Client gets |
+|---|---|---|
+| `$` | `$.steps.list.body` | the downstream array as is |
+| `$[*].id` | `$.steps.list.body[*].guaranteeId` | `[{"id":"G1"},{"id":"G2"}]` (more `$[*].x` rules add fields to the same elements) |
+| `$` | `$.steps.list.body[*].guaranteeId` | `["G1","G2"]` |
+
+An empty downstream list gives `[]`. Rules that add object fields (`$.total`) cannot be mixed with an array body (`500 GW-500-MAPPING`); wrap it instead (`$.data[*].id`) if you need both. This works for step requests too (a POST whose body is an array). In Studio, give the step a response example that is an array (or use the last real response) so `steps.<name>.body[*]` shows its fields in the Mapping context.
 
 #### 3.3.5 Converters
 

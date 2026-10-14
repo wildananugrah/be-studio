@@ -222,7 +222,9 @@ function place(root, path, value) {
     const k = t[i] === '*' ? 0 : t[i]; const last = i === t.length - 1;
     if (last) { if (o[k] === undefined) o[k] = value; return; }
     const nextArr = t[i + 1] === '*' || typeof t[i + 1] === 'number';
-    if (o[k] == null || typeof o[k] !== 'object') o[k] = nextArr ? [] : {};
+    // an empty placeholder (a step body starts as {}) takes the shape the path needs, e.g. a list response
+    const empty = o[k] != null && typeof o[k] === 'object' && !Object.keys(o[k]).length && Array.isArray(o[k]) !== nextArr;
+    if (o[k] == null || typeof o[k] !== 'object' || empty) o[k] = nextArr ? [] : {};
     o = o[k];
   }
 }
@@ -262,7 +264,7 @@ function synthSample(f, lookups) {
     if (isCondition(s)) { ctx.steps[s.name] = { outcome: 'SUCCESS', headers: {}, body: { matched: (s.cases[0] && s.cases[0].label) || 'case 1', case: 1, route: (s.cases[0] && s.cases[0].then) || '' } }; return; }
     if (isTransform(s)) {
       ctx.steps[s.name] = { outcome: 'SUCCESS', headers: {}, body: {} };
-      s.rules.forEach(r => { if (r.type === 'BODY' && /^\$\./.test(r.target || '')) { const tk = toks(r.target).filter(x => typeof x === 'string' && x !== '*'); place(ctx, '$.steps.' + s.name + '.body' + r.target.slice(1), r.constant !== '' && r.constant != null ? r.constant : guess(String(tk[tk.length - 1] || 'value'), r, lookups)); } });
+      s.rules.forEach(r => { if (r.type === 'BODY' && /^\$(\.|\[|$)/.test(r.target || '')) { const tk = toks(r.target).filter(x => typeof x === 'string' && x !== '*'); place(ctx, '$.steps.' + s.name + '.body' + r.target.slice(1), r.constant !== '' && r.constant != null ? r.constant : guess(String(tk[tk.length - 1] || 'value'), r, lookups)); } });
       return;
     }
     if (!isSql(s)) {

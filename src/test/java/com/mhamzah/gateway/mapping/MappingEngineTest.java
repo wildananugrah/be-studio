@@ -147,6 +147,30 @@ class MappingEngineTest {
     }
 
     @Test
+    void listResponsePassesThroughAsRootArray() {
+        ctx.putStepResult("list", (ObjectNode) json("{'outcome':'SUCCESS','body':[{'guaranteeId':'G1','x':1},{'guaranteeId':'G2'}]}"));
+        assertThat(map(body("$").from("$.steps.list.body").build()).body())
+                .isEqualTo(json("[{'guaranteeId':'G1','x':1},{'guaranteeId':'G2'}]"));
+        assertThat(map(body("$[*].id").from("$.steps.list.body[*].guaranteeId").build(),
+                body("$[*].n").from("$.steps.list.body[*].x").build()).body())
+                .isEqualTo(json("[{'id':'G1','n':1},{'id':'G2'}]"));
+        assertThat(map(body("$").from("$.steps.list.body[*].guaranteeId").build()).body()).isEqualTo(json("['G1','G2']"));
+    }
+
+    @Test
+    void emptyListGivesEmptyRootArray() {
+        ctx.putStepResult("list", (ObjectNode) json("{'outcome':'SUCCESS','body':[]}"));
+        assertThat(map(body("$[*].id").from("$.steps.list.body[*].guaranteeId").build()).body()).isEqualTo(json("[]"));
+    }
+
+    @Test
+    void objectFieldOnAnArrayBodyIsMappingError() {
+        ctx.putStepResult("list", (ObjectNode) json("{'outcome':'SUCCESS','body':[{'guaranteeId':'G1'}]}"));
+        assertThatThrownBy(() -> map(body("$").from("$.steps.list.body").build(), body("$.total").constant("1").build()))
+                .isInstanceOfSatisfying(GatewayError.class, e -> assertThat(e.type()).isEqualTo(ErrorType.MAPPING_ERROR));
+    }
+
+    @Test
     void requiredMissingFromRequestIsClientMappingError() {
         assertThatThrownBy(() -> map(body("$.x").from("$.request.body.nope").required().build()))
                 .isInstanceOfSatisfying(GatewayError.class, e -> {

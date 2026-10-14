@@ -62,6 +62,16 @@ class JsonPathTest {
     }
 
     @Test
+    void writeMakesAnArrayRootWhenNeeded() {
+        assertThat(JsonPath.compile("$").write(mapper.createObjectNode(), json("[1,2]"))).isEqualTo(json("[1,2]"));
+        assertThat(JsonPath.compile("$[1].id").write(mapper.createObjectNode(), json("'b'"))).isEqualTo(json("[{},{'id':'b'}]"));
+        assertThatThrownBy(() -> JsonPath.compile("$").write(json("{'a':1}"), json("[1]")))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> JsonPath.compile("$.a").write(json("[1]"), json("1")))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void wildcardCountAndSubstitution() {
         JsonPath p = JsonPath.compile("$.a[*].b[*].c");
         assertThat(p.wildcardCount()).isEqualTo(2);

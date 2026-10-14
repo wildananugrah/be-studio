@@ -274,6 +274,20 @@ class FlowExecutorTest {
     }
 
     @Test
+    void listResponseFromDownstreamIsAnArrayForTheClient() {
+        rows.schema("LIST", "{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"id\"]}}");
+        var flow = rows.flow("F", "POST", "/f", f -> f.withSchemas(null, "LIST"));
+        rows.step(flow, "list", 1, s -> s);
+        rows.responseRule(flow, "$[*].id", "$.steps.list.body[*].guaranteeId");
+        downstream.ok("/list", "[{\"guaranteeId\":\"G1\"},{\"guaranteeId\":\"G2\"}]");
+
+        var result = run("POST", "/f", "{}");
+
+        assertThat(result.response().status()).as(String.valueOf(result.response().body())).isEqualTo(200);
+        assertThat(result.response().body().toString()).isEqualTo("[{\"id\":\"G1\"},{\"id\":\"G2\"}]");
+    }
+
+    @Test
     void businessErrorIsMappedThroughLookupErrorHandler() {
         var flow = rows.flow("F", "POST", "/f", f -> f.withHandlers(null, null, "coreBankingErrorHandler"));
         rows.step(flow, "debit", 1, s -> s.withSuccess("${steps.debit.body.responseCode} == '00'"));

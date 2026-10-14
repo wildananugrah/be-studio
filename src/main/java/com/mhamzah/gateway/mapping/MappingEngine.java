@@ -9,7 +9,6 @@ import java.util.Map;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.JsonNodeFactory;
-import tools.jackson.databind.node.ObjectNode;
 
 /**
  * Applies mapping rules in order (spec Section 6.3): value, default, lookup, converter, field handler,
@@ -18,7 +17,7 @@ import tools.jackson.databind.node.ObjectNode;
 public class MappingEngine {
 
     public MappedMessage apply(List<CompiledRule> rules, ExecutionContext ctx) {
-        ObjectNode body = JsonNodeFactory.instance.objectNode();
+        JsonNode[] body = {JsonNodeFactory.instance.objectNode()};
         Map<String, String> headers = new LinkedHashMap<>();
         Map<String, String> query = new LinkedHashMap<>();
         Map<String, String> pathVars = new LinkedHashMap<>();
@@ -33,10 +32,10 @@ public class MappingEngine {
                 }
             }
         }
-        return new MappedMessage(body, headers, query, pathVars);
+        return new MappedMessage(body[0], headers, query, pathVars);
     }
 
-    private void applyWildcard(CompiledRule rule, ExecutionContext ctx, ObjectNode body) {
+    private void applyWildcard(CompiledRule rule, ExecutionContext ctx, JsonNode[] body) {
         JsonPath source = rule.source();
         List<JsonPath.Match> matches = ctx.readAll(source);
         if (matches.isEmpty()) {
@@ -112,7 +111,7 @@ public class MappingEngine {
         return value;
     }
 
-    private void write(CompiledRule rule, JsonNode value, ObjectNode body,
+    private void write(CompiledRule rule, JsonNode value, JsonNode[] body,
             Map<String, String> headers, Map<String, String> query, Map<String, String> pathVars) {
         switch (rule.targetType()) {
             case BODY -> writeBody(rule, rule.targetPath(), value, body);
@@ -129,9 +128,9 @@ public class MappingEngine {
         }
     }
 
-    private static void writeBody(CompiledRule rule, JsonPath path, JsonNode value, ObjectNode body) {
+    private static void writeBody(CompiledRule rule, JsonPath path, JsonNode value, JsonNode[] body) {
         try {
-            path.write(body, value);
+            body[0] = path.write(body[0], value);
         } catch (IllegalArgumentException e) {
             throw GatewayError.of(ErrorType.MAPPING_ERROR)
                     .message("Cannot write " + rule.describe())
