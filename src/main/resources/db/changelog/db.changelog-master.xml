@@ -37,6 +37,7 @@
     <include file="changes/012-step-response-example.xml" relativeToChangelogFile="true"/>
     <include file="changes/013-step-cases.xml" relativeToChangelogFile="true"/>
     <include file="changes/014-audit-headers.xml" relativeToChangelogFile="true"/>
+    <include file="changes/015-audit-partitioning.xml" relativeToChangelogFile="true"/>
     <include file="changes/100-dev-demo-flows.xml" relativeToChangelogFile="true"/>
     <include file="changes/101-dev-demo-target-systems.xml" relativeToChangelogFile="true"/>
     <include file="changes/102-dev-demo-ms-user.xml" relativeToChangelogFile="true"/>

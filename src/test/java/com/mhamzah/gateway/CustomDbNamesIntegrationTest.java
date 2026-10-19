@@ -63,7 +63,7 @@ class CustomDbNamesIntegrationTest {
         try (Connection c = dataSource.getConnection()) {
             String schemaPattern = c.getMetaData().storesUpperCaseIdentifiers()
                     ? schema().toUpperCase(Locale.ROOT) : schema().toLowerCase(Locale.ROOT);
-            try (ResultSet rs = c.getMetaData().getTables(null, schemaPattern, "%", new String[] {"TABLE"})) {
+            try (ResultSet rs = c.getMetaData().getTables(null, schemaPattern, "%", new String[] {"TABLE", "PARTITIONED TABLE"})) {
                 while (rs.next()) {
                     names.add(rs.getString("TABLE_NAME").toLowerCase(Locale.ROOT));
                 }

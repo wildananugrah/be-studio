@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        The audit tables partitioned by time (gateway.audit.partition.*). Drops the existing audit rows.
+        PostgreSQL: PARTITION BY RANGE; the gateway creates the partitions. Oracle: INTERVAL partitioning
+        (needs the Partitioning option). gw_audit_step gets transaction_started_at, its partition column.
+        The SQL is written by com.mhamzah.gateway.audit.AuditPartitionDdl; `liquibase updateSQL` prints it.
+    -->
+    <changeSet id="015-gw-audit-partitioning" author="json-gateway">
+        <customChange class="com.mhamzah.gateway.audit.AuditPartitionDdl">
+            <param name="transactionTable" value="${tbl.audit_transaction}"/>
+            <param name="stepTable" value="${tbl.audit_step}"/>
+        </customChange>
+    </changeSet>
+</databaseChangeLog>

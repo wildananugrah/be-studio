@@ -283,8 +283,9 @@ public class TestRunner {
         }
         Map<String, Object> transaction = AuditRows.row(rows.getFirst());
         Object id = transaction.get("id");
-        List<Map<String, Object>> steps = jdbc.sql("SELECT * FROM " + step + " WHERE transaction_id = ? ORDER BY id")
-                .param(id).query().listOfRows().stream().map(AuditRows::row).toList();
+        List<Map<String, Object>> steps = jdbc.sql("SELECT * FROM " + step
+                        + " WHERE transaction_id = ? AND transaction_started_at = ? ORDER BY id")
+                .params(id, AuditRows.column(rows.getFirst(), "started_at")).query().listOfRows().stream().map(AuditRows::row).toList();
         String note = properties.audit().storePayloads() ? null
                 : "gateway.audit.store-payloads is false, so the audit rows carry no payloads.";
         return new AuditTrail(true, note, transaction, steps);

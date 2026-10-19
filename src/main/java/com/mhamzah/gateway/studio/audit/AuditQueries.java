@@ -97,8 +97,9 @@ public class AuditQueries {
         Map<String, Object> transaction = AuditRows.row(tx.getFirst());
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("transaction", transaction);
-        out.put("steps", jdbc.sql("SELECT * FROM " + steps + " WHERE transaction_id = ? ORDER BY id")
-                .param(transaction.get("id")).query().listOfRows().stream().map(AuditRows::row).toList());
+        // the transaction's start time names the partition holding its steps
+        out.put("steps", jdbc.sql("SELECT * FROM " + steps + " WHERE transaction_id = ? AND transaction_started_at = ? ORDER BY id")
+                .params(transaction.get("id"), AuditRows.column(tx.getFirst(), "started_at")).query().listOfRows().stream().map(AuditRows::row).toList());
         out.put("logs", logs.lines(correlationId));
         return out;
     }
@@ -108,7 +109,7 @@ public class AuditQueries {
      * JSON, or a JSON string holding the XML that came back); null when there is none.
      */
     public Map<String, Object> lastResponse(String flow, String step) {
-        String where = " FROM " + steps + " s JOIN " + transactions + " t ON t.id = s.transaction_id"
+        String where = " FROM " + steps + " s JOIN " + transactions + " t ON t.id = s.transaction_id AND t.started_at = s.transaction_started_at"
                 + " WHERE t.flow_code = ? AND s.step_name = ? AND s.outcome = 'SUCCESS' AND s.response_payload IS NOT NULL";
         List<Map<String, Object>> rows = jdbc.sql("SELECT s.response_payload, t.correlation_id, t.started_at" + where
                         + " AND s.id = (SELECT MAX(s.id)" + where + ")")

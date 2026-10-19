@@ -536,6 +536,30 @@ SELECT correlation_id, flow_code, client_status, error_code, duration_ms
 FROM gw_audit_transaction ORDER BY id DESC FETCH FIRST 10 ROWS ONLY;
 ```
 
+**Partitions.** Both audit tables are partitioned by time, so a large audit trail stays fast to write and old data can be removed instantly by dropping whole partitions instead of running `DELETE`. `gw_audit_transaction` is partitioned by `started_at`. `gw_audit_step` is partitioned by `transaction_started_at`, its transaction's start time, so a transaction and its steps are always in partitions covering the same period. Join them on both columns so the database reads one partition only:
+
+```sql
+SELECT s.step_name, s.outcome, s.http_status
+FROM gw_audit_step s JOIN gw_audit_transaction t
+  ON t.id = s.transaction_id AND t.started_at = s.transaction_started_at
+WHERE t.correlation_id = ? AND t.started_at >= ?;   -- a time range lets the database skip the other partitions
+```
+
+| Setting (`gateway.audit.partition.*`) | Default | Meaning |
+|---|---|---|
+| `interval` (`GATEWAY_AUDIT_PARTITION_INTERVAL`) | `MONTH` | `DAY` or `MONTH`: the period one partition covers. Changing it later is fine: existing partitions are kept, and new ones fill the gaps. |
+| `premake` | `3` | PostgreSQL: partitions created ahead of the current one |
+| `retention` (`GATEWAY_AUDIT_RETENTION`) | empty | e.g. `6m`, `90d`, `1y`. Partitions that end before now minus this are dropped with their rows. Empty keeps everything. |
+| `maintenance-cron` (`GATEWAY_AUDIT_MAINTENANCE_CRON`) | `0 1 0 1 * *` | When partitions are checked (00:01 on the 1st of each month; Spring cron: second minute hour day month weekday). The check also runs at startup. With `DAY` partitions, use a daily cron such as `0 1 0 * * *`. |
+
+The two databases work differently:
+- **PostgreSQL** (declarative `PARTITION BY RANGE`): the gateway creates the partitions, named `<table>_p<yyyyMMdd>` after the day the period starts. If a row still finds no partition (for example after a clock jump), the writer creates the partition and writes the batch again.
+- **Oracle** (`INTERVAL` partitioning): the database creates the partitions as rows arrive. The gateway only sets the interval and drops expired partitions. This needs the **Oracle Partitioning option**, which is separately licensed on Enterprise Edition.
+
+Partition times are in the JVM time zone, the same zone the audit times are written in. Several gateway instances can maintain the partitions at the same time.
+
+Changeset `015-audit-partitioning` re-creates both tables partitioned, and **drops the existing audit rows**. Its SQL comes from `AuditPartitionDdl`, and `liquibase updateSQL` prints it for DBAs who apply DDL themselves. If the tables are not partitioned (a DBA created them without partitions), the gateway leaves them alone.
+
 ### 3.11 `gw_target_system` / `gw_target_system_header`
 
 **`gw_target_system`**: one row per downstream system.

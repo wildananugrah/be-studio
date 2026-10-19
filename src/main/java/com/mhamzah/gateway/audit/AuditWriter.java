@@ -5,6 +5,8 @@ import com.mhamzah.gateway.masking.Masker;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.List;
 import javax.sql.DataSource;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -27,6 +29,7 @@ public class AuditWriter implements AuditService.BatchWriter {
     private final String insertTransaction;
     private final String insertStep;
     private final String keyColumn;
+    private AuditPartitions partitions;
 
     public AuditWriter(DataSource dataSource, PlatformTransactionManager txManager, GatewayProperties.Db db,
             Masker masker, boolean storePayloads) {
@@ -39,16 +42,32 @@ public class AuditWriter implements AuditService.BatchWriter {
                 + " request_payload, response_payload, started_at, duration_ms, request_headers, response_headers)"
                 + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         this.insertStep = "INSERT INTO " + db.qualify(db.tables().auditStep())
-                + " (transaction_id, step_name, target_system, http_method, url, http_status, outcome,"
+                + " (transaction_id, transaction_started_at, step_name, target_system, http_method, url, http_status, outcome,"
                 + " request_payload, response_payload, started_at, duration_ms, request_headers, response_headers)"
-                + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         this.keyColumn = generatedKeyColumn(dataSource);
+    }
+
+    /** Creates partitions on demand when a row finds none (PostgreSQL); null when not partitioned. */
+    public AuditWriter withPartitions(AuditPartitions partitions) {
+        this.partitions = partitions;
+        return this;
     }
 
     /** Writes a batch in one transaction (one pooled connection). */
     @Override
     public void write(List<AuditRecord> records) {
-        tx.executeWithoutResult(status -> records.forEach(this::insert));
+        try {
+            tx.executeWithoutResult(status -> records.forEach(this::insert));
+        } catch (RuntimeException e) {
+            if (partitions == null || !AuditPartitions.isMissingPartition(e)) {
+                throw e;
+            }
+            // e.g. the clock passed the partitions made ahead: make the missing ones and write the batch again
+            partitions.ensureFor(records.stream()
+                    .map(r -> LocalDateTime.ofInstant(r.startedAt(), ZoneId.systemDefault())).toList());
+            tx.executeWithoutResult(status -> records.forEach(this::insert));
+        }
     }
 
     private void insert(AuditRecord r) {
@@ -62,7 +81,7 @@ public class AuditWriter implements AuditService.BatchWriter {
         long id = key.getKeyAs(Number.class).longValue();
         for (AuditRecord.StepRecord s : r.steps()) {
             jdbc.sql(insertStep)
-                    .params(id, s.stepName(), s.targetSystem(), s.httpMethod(), truncate(s.url(), 2000), s.httpStatus(),
+                    .params(id, Timestamp.from(r.startedAt()), s.stepName(), s.targetSystem(), s.httpMethod(), truncate(s.url(), 2000), s.httpStatus(),
                             s.outcome(), payload(s.requestPayload()), payload(s.responsePayload()),
                             s.startedAt() == null ? null : Timestamp.from(s.startedAt()), s.durationMs(),
                             headers(s.requestHeaders()), headers(s.responseHeaders()))

@@ -98,7 +98,22 @@ public record GatewayProperties(
             @DefaultValue("true") boolean enabled,
             @DefaultValue("true") boolean storePayloads,
             @DefaultValue("10000") int queueCapacity,
-            @DefaultValue("100") int batchSize) {}
+            @DefaultValue("100") int batchSize,
+            @DefaultValue Partition partition) {}
+
+    /**
+     * Time partitions of the audit tables. {@code interval}: DAY or MONTH. {@code premake}: partitions created ahead
+     * of the current one (PostgreSQL; Oracle creates its own). {@code retention}: e.g. {@code 6m} or {@code 90d};
+     * partitions that end before now minus this are dropped; empty keeps everything. {@code maintenanceCron}: when
+     * the partitions are checked (also at startup).
+     */
+    public record Partition(
+            @DefaultValue("MONTH") PartitionInterval interval,
+            @DefaultValue("3") int premake,
+            java.time.Period retention,
+            @DefaultValue("0 1 0 1 * *") String maintenanceCron) {}
+
+    public enum PartitionInterval { DAY, MONTH }
 
     /** API documentation: Swagger UI at {@code /docs}, OpenAPI at {@code /docs/openapi.json}. Off unless enabled. */
     public record Docs(

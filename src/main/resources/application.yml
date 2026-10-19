@@ -88,6 +88,13 @@ gateway:
     store-payloads: true
     queue-capacity: 10000
     batch-size: 100
+    # gw_audit_transaction / gw_audit_step are partitioned by time (PostgreSQL: the gateway creates the partitions;
+    # Oracle: INTERVAL partitioning). Dropping a whole partition is instant, unlike DELETE.
+    partition:
+      interval: ${GATEWAY_AUDIT_PARTITION_INTERVAL:MONTH}   # DAY | MONTH
+      premake: 3                                              # future partitions kept ready (PostgreSQL)
+      retention: ${GATEWAY_AUDIT_RETENTION:}                  # e.g. 6m, 90d, 1y; empty = keep everything
+      maintenance-cron: "${GATEWAY_AUDIT_MAINTENANCE_CRON:0 1 0 1 * *}"  # 00:01 on the 1st of each month; also at startup
   masking:
     # comma-separated; GATEWAY_MASKING_FIELDS replaces the whole list, so repeat the defaults you still want
     fields: ${GATEWAY_MASKING_FIELDS:pin,password,cardNo,cvv,authorization,x-admin-token}

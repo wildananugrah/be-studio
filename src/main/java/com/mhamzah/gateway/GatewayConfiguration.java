@@ -1,5 +1,6 @@
 package com.mhamzah.gateway;
 
+import com.mhamzah.gateway.audit.AuditPartitions;
 import com.mhamzah.gateway.audit.AuditService;
 import com.mhamzah.gateway.audit.AuditWriter;
 import com.mhamzah.gateway.codec.JsonCodec;
@@ -15,6 +16,7 @@ import com.mhamzah.gateway.mapping.MappingEngine;
 import com.mhamzah.gateway.masking.Masker;
 import com.mhamzah.gateway.sql.SqlDatasources;
 import com.mhamzah.gateway.storage.FileStores;
+import java.time.Clock;
 import java.time.Duration;
 import javax.sql.DataSource;
 import org.springframework.beans.factory.BeanFactory;
@@ -22,10 +24,12 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.transaction.PlatformTransactionManager;
 
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(GatewayProperties.class)
+@EnableScheduling
 public class GatewayConfiguration {
 
     @Bean
@@ -96,12 +100,19 @@ public class GatewayConfiguration {
         return new FlowExecutor(client, mapping, defaultErrorHandler);
     }
 
+    /** Time partitions of the audit tables (gateway.audit.partition.*), maintained by AuditPartitionMaintenance. */
+    @Bean
+    AuditPartitions auditPartitions(DataSource dataSource, GatewayProperties properties) {
+        return new AuditPartitions(dataSource, properties.db(), properties.audit().partition(), Clock.systemDefaultZone());
+    }
+
     /** Always created: even with the global switch off, flows with audit_mode=ON are audited. */
     @Bean
     AuditService auditService(DataSource dataSource, PlatformTransactionManager txManager,
-            GatewayProperties properties, Masker masker) {
+            GatewayProperties properties, Masker masker, AuditPartitions partitions) {
         GatewayProperties.Audit audit = properties.audit();
-        AuditWriter writer = new AuditWriter(dataSource, txManager, properties.db(), masker, audit.storePayloads());
+        AuditWriter writer = new AuditWriter(dataSource, txManager, properties.db(), masker, audit.storePayloads())
+                .withPartitions(partitions);
         return new AuditService(writer, audit.queueCapacity(), audit.batchSize());
     }
 }
