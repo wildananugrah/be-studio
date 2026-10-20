@@ -1,0 +1,167 @@
+kind: Template
+apiVersion: template.openshift.io/v1
+metadata:
+  name: oc-template
+objects:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app: ${APP_NAME}
+        app.kubernetes.io/component: ${APP_NAME}
+        app.kubernetes.io/instance: ${APP_NAME}
+        app.kubernetes.io/name: ${APP_NAME}
+        app.kubernetes.io/part-of: ${GROUP_APP_NAME}-app
+      name: ${APP_NAME}
+      namespace: ${NS_NAME}
+      annotations:
+        template.alpha.openshift.io/wait-for-ready: "true"
+    spec:
+      replicas: 0
+      revisionHistoryLimit: 5
+      selector:
+        matchLabels:
+          app: ${APP_NAME}
+      template:
+        metadata:
+          labels:
+            app: ${APP_NAME}
+        spec:
+          containers:
+            - image: ${IMAGE_NAME}
+              imagePullPolicy: Always
+              name: ${APP_NAME}
+              envFrom:
+                - configMapRef:
+                    name: ${APP_NAME}-cm
+              resources:
+                limits:
+                  cpu: 400m
+                  memory: 500Mi
+                requests:
+                  cpu: 250m
+                  memory: 350Mi
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+              readinessProbe:
+                httpGet:
+                  path: /actuator/health/readiness
+                  port: 8080
+                failureThreshold: 3
+                initialDelaySeconds: 90
+                periodSeconds: 60
+              livenessProbe:
+                httpGet:
+                  path: /actuator/health/liveness
+                  port: 8080
+                failureThreshold: 3
+                initialDelaySeconds: 90
+                periodSeconds: 60
+          dnsPolicy: ClusterFirst
+          restartPolicy: Always
+          schedulerName: default-scheduler
+          securityContext: {}
+          terminationGracePeriodSeconds: 30
+      triggers:
+        - type: ConfigChange
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: ${APP_NAME}-cm
+      namespace: ${NS_NAME}
+    data:
+      TZ: "Asia/Jakarta"
+
+      SPRING_PROFILES_ACTIVE: "oracle"
+
+      DB_URL: "jdbc:oracle:thin:@//192.168.142.224:1521/ORCLPDB1"
+      DB_USERNAME: "avatar"
+      DB_PASSWORD: "avatar123"
+      DB_POOL_MAX: "10"
+      DB_POOL_MIN_IDLE: "2"
+      DB_POOL_CONNECTION_TIMEOUT_MS: "30000"
+      DB_POOL_LEAK_DETECTION_MS: "0"
+      LIQUIBASE_ENABLED: "false"
+
+      GATEWAY_AUDIT_ENABLED: "true"
+      GATEWAY_STUDIO_ENABLED: "false"
+      GATEWAY_ASSISTANT_ENABLED: "false"
+      GATEWAY_DOCS_ENABLED: "true"
+      GATEWAY_AUDIT_PARTITION_INTERVAL: "MONTH"
+      GATEWAY_AUDIT_RETENTION: ""
+      GATEWAY_MASKING_FIELDS: "pin,password,cardNo,cvv,authorization,x-admin-token"
+
+  - apiVersion: route.openshift.io/v1
+    kind: Route
+    metadata:
+      annotations:
+        haproxy.router.openshift.io/timeout: 40s
+      name: ${APP_NAME}
+      namespace: ${NS_NAME}
+      labels:
+        app: ${APP_NAME}
+        app.kubernetes.io/component: ${APP_NAME}
+        app.kubernetes.io/instance: ${APP_NAME}
+        app.kubernetes.io/name: ${APP_NAME}
+        app.kubernetes.io/part-of: ${GROUP_APP_NAME}-app
+    spec:
+      port:
+        targetPort: 8080-tcp
+      to:
+        kind: Service
+        name: ${APP_NAME}
+        weight: 100
+      tls:
+        termination: edge
+        insecureEdgeTerminationPolicy: Redirect
+  - apiVersion: autoscaling/v2
+    kind: HorizontalPodAutoscaler
+    metadata:
+      name: ${APP_NAME}
+      namespace: ${NS_NAME}
+    spec:
+      scaleTargetRef:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: ${APP_NAME}
+      minReplicas: 1
+      maxReplicas: 5
+      metrics:
+        - type: Resource
+          resource:
+            name: cpu
+            target:
+              averageUtilization: 85
+              type: Utilization
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: ${APP_NAME}
+      namespace: ${NS_NAME}
+      labels:
+        app: ${APP_NAME}
+        app.kubernetes.io/component: ${APP_NAME}
+        app.kubernetes.io/instance: ${APP_NAME}
+        app.kubernetes.io/name: ${APP_NAME}
+        app.kubernetes.io/part-of: ${GROUP_APP_NAME}-app
+    spec:
+      selector:
+        app: ${APP_NAME}
+      ports:
+        - name: 8080-tcp
+          protocol: TCP
+          port: 8080
+          targetPort: 8080
+parameters:
+  - name: NS_NAME
+    description: OpenShift namespace
+    value: tb-api-gw-engine-dev
+  - name: IMAGE_NAME
+    description: image name
+    value: jtl-tkgiharbor.hq.bni.co.id/tb-platform/bni-tb-gateway:development
+  - name: APP_NAME
+    description: Application name
+    value: bni-tb-gateway
+  - name: GROUP_APP_NAME
+    description: Application group
+    value: tb-api-gw-engine-dev
