@@ -119,6 +119,19 @@ public final class ExecutionContext {
         }
     }
 
+    /**
+     * {@code $.error}: the failure an error response is mapped from (type, code, status, message, reason, step,
+     * details). Set only while a flow's {@code error_handler = RESPOND:<response>} builds its response.
+     */
+    public void putError(ObjectNode error) {
+        lock.writeLock().lock();
+        try {
+            root.set("error", error);
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
     /** Translates {@code value} through the lookup table {@code lookupCode} (matching entry or {@code *} fallback). */
     public Optional<JsonNode> lookup(String lookupCode, JsonNode value) {
         LookupTable table = lookups.get(lookupCode);

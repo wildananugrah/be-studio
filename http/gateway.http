@@ -361,3 +361,22 @@ POST {{baseUrl}}/api/v1/transfers/checked
 Content-Type: application/json
 
 {"fromAccount": "1001", "toAccount": "2002", "amount": 60000000}
+
+### ---------------------------------------------------------------------------------------------------------------
+### Status pass-through (ACCOUNT_PROFILE): the core's HTTP status on success and failure, failures mapped
+### ---------------------------------------------------------------------------------------------------------------
+
+### 1001 → 200 {"accountNo":"1001","accountName":"BUDI SANTOSO","segment":"PRIORITY"}
+GET {{baseUrl}}/api/v1/accounts/1001/profile
+
+### 2002 → 202 (the core answered 202)
+GET {{baseUrl}}/api/v1/accounts/2002/profile
+
+### 9999 → 404 {"errorCode":"NF01","errorMessage":"Account not found","correlationId":"..."}
+GET {{baseUrl}}/api/v1/accounts/9999/profile
+
+### 3003 → 409 {"errorCode":"BLK01","errorMessage":"Account is blocked",...}
+GET {{baseUrl}}/api/v1/accounts/3003/profile
+
+### 5005 → 502 (the core's 503, translated by lookup DEMO_HTTP_STATUS)
+GET {{baseUrl}}/api/v1/accounts/5005/profile

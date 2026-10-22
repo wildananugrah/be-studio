@@ -288,7 +288,7 @@ public class StudioService {
         Output output = null;
         try {
             MappedMessage m = mapping.apply(rules, ctx);
-            output = new Output(m.body(), m.headers(), m.query(), m.pathVariables());
+            output = new Output(m.body(), m.headers(), m.query(), m.pathVariables(), m.status());
         } catch (GatewayError e) {
             errors.add(message(e));
         } catch (RuntimeException e) {
@@ -308,6 +308,9 @@ public class StudioService {
         JsonNode request = sample == null ? null : sample.get("request");
         ExecutionContext ctx = new ExecutionContext(flowCode, "preview-correlation-id", registry.lookups(),
                 request instanceof ObjectNode o ? o.deepCopy() : JsonNodeFactory.instance.objectNode());
+        if (sample != null && sample.get("error") instanceof ObjectNode error) {
+            ctx.putError(error.deepCopy()); // an error response (error_handler RESPOND:<response>) maps from $.error
+        }
         JsonNode steps = sample == null ? null : sample.get("steps");
         if (steps != null && steps.isObject()) {
             steps.properties().forEach(e -> {
@@ -340,6 +343,7 @@ public class StudioService {
                 case HEADER -> text(m.headers().get(rule.targetName()));
                 case QUERY -> text(m.query().get(rule.targetName()));
                 case PATH -> text(m.pathVariables().get(rule.targetName()));
+                case STATUS -> m.status() == null ? null : JsonNodeFactory.instance.numberNode(m.status());
             };
             return new RuleResult(value, value != null, null);
         }
@@ -349,7 +353,9 @@ public class StudioService {
         }
     }
 
-    public record Output(JsonNode body, Map<String, String> headers, Map<String, String> query, Map<String, String> path) {}
+    /** {@code status}: what a STATUS rule set, null when none did. */
+    public record Output(JsonNode body, Map<String, String> headers, Map<String, String> query, Map<String, String> path,
+            Integer status) {}
 
     /** Names a developer can pick from: handler and codec beans, converters, application.yml targets. */
     public Map<String, Object> catalog() {

@@ -38,6 +38,12 @@ public final class Rows {
                 source, constant, null, null, null, null, false, response));
     }
 
+    /** A STATUS rule of the default response ({@code response} null) or of a named one. */
+    public RuleRow statusRule(FlowRow flow, String response, String source, String constant, String lookup) {
+        return rule(new RuleRow(ids.getAndIncrement(), flow.id(), null, "FLOW_RESPONSE", rules.size() + 1, "STATUS",
+                "status", source, constant, null, null, lookup, null, false, response));
+    }
+
     public FlowRow flow(String code, String method, String path) {
         return flow(code, method, path, f -> f);
     }

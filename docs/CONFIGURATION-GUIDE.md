@@ -318,7 +318,7 @@ Applying an export replaces the application and its flows (also a flow with the 
 | `step_id` | for `STEP_REQUEST` | Step whose request this builds. Must be NULL for `FLOW_RESPONSE`. |
 | `phase` | ✔ | `STEP_REQUEST` (what a step sends) or `FLOW_RESPONSE` (what the client receives) |
 | `seq` | ✔ | Order of application within the step/response. A later rule writing the same target overwrites. |
-| `target_type` | default `BODY` | `BODY`, `HEADER`, `QUERY`, `PATH`. `FLOW_RESPONSE` allows only `BODY` and `HEADER`. |
+| `target_type` | default `BODY` | `BODY`, `HEADER`, `QUERY`, `PATH`, `STATUS`. `FLOW_RESPONSE` allows only `BODY`, `HEADER` and `STATUS` (the HTTP status, [§4.11d](#411d-pass-the-backends-http-status-through-success-and-failure)); steps don't allow `STATUS`. |
 | `target_path` | ✔ | `BODY`: a path like `$.a.b`. Otherwise the plain header / query parameter / path variable name. |
 | `source_path` | one of | Where the value comes from ([§3.3.1](#331-what-a-rule-can-read)) |
 | `constant_value` | one of | A fixed value ([§3.3.3](#333-literal-values)) |
@@ -759,6 +759,77 @@ UPDATE gw_flow_step SET next_on_success = 'RESPOND:reversed' WHERE name = 'rever
 ```
 
 In Studio: pipeline → under **Client response**, **+ Response** adds one (name, status, description; **Edit response mapping →**), and a step's **If it succeeds / If it fails** offers **Respond · <name>**. The API description lists each named response under its status (a `oneOf` when it shares the default's status), and so does the API specification document ("Other responses").
+
+### 4.11d Pass the backend's HTTP status through (success and failure)
+
+By default the client gets the flow's `success_status` (or a named response's `status_code`), and a failed step gets an error built by the error handler (for an HTTP error from a backend: 502 `GW-502-DOWNSTREAM`). To answer with the **backend's own status**, and to **map a failure's body** like a success:
+
+1. A **`STATUS` rule** on the response sets its HTTP status. It works like any rule: a source (usually `$.steps.<step>.status`), a constant, a `default_value` and a lookup to translate statuses. `target_path` is not used (Studio fills in `status`). It wins over the fixed status. The value must be a whole number from 100 to 599, otherwise 500 `GW-500-MAPPING`.
+2. A failed step keeps what the backend answered in the context: `$.steps.<step>.status`, `.headers` and `.body`. This covers a non-2xx status, or a 2xx whose `success_expr` is false. Route the failure to a **named response** with `next_on_failure = RESPOND:<name>` ([§4.11a](#411a-branch-on-success-or-failure)); that response's rules then map the failure, `STATUS` rule included.
+
+Example: an account inquiry whose client sees the backend's status on both paths. The dev data has it as flow `ACCOUNT_PROFILE` (`113-dev-demo-status-passthrough.xml`, `GET /api/v1/accounts/{accountNo}/profile`; try 1001, 2002, 9999, 3003 and 5005 from `http/gateway.http`).
+
+```
+inquiry ──✓──► default response   STATUS ← $.steps.inquiry.status          200 / 201 / 206 … as the backend said
+                                   $.accountName ← $.steps.inquiry.body.name
+   └──✗ RESPOND:failed ──► failed  STATUS ← $.steps.inquiry.status          404 / 409 / 503 … as the backend said
+                                   $.errorCode    ← $.steps.inquiry.body.code
+                                   $.errorMessage ← $.steps.inquiry.body.message
+                                   $.correlationId ← $.correlationId
+```
+
+The backend answers `404 {"code": "NF01", "message": "Account not found"}`, and the client gets `404 {"errorCode": "NF01", "errorMessage": "Account not found", "correlationId": "..."}`.
+
+```sql
+-- the failure path
+UPDATE gw_flow_step SET next_on_failure = 'RESPOND:failed' WHERE name = 'inquiry' AND flow_id = …;
+INSERT INTO gw_flow_response (flow_id, name, status_code) VALUES (…, 'failed', 502);   -- 502 only if no STATUS value
+INSERT INTO gw_mapping_rule (flow_id, phase, seq, target_type, target_path, source_path, response_name) VALUES
+  (…, 'FLOW_RESPONSE', 1, 'STATUS', 'status',          '$.steps.inquiry.status',       'failed'),
+  (…, 'FLOW_RESPONSE', 2, 'BODY',   '$.errorCode',     '$.steps.inquiry.body.code',    'failed'),
+  (…, 'FLOW_RESPONSE', 3, 'BODY',   '$.errorMessage',  '$.steps.inquiry.body.message', 'failed'),
+  (…, 'FLOW_RESPONSE', 4, 'BODY',   '$.correlationId', '$.correlationId',              'failed');
+-- the success path: the default response (response_name NULL)
+INSERT INTO gw_mapping_rule (flow_id, phase, seq, target_type, target_path, source_path) VALUES
+  (…, 'FLOW_RESPONSE', 1, 'STATUS', 'status',       '$.steps.inquiry.status'),
+  (…, 'FLOW_RESPONSE', 2, 'BODY',   '$.accountName', '$.steps.inquiry.body.name');
+```
+
+Options:
+- **Pass the whole body through:** a `BODY` rule `$ ← $.steps.inquiry.body`.
+- **Don't pass every status through**, e.g. never expose the backend's 500: give the `STATUS` rule a lookup, such as `HTTP_STATUS` with `500 → 502` and `503 → 502`. Statuses with no row pass through unchanged, as long as the lookup has no `*` row; add `* → 502` only to replace every unlisted status.
+- **Fallback status:** set `default_value` when a step may have no status (a connection error or timeout leaves `$.steps.<step>.status` empty). The response's `status_code` is the last resort.
+- **Several steps:** each failing step can route to the same named response, or to its own.
+
+Failures not routed with `RESPOND:` still get the error handler's response (`gw_flow.error_handler`), as before.
+
+In Studio, the quickest way: Pipeline → click the **Client response** card (or a named response) → **Status** → *Pass through · <step>'s HTTP status*. That adds the STATUS rule for you, the fixed status becomes the fallback, and the card shows `HTTP ← <step>`. By hand: Mapping → **Client response** (or a named response) → a rule's type select offers **STATUS**; drop `steps.<step>.status` onto it. The live preview shows the mapped status in its `HTTP/1.1 …` line. Pipeline → the step → **If it fails** → **Respond · failed**.
+
+### 4.11e Map the error response (error_handler RESPOND)
+
+Instead of an `ErrorHandler` bean, a flow's `error_handler` can name one of its own responses: **`RESPOND:<name>`**. Then every failure that no step routes itself is answered by that response and its `FLOW_RESPONSE` rules, like a success. That covers a STOP step failing, a request or response schema check, a mapping error and a handler throwing. The rules can read:
+
+| Path | Example | Meaning |
+|---|---|---|
+| `$.error.type` | `DOWNSTREAM_HTTP_ERROR` | The error type |
+| `$.error.code` | `GW-502-DOWNSTREAM` | The code the standard error response would use |
+| `$.error.status` | `502` | The status the standard error response would use, e.g. for a `STATUS` rule |
+| `$.error.message` | `Downstream call failed` | The standard message |
+| `$.error.reason` | `Downstream returned HTTP 500` | The detailed reason (may be technical) |
+| `$.error.step` | `profile` | The failing step, when there is one |
+| `$.error.details` | `["$: required property 'amount' not found"]` | Details, e.g. schema violations |
+
+The failed call's `$.steps.<step>.status`, `.headers` and `.body` are there too. The response's status comes from its `STATUS` rule (e.g. `← $.error.status` or `← $.steps.<step>.status`), otherwise from its `status_code`. If the rules themselves fail, the standard error response is sent instead. A response used both by a step's `next_on_failure` and by `error_handler` gets `$.error` only in the second case.
+
+```sql
+UPDATE gw_flow SET error_handler = 'RESPOND:failed' WHERE code = 'ACCOUNT_PROFILE';
+INSERT INTO gw_mapping_rule (flow_id, phase, seq, target_type, target_path, source_path, response_name) VALUES
+  (…, 'FLOW_RESPONSE', 1, 'STATUS', 'status',     '$.error.status', 'failed'),
+  (…, 'FLOW_RESPONSE', 2, 'BODY',   '$.code',     '$.error.code',   'failed'),
+  (…, 'FLOW_RESPONSE', 3, 'BODY',   '$.problems', '$.error.details','failed');
+```
+
+The dev data does this for `ACCOUNT_PROFILE` (`114-dev-demo-error-response.xml`). In Studio: Pipeline → **On failure** card → Error handler → **Respond · <response> (map the error)** → **Edit error mapping →**. The Mapping context then lists the `error` fields to drag.
 
 ### 4.11b Transform: re-map earlier results for the next steps
 
@@ -1462,7 +1533,9 @@ Reload (and startup) report every problem at once. The common ones:
 | `references unknown step 'x'` | Typo, or the step is disabled | Fix the name / enable the step |
 | `must set exactly one of source_path / constant_value` | Both or neither set | Keep one (or add a `field_handler`) |
 | `STEP_REQUEST rule requires step_id` / `FLOW_RESPONSE rule must not have step_id` | `phase` and `step_id` don't match | Fix `step_id` or `phase` |
-| `target_type QUERY is not allowed for FLOW_RESPONSE` | Responses only have body and headers | Use `BODY` or `HEADER` |
+| `target_type QUERY is not allowed for FLOW_RESPONSE` | Responses only have body, headers and a status | Use `BODY`, `HEADER` or `STATUS` |
+| `target_type STATUS is not allowed for STEP_REQUEST` | `STATUS` sets the client response's status | Put the rule on the client response (or a named one) |
+| `Invalid HTTP status for STATUS` (500 `GW-500-MAPPING`) | A `STATUS` rule gave something other than a whole number from 100 to 599 | Check its source, lookup or constant |
 | `target has N [*] but source has M` | Array shapes don't match | Use the same number of `[*]`, or none in the target |
 | `a wildcard source cannot be written to a HEADER target` | Arrays can't go into headers / query / path | Pick one element (`[0]`) instead |
 | `converter '...'` | Unknown converter or wrong arguments | See [§3.3.5](#335-converters) |

@@ -77,11 +77,11 @@ public class FlowExecutor implements AutoCloseable {
             response = run(flow, in, ctx, deadline, records);
         } catch (GatewayError e) {
             failure = e;
-            response = handleError(flow.errorHandler(), e, ctx);
+            response = handleFlowError(flow, e, ctx);
         } catch (RuntimeException e) {
             log.error("Unexpected failure in flow {}", flow.code(), e);
             failure = GatewayError.of(ErrorType.INTERNAL).cause(e).build();
-            response = handleError(flow.errorHandler(), failure, ctx);
+            response = handleFlowError(flow, failure, ctx);
         }
         if (failure != null) {
             log.warn("flow={} failed: {} {} (step={})", flow.code(), failure.type(), failure.getMessage(), failure.stepName());
@@ -169,7 +169,8 @@ public class FlowExecutor implements AutoCloseable {
             if (flow.responseHandler() != null) {
                 invoke(flow.responseHandler(), view, ctx, "response_handler of flow", false);
             }
-            return new GatewayResponse(respond.status(), view.headers(), view.body());
+            // a STATUS rule (e.g. the backend's own status) wins over the response's fixed status
+            return new GatewayResponse(named.status() != null ? named.status() : respond.status(), view.headers(), view.body());
         }
 
         MappedMessage out = mapping.apply(flow.responseRules(), ctx);
@@ -183,7 +184,7 @@ public class FlowExecutor implements AutoCloseable {
         if (flow.responseHandler() != null) {
             invoke(flow.responseHandler(), view, ctx, "response_handler of flow", false);
         }
-        return new GatewayResponse(flow.successStatus(), view.headers(), view.body());
+        return new GatewayResponse(out.status() != null ? out.status() : flow.successStatus(), view.headers(), view.body());
     }
 
     private static void skip(StepDefinition step, ExecutionContext ctx, List<StepRecord> records) {
@@ -315,6 +316,40 @@ public class FlowExecutor implements AutoCloseable {
     }
 
     /** Flow error handler, then the default handler, then a hard-coded 500. Never throws. */
+    /** The flow's error handler, or with {@code error_handler = RESPOND:<response>} that response mapped from the error. */
+    private GatewayResponse handleFlowError(FlowDefinition flow, GatewayError error, ExecutionContext ctx) {
+        String name = flow.errorHandlerName();
+        if (name == null || !name.startsWith(StepDefinition.RESPOND)) {
+            return handleError(flow.errorHandler(), error, ctx);
+        }
+        // what the standard error response would be: its status and code are part of $.error
+        GatewayResponse standard = handleError(defaultErrorHandler, error, ctx);
+        FlowDefinition.Response respond = flow.responses().get(name.substring(StepDefinition.RESPOND.length()));
+        if (respond == null) {
+            return standard;
+        }
+        ObjectNode e = F.objectNode();
+        e.put("type", error.type().name());
+        e.put("code", standard.body() == null ? error.type().defaultCode() : standard.body().path("errorCode").asString());
+        e.put("status", standard.status());
+        e.put("message", standard.body() == null ? error.type().defaultMessage() : standard.body().path("errorMessage").asString());
+        e.put("reason", error.getMessage());
+        if (error.stepName() != null) {
+            e.put("step", error.stepName());
+        }
+        var details = e.putArray("details");
+        error.details().forEach(details::add);
+        ctx.putError(e);
+        try {
+            MappedMessage out = mapping.apply(respond.rules(), ctx);
+            return new GatewayResponse(out.status() != null ? out.status() : respond.status(), out.headers(), out.body());
+        } catch (RuntimeException ex) {
+            log.error("Error response '{}' of flow {} could not be built; sending the standard error: {}",
+                    respond.name(), flow.code(), ex.getMessage());
+            return standard;
+        }
+    }
+
     private GatewayResponse handleError(ErrorHandler handler, GatewayError error, ExecutionContext ctx) {
         if (handler != null && handler != defaultErrorHandler) {
             try {

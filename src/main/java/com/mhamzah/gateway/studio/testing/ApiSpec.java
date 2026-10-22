@@ -262,7 +262,12 @@ public final class ApiSpec {
             errors.add(List.of(err.getValue()[0], err.getKey(), err.getValue()[1]));
         }
         out.add(new Table(List.of("HTTP", "errorCode", "When"), errors));
-        if (flow.errorHandler() != null && flow.errorHandlerName() != null
+        if (flow.errorHandlerName() != null && flow.errorHandlerName().startsWith(com.mhamzah.gateway.config.StepDefinition.RESPOND)) {
+            String name = flow.errorHandlerName().substring(com.mhamzah.gateway.config.StepDefinition.RESPOND.length());
+            out.add(new Paragraph("Errors of this endpoint are answered with its response '" + name
+                    + "' (mapped from the error), not in the standard format above; the table lists the underlying"
+                    + " error codes."));
+        } else if (flow.errorHandler() != null && flow.errorHandlerName() != null
                 && !"defaultErrorHandler".equals(flow.errorHandlerName())) {
             out.add(new Paragraph("This endpoint has a custom error handler (" + flow.errorHandlerName()
                     + "): its error responses may differ from the default format."));

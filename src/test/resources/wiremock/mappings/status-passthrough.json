@@ -1,0 +1,44 @@
+{
+  "mappings": [
+    {
+      "request": { "method": "GET", "url": "/core/profiles/1001" },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": { "accountNo": "1001", "name": "BUDI SANTOSO", "segment": "PRIORITY" }
+      }
+    },
+    {
+      "request": { "method": "GET", "url": "/core/profiles/2002" },
+      "response": {
+        "status": 202,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": { "accountNo": "2002", "name": "SITI AMINAH", "segment": "PENDING_VERIFICATION" }
+      }
+    },
+    {
+      "request": { "method": "GET", "url": "/core/profiles/9999" },
+      "response": {
+        "status": 404,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": { "code": "NF01", "message": "Account not found" }
+      }
+    },
+    {
+      "request": { "method": "GET", "url": "/core/profiles/3003" },
+      "response": {
+        "status": 409,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": { "code": "BLK01", "message": "Account is blocked" }
+      }
+    },
+    {
+      "request": { "method": "GET", "url": "/core/profiles/5005" },
+      "response": {
+        "status": 503,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": { "code": "SYS99", "message": "Core system under maintenance" }
+      }
+    }
+  ]
+}
