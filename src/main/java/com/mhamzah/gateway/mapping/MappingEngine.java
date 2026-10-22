@@ -21,6 +21,7 @@ public class MappingEngine {
         Map<String, String> headers = new LinkedHashMap<>();
         Map<String, String> query = new LinkedHashMap<>();
         Map<String, String> pathVars = new LinkedHashMap<>();
+        Integer[] status = {null};
         for (CompiledRule rule : rules) {
             if (rule.source() != null && rule.source().wildcardCount() > 0) {
                 applyWildcard(rule, ctx, body);
@@ -28,11 +29,11 @@ public class MappingEngine {
                 JsonNode value = rule.constant() != null ? rule.constant() : rule.source() != null ? ctx.read(rule.source()) : null;
                 value = process(rule, value, ctx);
                 if (value != null) {
-                    write(rule, value, body, headers, query, pathVars);
+                    write(rule, value, body, headers, query, pathVars, status);
                 }
             }
         }
-        return new MappedMessage(body[0], headers, query, pathVars);
+        return new MappedMessage(body[0], headers, query, pathVars, status[0]);
     }
 
     private void applyWildcard(CompiledRule rule, ExecutionContext ctx, JsonNode[] body) {
@@ -112,13 +113,31 @@ public class MappingEngine {
     }
 
     private void write(CompiledRule rule, JsonNode value, JsonNode[] body,
-            Map<String, String> headers, Map<String, String> query, Map<String, String> pathVars) {
+            Map<String, String> headers, Map<String, String> query, Map<String, String> pathVars, Integer[] status) {
         switch (rule.targetType()) {
             case BODY -> writeBody(rule, rule.targetPath(), value, body);
             case HEADER -> putText(headers, rule.targetName(), value);
             case QUERY -> putText(query, rule.targetName(), value);
             case PATH -> putText(pathVars, rule.targetName(), value);
+            case STATUS -> status[0] = httpStatus(rule, value);
         }
+    }
+
+    /** A whole number from 100 to 599 (a number or numeric text, e.g. a backend's 404 or a lookup's "502"). */
+    private static int httpStatus(CompiledRule rule, JsonNode value) {
+        String text = JsonValues.keyOf(value);
+        try {
+            int code = Integer.parseInt(text == null ? "" : text.trim());
+            if (code >= 100 && code <= 599) {
+                return code;
+            }
+        } catch (NumberFormatException e) {
+            // reported below
+        }
+        throw GatewayError.of(ErrorType.MAPPING_ERROR)
+                .message("Invalid HTTP status for " + rule.describe())
+                .details(List.of(rule.describe() + ": '" + text + "' is not an HTTP status (100-599)"))
+                .build();
     }
 
     private static void putText(Map<String, String> target, String name, JsonNode value) {

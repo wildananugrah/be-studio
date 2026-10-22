@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Dev data: ACCOUNT_PROFILE answers every failure no step routes itself with its response "failed" too
+        (error_handler RESPOND:failed instead of an ErrorHandler bean). That response's rules may read $.error:
+        type, code, status, message, reason, step, details. Here it adds errorType: set when the error handler
+        answers (e.g. a mapping error), absent when the step's own failure route does (a branch has no $.error).
+    -->
+    <changeSet id="114-demo-error-response" author="json-gateway" context="dev">
+        <preConditions onFail="MARK_RAN">
+            <sqlCheck expectedResult="1">SELECT COUNT(*) FROM ${tbl.flow} WHERE code = 'ACCOUNT_PROFILE'</sqlCheck>
+        </preConditions>
+        <update tableName="${tbl.flow}">
+            <column name="error_handler" value="RESPOND:failed"/>
+            <where>code = 'ACCOUNT_PROFILE'</where>
+        </update>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_PROFILE')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="9"/>
+            <column name="response_name" value="failed"/>
+            <column name="target_path" value="$.errorType"/><column name="source_path" value="$.error.type"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

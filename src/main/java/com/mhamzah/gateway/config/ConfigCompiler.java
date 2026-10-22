@@ -65,7 +65,7 @@ public class ConfigCompiler {
     private static final Pattern STEP_NAME = Pattern.compile("[A-Za-z0-9_\\-]+");
     private static final Pattern TEMPLATE_VAR = Pattern.compile("\\{([^}/]+)}");
     private static final Set<String> METHODS = Set.of("GET", "POST", "PUT", "PATCH", "DELETE");
-    private static final Set<String> CONTEXT_ROOTS = Set.of("request", "steps", "correlationId");
+    private static final Set<String> CONTEXT_ROOTS = Set.of("request", "steps", "correlationId", "error");
     private static final String STEP_REQUEST = "STEP_REQUEST";
     private static final String FLOW_RESPONSE = "FLOW_RESPONSE";
 
@@ -499,7 +499,9 @@ public class ConfigCompiler {
             MessageHandler responseHandler = handler(f.responseHandler(), MessageHandler.class, where, "response_handler");
             String errorHandlerName = f.errorHandler() == null || f.errorHandler().isBlank()
                     ? DefaultErrorHandler.BEAN_NAME : f.errorHandler();
-            ErrorHandler errorHandler = handler(errorHandlerName, ErrorHandler.class, where, "error_handler");
+            // RESPOND:<response>: failures are answered by a named response of the flow, mapped from $.error
+            boolean mappedErrors = errorHandlerName.startsWith(StepDefinition.RESPOND);
+            ErrorHandler errorHandler = mappedErrors ? null : handler(errorHandlerName, ErrorHandler.class, where, "error_handler");
             int successStatus = f.successStatus() == null ? 200 : f.successStatus();
             if (successStatus < 100 || successStatus > 599) {
                 errors.add(where + ": success_status " + successStatus + " is not a valid HTTP status");
@@ -536,7 +538,7 @@ public class ConfigCompiler {
                         errors.add(rw + ": FLOW_RESPONSE rule must not have step_id");
                         continue;
                     }
-                    CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.HEADER), FLOW_RESPONSE);
+                    CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.HEADER, TargetType.STATUS), FLOW_RESPONSE);
                     if (r.responseName() != null && !namedRules.containsKey(r.responseName())) {
                         errors.add(rw + ": response '" + r.responseName() + "' is not a response of this flow");
                     } else if (rule != null) {
@@ -565,6 +567,9 @@ public class ConfigCompiler {
                     def = def.withNext(onSuccess, onFailure);
                     groups.computeIfAbsent(s.stepOrder(), k -> new ArrayList<>()).add(def);
                 }
+            }
+            if (mappedErrors && !flowResponses.containsKey(errorHandlerName.substring(StepDefinition.RESPOND.length()))) {
+                errors.add(where + ": error_handler '" + errorHandlerName + "' is not a response of this flow");
             }
             if (method == null || pattern == null) {
                 return null;
@@ -709,7 +714,7 @@ public class ConfigCompiler {
             List<CompiledRule> rules = new ArrayList<>();
             for (RuleRow r : ruleRows) {
                 String rw = "mapping rule " + r.id() + " of " + where;
-                CompiledRule rule = rule(r, rw, Set.of(TargetType.values()), STEP_REQUEST);
+                CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.HEADER, TargetType.QUERY, TargetType.PATH), STEP_REQUEST);
                 if (rule != null) {
                     checkStepRefs(rule.source(), orders, s.stepOrder(), null, rw);
                     rules.add(rule);
@@ -981,12 +986,13 @@ public class ConfigCompiler {
             JsonPath target = null;
             if (targetType == TargetType.BODY) {
                 target = path(r.targetPath(), where, "target_path");
-            } else if (targetType != null && (r.targetPath() == null || r.targetPath().isBlank())) {
+            } else if (targetType != null && targetType != TargetType.STATUS
+                    && (r.targetPath() == null || r.targetPath().isBlank())) {
                 errors.add(where + ": target_path must be a " + targetType + " name");
             }
             JsonPath source = r.sourcePath() == null ? null : path(r.sourcePath(), where, "source_path");
             if (source != null && !CONTEXT_ROOTS.contains(source.firstField())) {
-                errors.add(where + ": source_path must start with $.request, $.steps or $.correlationId");
+                errors.add(where + ": source_path must start with $.request, $.steps, $.correlationId or $.error");
             }
             boolean hasSource = r.sourcePath() != null;
             boolean hasConstant = r.constantValue() != null;

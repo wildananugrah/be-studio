@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Dev data: ACCOUNT_PROFILE passes the core system's HTTP status through, on success and on failure, and maps
+        the failure's body like a success (STATUS rules, a named response "failed" reached by next_on_failure).
+
+          GET /api/v1/accounts/{accountNo}/profile → CORE_BANKING GET /core/profiles/{accountNo}
+
+          profile ──✓──► default response  STATUS ← $.steps.profile.status, accountName, segment
+             └──✗ RESPOND:failed ──► failed  STATUS ← $.steps.profile.status (lookup DEMO_HTTP_STATUS: 503 → 502),
+                                             errorCode, errorMessage, correlationId
+
+          1001 → 200 {accountNo, accountName, segment}         2002 → 202 (as the core said)
+          9999 → 404 {errorCode NF01, errorMessage, ...}       3003 → 409 {errorCode BLK01, ...}
+          5005 → 502 (the core's 503, translated)               unreachable core → 502 (status_code of "failed")
+    -->
+    <changeSet id="113-demo-status-passthrough" author="json-gateway" context="dev">
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="ACCOUNT_PROFILE"/>
+            <column name="name" value="Account profile (the core's HTTP status passed through)"/>
+            <column name="http_method" value="GET"/>
+            <column name="path_pattern" value="/v1/accounts/{accountNo}/profile"/>
+            <column name="success_status" valueNumeric="200"/>
+            <column name="application_code" value="CORE_BANKING_API"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_PROFILE')"/>
+            <column name="name" value="profile"/><column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="CORE_BANKING"/><column name="http_method" value="GET"/>
+            <column name="path_template" value="/core/profiles/{accountNo}"/>
+            <column name="next_on_failure" value="RESPOND:failed"/>
+            <column name="response_example" value='{"accountNo": "1001", "name": "BUDI SANTOSO", "segment": "PRIORITY"}'/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_PROFILE')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'ACCOUNT_PROFILE' AND s.name = 'profile')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="PATH"/><column name="target_path" value="accountNo"/>
+            <column name="source_path" value="$.request.path.accountNo"/>
+        </insert>
+
+        <!-- success: the core's status (200, 202, ...) and its fields -->
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_PROFILE')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="STATUS"/><column name="target_path" value="status"/>
+            <column name="source_path" value="$.steps.profile.status"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_PROFILE')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_path" value="$.accountNo"/><column name="source_path" value="$.steps.profile.body.accountNo"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_PROFILE')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="3"/>
+            <column name="target_path" value="$.accountName"/><column name="source_path" value="$.steps.profile.body.name"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_PROFILE')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="4"/>
+            <column name="target_path" value="$.segment"/><column name="source_path" value="$.steps.profile.body.segment"/>
+        </insert>
+
+        <!-- failure: response "failed" with the core's status (503 shown as 502) and its error mapped -->
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="DEMO_HTTP_STATUS"/><column name="source_value" value="503"/><column name="target_value" value="502"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="DEMO_HTTP_STATUS"/><column name="source_value" value="500"/><column name="target_value" value="502"/>
+        </insert>
+        <insert tableName="${tbl.flow_response}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_PROFILE')"/>
+            <column name="name" value="failed"/>
+            <column name="status_code" valueNumeric="502"/>
+            <column name="description" value="The core refused or failed; its status and error are passed on"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_PROFILE')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="5"/>
+            <column name="response_name" value="failed"/>
+            <column name="target_type" value="STATUS"/><column name="target_path" value="status"/>
+            <column name="source_path" value="$.steps.profile.status"/><column name="lookup_code" value="DEMO_HTTP_STATUS"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_PROFILE')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="6"/>
+            <column name="response_name" value="failed"/>
+            <column name="target_path" value="$.errorCode"/><column name="source_path" value="$.steps.profile.body.code"/>
+            <column name="default_value" value="CORE_UNAVAILABLE"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_PROFILE')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="7"/>
+            <column name="response_name" value="failed"/>
+            <column name="target_path" value="$.errorMessage"/><column name="source_path" value="$.steps.profile.body.message"/>
+            <column name="default_value" value="The core system could not be reached"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_PROFILE')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="8"/>
+            <column name="response_name" value="failed"/>
+            <column name="target_path" value="$.correlationId"/><column name="source_path" value="$.correlationId"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

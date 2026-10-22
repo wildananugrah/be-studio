@@ -76,7 +76,9 @@ final class ApplicationExport {
             addIf(schemaCodes, f.responseSchema());
             addIf(handlers, f.requestHandler());
             addIf(handlers, f.responseHandler());
-            addIf(handlers, f.errorHandler());
+            if (f.errorHandler() == null || !f.errorHandler().startsWith(com.mhamzah.gateway.config.StepDefinition.RESPOND)) {
+                addIf(handlers, f.errorHandler()); // RESPOND:<response> is one of the flow's responses, not a bean
+            }
             f.response().forEach(r -> rule(r, lookupCodes, handlers));
             f.responses().forEach(x -> x.rules().forEach(r -> rule(r, lookupCodes, handlers)));
             for (Step s : f.steps()) {

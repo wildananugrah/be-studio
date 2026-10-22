@@ -5,5 +5,7 @@ public enum TargetType {
     BODY,
     HEADER,
     QUERY,
-    PATH
+    PATH,
+    /** The HTTP status of the client response (FLOW_RESPONSE rules only); target_path is not used. */
+    STATUS
 }

@@ -21,6 +21,26 @@ const storage = {
 
 // ---------- API document <-> editor model ----------
 const ruleIn = r => ({ id: uid('r'), type: r.type || 'BODY', target: str(r.target), source: str(r.source), constant: str(r.constant), def: str(r.defaultValue), lookup: str(r.lookup), conv: str(r.converter), fh: str(r.fieldHandler), required: !!r.required });
+/**
+ * How a response's HTTP status is set: a STATUS rule passing a step's status through ({ step }), another STATUS rule
+ * ({ custom }), or null for the response's fixed status.
+ */
+function statusFrom(rules) {
+  const r = (rules || []).find(x => x.type === 'STATUS');
+  if (!r) return null;
+  const m = /^\$\.steps\.([^.\[]+)\.status$/.exec(r.source || '');
+  return m ? { step: m[1], rule: r } : { custom: true, rule: r };
+}
+/** "200", "← profile" (the step's status passed through) or "STATUS rule". */
+const statusText = (rules, fixed) => { const x = statusFrom(rules); return x ? (x.step ? '← ' + x.step : 'STATUS rule') : String(fixed || 200); };
+/** Passes {@code step}'s HTTP status through (its STATUS rule is created or re-pointed), or with '' uses the fixed status. */
+function setStatusFrom(rules, step) {
+  const i = rules.findIndex(x => x.type === 'STATUS');
+  if (!step) { if (i >= 0) rules.splice(i, 1); return; }
+  const source = '$.steps.' + step + '.status';
+  if (i >= 0) { rules[i].source = source; rules[i].constant = ''; }
+  else rules.unshift({ id: uid('r'), type: 'STATUS', target: 'status', source, constant: '', def: '', lookup: '', conv: '', fh: '', required: false });
+}
 const ruleOut = r => ({ type: r.type, target: r.target, source: nn(r.source), constant: r.source ? null : nn(r.constant), defaultValue: nn(r.def), lookup: nn(r.lookup), converter: nn(r.conv), fieldHandler: nn(r.fh), required: r.required });
 
 function fromApi(c) {
@@ -287,6 +307,11 @@ function synthSample(f, lookups) {
   f.steps.forEach(s => templateSlots(s.bodyTemplate).forEach(x => { const p = x.split(':')[0].trim(); if (/^(request|steps)\./.test(p)) { const tk = toks('$.' + p); place(ctx, '$.' + p, guess(String(tk[tk.length - 1]), null, lookups)); } }));
   f.steps.forEach(s => [s.condition, s.success].forEach(e => (String(e || '').match(/\$\{([^}]+)\}/g) || []).forEach(x => { const p = '$.' + x.slice(2, -1); const t = toks(p); place(ctx, p, guess(String(t[t.length - 1]), null, lookups)); })));
   files();
+  // error_handler RESPOND:<response>: that response maps from $.error
+  if (/^RESPOND:/.test(f.errorHandler || '')) {
+    const first = f.steps.find(x => !isLocal(x));
+    ctx.error = { type: 'DOWNSTREAM_HTTP_ERROR', code: 'GW-502-DOWNSTREAM', status: 502, message: 'Downstream call failed', reason: 'Downstream returned HTTP 500', step: first ? first.name : 'step', details: [] };
+  }
   // a transform written as a JSON template: its result is the filled template (so later steps see its fields)
   f.steps.filter(x => isTransform(x) && x.bodyTemplate).forEach(x => { try { ctx.steps[x.name].body = JSON.parse(renderTemplate(x.bodyTemplate, ctx, ctx.steps[x.name].body)); } catch (e) { /* not valid JSON yet */ } });
   return ctx;
@@ -739,6 +764,7 @@ class App extends Component {
     const names = new Set(f.steps.map(x => x.name)); const resps = new Set((f.responses || []).map(r => 'RESPOND:' + r.name));
     const keep = v => !v || v === 'END' || v === 'FAIL' || names.has(v) || resps.has(v);
     f.steps.forEach(x => { if (!keep(x.nextOk)) x.nextOk = ''; if (!keep(x.nextFail)) x.nextFail = ''; (x.cases || []).forEach(c => { if (!keep(c.then)) c.then = ''; }); });
+    if (/^RESPOND:/.test(f.errorHandler || '') && !resps.has(f.errorHandler)) f.errorHandler = '';
   }
   ds(payload) { if (this.ro) return e => e.preventDefault(); return e => { e.dataTransfer.effectAllowed = 'copyMove'; try { e.dataTransfer.setData('text/plain', payload.kind); } catch (_) { /* ignore */ } setTimeout(() => this.setState({ drag: payload, over: null }), 0); }; }
   dragEnd = () => this.setState({ drag: null, over: null });
@@ -860,6 +886,24 @@ class App extends Component {
   schemaCodes() { return this.state.cfg.schemas.map(x => x.code).filter(Boolean); }
   sampleOf(f) { try { const t = this.sampleText(f); return t ? JSON.parse(t) : synthSample(f, this.state.cfg.lookups); } catch (e) { return synthSample(f, this.state.cfg.lookups); } }
   /** The last previewed client response body of {@code f}, if the Mapping tab has run one. */
+  /**
+   * The inspector field choosing where a response's HTTP status comes from: its fixed status, or an HTTP step's own
+   * status passed through (a STATUS rule, kept in the response's mapping). {@code listOf} finds the rules in a draft.
+   */
+  statusSource(f, current, listOf) {
+    const steps = f.steps.filter(x => !isSql(x) && !isStore(x) && !isLocal(x)).sort((a, b) => a.order - b.order);
+    const options = [{ v: '', l: 'Fixed status (below)' }, ...steps.map(x => ({ v: x.name, l: 'Pass through · ' + x.name + "'s HTTP status" }))];
+    const value = current ? (current.step || '__custom') : '';
+    if (current && current.custom) options.push({ v: '__custom', l: 'Set by a STATUS rule (Mapping)' });
+    if (current && current.step && !steps.some(x => x.name === current.step)) options.push({ v: current.step, l: 'Pass through · ' + current.step + ' (no such HTTP step)' });
+    const rule = current && current.rule;
+    const extras = rule ? [rule.lookup && 'lookup ' + rule.lookup, rule.def && 'default ' + rule.def, rule.conv && 'converter'].filter(Boolean) : [];
+    return { label: 'Status', col: 'STATUS rule', value, kind: 'select', options,
+      onSet: (fl, v) => { if (v !== '__custom') setStatusFrom(listOf(fl), v); },
+      hint: current && current.step ? 'The client gets the HTTP status ' + current.step + ' answered with' + (extras.length ? ' (' + extras.join(', ') + ')' : '') + ', whether it succeeded or failed. To translate statuses (e.g. 503 → 502), give the STATUS rule a lookup in Mapping.'
+        : current ? 'A STATUS rule in this response\'s mapping sets the status.' : 'Or pass a step\'s own HTTP status through to the client.' };
+  }
+
   responseExample(f) { const pv = this.state.preview; return pv && pv.key === f.code + '/' && pv.output ? pv.output.body : undefined; }
   openSchema(code) {
     this.setState({ screen: 'schemas', focusSchema: code });
@@ -1853,7 +1897,8 @@ class App extends Component {
     const errZone = this.zone('err', isPal('err'), applyFlow('err'));
     const ehName = f.errorHandler || 'defaultErrorHandler';
     const eh = cat.errorHandlers.find(h => h.name === ehName);
-    const ehDesc = !eh ? 'Not a known ErrorHandler bean.' : eh.lookupCode ? `LookupErrorHandler · reads ${eh.codePath} of the failed call and translates it through ${eh.lookupCode}.` : ehName === 'defaultErrorHandler' ? 'Standard body: errorCode, errorMessage, correlationId, step, details.' : 'Custom ErrorHandler bean.';
+    const ehResp = /^RESPOND:/.test(ehName) ? ehName.slice(8) : null;
+    const ehDesc = ehResp ? `Answered by response ${ehResp}, mapped from $.error (type, code, status, message, step, details).` : !eh ? 'Not a known ErrorHandler bean.' : eh.lookupCode ? `LookupErrorHandler · reads ${eh.codePath} of the failed call and translates it through ${eh.lookupCode}.` : ehName === 'defaultErrorHandler' ? 'Standard body: errorCode, errorMessage, correlationId, step, details.' : 'Custom ErrorHandler bean.';
     const lrows = eh && eh.lookupCode ? (s.cfg.lookups[eh.lookupCode] || []).map(r => { let t = {}; try { t = JSON.parse(r.tgt); } catch (e) { /* text target */ } return { src: r.src, status: t.status || '', code: t.errorCode || r.tgt }; }) : [];
 
     return html`
@@ -1965,7 +2010,7 @@ class App extends Component {
 
                 <div style="display:flex;flex-direction:column;gap:10px;flex:none">
                 <div data-node="out" onClick=${select({ kind: 'out' })} ...${zoneProps(outZone)} style=${card(sel.kind === 'out', 'width:216px')}>
-                  <div style="display:flex;align-items:center;gap:7px"><span style=${`width:7px;height:7px;border-radius:2px;background:${C.out}`}></span><span style="font-weight:600">Client response</span><span style="flex:1"></span>${(f.responses || []).length > 0 && html`<span style=${`font:600 10.5px ${MONO};color:#6A6D75`}>default · ${f.successStatus}</span>`}</div>
+                  <div style="display:flex;align-items:center;gap:7px"><span style=${`width:7px;height:7px;border-radius:2px;background:${C.out}`}></span><span style="font-weight:600">Client response</span><span style="flex:1"></span>${((f.responses || []).length > 0 || statusFrom(f.response)) && html`<span style=${`font:600 10.5px ${MONO};color:#6A6D75;white-space:nowrap`}>${(f.responses || []).length > 0 ? 'default · ' : 'HTTP '}${statusText(f.response, f.successStatus)}</span>`}</div>
                   <div style=${`margin-top:4px;font:11px ${MONO};color:#6A6D75`}>${f.response.length} FLOW_RESPONSE rules</div>
                   <button class="btn-line" onClick=${toMap('resp')} style="margin-top:9px;width:100%;border:1px solid #E4E1D8;background:#FAF9F6;border-radius:6px;padding:6px 8px;cursor:pointer;font-size:12px;font-weight:500;text-align:left;display:flex;justify-content:space-between">Edit response mapping<span>→</span></button>
                   ${outChips.length > 0 && html`<div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">${outChips.map(chipView)}</div>`}
@@ -1973,8 +2018,8 @@ class App extends Component {
                 </div>
                 ${(f.responses || []).map(r => html`
                   <div data-resp=${r.name} onClick=${select({ kind: 'resp', id: r.id })} style=${card(sel.kind === 'resp' && sel.id === r.id, 'width:216px')}>
-                    <div style="display:flex;align-items:center;gap:7px"><span style=${`width:7px;height:7px;border-radius:2px;background:${C.out}`}></span><span style="font-weight:600">${r.name}</span><span style="flex:1"></span><span style=${`font:600 10.5px ${MONO};color:${parseInt(r.status, 10) >= 400 ? C.err : '#6A6D75'}`}>HTTP ${r.status || 200}</span></div>
-                    <div style=${`margin-top:4px;font:11px ${MONO};color:#6A6D75`}>${r.rules.length} FLOW_RESPONSE rules · ${f.steps.some(x => x.nextOk === 'RESPOND:' + r.name || x.nextFail === 'RESPOND:' + r.name || (x.cases || []).some(c => c.then === 'RESPOND:' + r.name)) ? 'answered by a branch' : 'no step responds with it'}</div>
+                    <div style="display:flex;align-items:center;gap:7px"><span style=${`width:7px;height:7px;border-radius:2px;background:${C.out}`}></span><span style="font-weight:600">${r.name}</span><span style="flex:1"></span><span style=${`font:600 10.5px ${MONO};color:${parseInt(r.status, 10) >= 400 ? C.err : '#6A6D75'};white-space:nowrap`}>HTTP ${statusText(r.rules, r.status)}</span></div>
+                    <div style=${`margin-top:4px;font:11px ${MONO};color:#6A6D75`}>${r.rules.length} FLOW_RESPONSE rules · ${f.errorHandler === 'RESPOND:' + r.name ? 'answers every failure' : f.steps.some(x => x.nextOk === 'RESPOND:' + r.name || x.nextFail === 'RESPOND:' + r.name || (x.cases || []).some(c => c.then === 'RESPOND:' + r.name)) ? 'answered by a branch' : 'no step responds with it'}</div>
                     <button class="btn-line" onClick=${toMap('resp:' + r.id)} style="margin-top:9px;width:100%;border:1px solid #E4E1D8;background:#FAF9F6;border-radius:6px;padding:6px 8px;cursor:pointer;font-size:12px;font-weight:500;text-align:left;display:flex;justify-content:space-between">Edit response mapping<span>→</span></button>
                   </div>`)}
                 <button class="btn-line ro-hide" title="Another response a branch can answer with (its own status and mapping)" onClick=${e => { e.stopPropagation(); this.mut(fl => { fl.responses = fl.responses || []; let k = 1; while (fl.responses.some(x => x.name === 'response' + k)) k++; const r = { id: uid('o'), name: 'response' + k, status: '200', description: '', rules: [] }; fl.responses.push(r); return { sel: { kind: 'resp', id: r.id } }; }); }} style="width:216px;border:1.5px dashed #C9C6BC;background:transparent;border-radius:9px;padding:8px;cursor:pointer;font-size:12px;color:#6A6D75">+ Response</button>
@@ -1994,7 +2039,7 @@ class App extends Component {
                 </div>
                 <div style="width:220px">
                   <div style=${`font:10px ${MONO};letter-spacing:.06em;color:#9A9CA2`}>ERROR_HANDLER</div>
-                  <div style=${`margin-top:4px;font:600 13px ${MONO}`}>${ehName}</div>
+                  <div style=${`margin-top:4px;font:600 13px ${MONO}`}>${ehResp ? 'Respond · ' + ehResp : ehName}</div>
                   <div style="margin-top:4px;font-size:11.5px;color:#6A6D75;line-height:1.4">${ehDesc}</div>
                 </div>
                 ${lrows.length > 0 && html`
@@ -2149,7 +2194,7 @@ class App extends Component {
   routeTargets(f, st) {
     const later = f.steps.filter(x => x.order > st.order).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
     return [...later.map(x => ({ v: x.name, l: 'Go to ' + x.name + ' · step_order ' + x.order })),
-      ...(f.responses || []).map(r => ({ v: 'RESPOND:' + r.name, l: 'Respond · ' + r.name + ' · HTTP ' + (r.status || 200) }))];
+      ...(f.responses || []).map(r => ({ v: 'RESPOND:' + r.name, l: 'Respond · ' + r.name + ' · HTTP ' + statusText(r.rules, r.status) }))];
   }
 
   /** The cases of a condition step: when (expression) → then (route), with a label; first true wins. */
@@ -2282,7 +2327,7 @@ class App extends Component {
     const routeFields = (st, f, S2) => {
       const later = f.steps.filter(x => x.order > st.order).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
       const go = [...later.map(x => ({ v: x.name, l: 'Go to ' + x.name + ' · step_order ' + x.order })),
-        ...(f.responses || []).map(r => ({ v: 'RESPOND:' + r.name, l: 'Respond · ' + r.name + ' · HTTP ' + (r.status || 200) }))];
+        ...(f.responses || []).map(r => ({ v: 'RESPOND:' + r.name, l: 'Respond · ' + r.name + ' · HTTP ' + statusText(r.rules, r.status) }))];
       const failV = st.nextFail || st.onFailure;
       const alone = f.steps.filter(x => x.order === st.order).length === 1;
       const warn = (st.nextOk || st.nextFail) && !alone ? 'This step branches, so it must run alone: give it a step_order no other step uses. ' : '';
@@ -2399,25 +2444,32 @@ class App extends Component {
         fld('Request handler', 'request_handler', f.reqHandler, 'select', (fl, v) => { fl.reqHandler = v; }, { options: withCurrent(none(cat.messageHandlers), f.reqHandler), hint: 'MessageHandler. May short-circuit with its own response.' })
       ] };
     } else if (sel.kind === 'out') {
-      insp = { kind: 'Client response · default', color: C.out, title: 'HTTP ' + f.successStatus, table: 'gw_flow', fields: [
-        fld('Success status', 'success_status', f.successStatus, 'select', (fl, v) => { fl.successStatus = v; }, { options: withCurrent(plain(['200', '201', '202', '204']), f.successStatus) }),
+      const pass = statusFrom(f.response);
+      insp = { kind: 'Client response · default', color: C.out, title: 'HTTP ' + statusText(f.response, f.successStatus), table: 'gw_flow', fields: [
+        this.statusSource(f, pass, fl => fl.response),
+        fld(pass ? 'Fallback status' : 'Success status', 'success_status', f.successStatus, 'select', (fl, v) => { fl.successStatus = v; }, { options: withCurrent(plain(['200', '201', '202', '204']), f.successStatus), hint: pass ? 'Used when the STATUS rule gives nothing (e.g. no status after a timeout)' : '' }),
         fld('Response schema', 'response_schema_code', f.respSchema, 'select', (fl, v) => { fl.respSchema = v; }, { options: withCurrent(none(this.schemaCodes()), f.respSchema), hint: 'Invalid → 500', actions: this.schemaActions(f.respSchema, () => this.responseExample(f), f.code + '_RESPONSE', (fl, c) => { fl.respSchema = c; }) }),
         fld('Response handler', 'response_handler', f.respHandler, 'select', (fl, v) => { fl.respHandler = v; }, { options: withCurrent(none(cat.messageHandlers), f.respHandler) })
       ], mapping: { label: 'Edit response mapping · ' + f.response.length + ' rules', go: toMap('resp') } };
     } else if (sel.kind === 'resp' && (f.responses || []).some(r => r.id === sel.id)) {
       const r = f.responses.find(x => x.id === sel.id);
       const R = fl => fl.responses.find(x => x.id === r.id);
-      const used = f.steps.filter(x => x.nextOk === 'RESPOND:' + r.name || x.nextFail === 'RESPOND:' + r.name || (x.cases || []).some(c => c.then === 'RESPOND:' + r.name)).map(x => x.name);
-      insp = { kind: 'Client response', color: C.out, title: r.name + ' · HTTP ' + (r.status || 200), table: 'gw_flow_response', fields: [
-        fld('Name', 'name', r.name, 'text', (fl, v) => { const x = R(fl); const old = 'RESPOND:' + x.name; x.name = v.replace(/[^A-Za-z0-9_-]/g, '_'); fl.steps.forEach(y => { if (y.nextOk === old) y.nextOk = 'RESPOND:' + x.name; if (y.nextFail === old) y.nextFail = 'RESPOND:' + x.name; (y.cases || []).forEach(c => { if (c.then === old) c.then = 'RESPOND:' + x.name; }); }); }, { hint: used.length ? 'Answered by: ' + used.join(', ') + ' (their routes follow a rename)' : 'No step responds with it yet: set a step\'s If it succeeds / If it fails to Respond · ' + r.name }),
-        fld('Status', 'status_code', r.status, 'select', (fl, v) => { R(fl).status = v; }, { options: withCurrent(plain(['200', '201', '202', '204', '400', '404', '409', '422', '500', '502', '503']), String(r.status)), hint: 'The HTTP status the client gets with this response' }),
+      const used = [...f.steps.filter(x => x.nextOk === 'RESPOND:' + r.name || x.nextFail === 'RESPOND:' + r.name || (x.cases || []).some(c => c.then === 'RESPOND:' + r.name)).map(x => x.name), ...(f.errorHandler === 'RESPOND:' + r.name ? ['On failure (error_handler)'] : [])];
+      insp = { kind: 'Client response', color: C.out, title: r.name + ' · HTTP ' + statusText(r.rules, r.status), table: 'gw_flow_response', fields: [
+        fld('Name', 'name', r.name, 'text', (fl, v) => { const x = R(fl); const old = 'RESPOND:' + x.name; x.name = v.replace(/[^A-Za-z0-9_-]/g, '_'); fl.steps.forEach(y => { if (y.nextOk === old) y.nextOk = 'RESPOND:' + x.name; if (y.nextFail === old) y.nextFail = 'RESPOND:' + x.name; (y.cases || []).forEach(c => { if (c.then === old) c.then = 'RESPOND:' + x.name; }); }); if (fl.errorHandler === old) fl.errorHandler = 'RESPOND:' + x.name; }, { hint: used.length ? 'Answered by: ' + used.join(', ') + ' (their routes follow a rename)' : 'No step responds with it yet: set a step\'s If it succeeds / If it fails to Respond · ' + r.name }),
+        this.statusSource(f, statusFrom(r.rules), fl => R(fl).rules),
+        fld(statusFrom(r.rules) ? 'Fallback status' : 'Status', 'status_code', r.status, 'select', (fl, v) => { R(fl).status = v; }, { options: withCurrent(plain(['200', '201', '202', '204', '400', '404', '409', '422', '500', '502', '503']), String(r.status)), hint: statusFrom(r.rules) ? 'Used when the STATUS rule gives nothing (e.g. no status after a timeout or a connection error)' : 'The HTTP status the client gets with this response' }),
         fld('Description', 'description', r.description, 'area', (fl, v) => { R(fl).description = v; })
       ], mapping: { label: 'Edit response mapping · ' + r.rules.length + ' rules', go: toMap('resp:' + r.id) },
         del: { label: 'Delete response', body: `Response ${r.name} and its ${r.rules.length} rule(s) are removed; steps that respond with it go back to their default route. Nothing changes in the database until Save & reload.`, go: () => this.mut(fl => { fl.responses = fl.responses.filter(x => x.id !== r.id); this.norm(fl); return { sel: { kind: 'out' } }; }) } };
     } else if (sel.kind === 'err') {
-      insp = { kind: 'On failure', color: C.err, title: f.errorHandler || 'defaultErrorHandler', table: 'gw_flow.error_handler', fields: [
-        fld('Error handler', 'error_handler', f.errorHandler, 'select', (fl, v) => { fl.errorHandler = v; }, { options: withCurrent([{ v: '', l: 'defaultErrorHandler' }, ...plain(cat.errorHandlers.map(h => h.name).filter(n => n !== 'defaultErrorHandler'))], f.errorHandler), hint: 'New error codes are new lookup rows plus a save. No code change.' })
-      ] };
+      const er = /^RESPOND:/.test(f.errorHandler || '') ? (f.responses || []).find(x => 'RESPOND:' + x.name === f.errorHandler) : null;
+      insp = { kind: 'On failure', color: C.err, title: er ? 'Respond · ' + er.name : f.errorHandler || 'defaultErrorHandler', table: 'gw_flow.error_handler', fields: [
+        fld('Error handler', 'error_handler', f.errorHandler, 'select', (fl, v) => { fl.errorHandler = v; }, { options: withCurrent([{ v: '', l: 'defaultErrorHandler' }, ...plain(cat.errorHandlers.map(h => h.name).filter(n => n !== 'defaultErrorHandler')),
+          ...(f.responses || []).map(x => ({ v: 'RESPOND:' + x.name, l: 'Respond · ' + x.name + ' (map the error)' }))], f.errorHandler),
+          hint: er ? 'Every failure no step routes itself (a STOP step fails, a schema check fails, a mapping or handler throws) is answered by response ' + er.name + '. Its rules read $.error: type, code (e.g. GW-502-DOWNSTREAM), status (what the standard response would use), message, reason, step, details; plus $.steps.<step>.status/body of a failed call. If its rules fail, the standard error is sent.'
+            : 'New error codes are new lookup rows plus a save. No code change. Or pick Respond · <response> to map error responses like any other response (add one with + Response).' })
+      ], mapping: er ? { label: 'Edit error mapping · ' + er.rules.length + ' rules', go: toMap('resp:' + er.id) } : undefined };
     } else {
       insp = { kind: 'Flow', color: C.flow, title: f.code, table: 'gw_flow', fields: [
         fld('Code', 'code', f.code, 'text', (fl, v) => { fl.code = v.toUpperCase().replace(/[^A-Z0-9_]/g, '_'); }, { hint: 'Appears in logs and audit' }),
@@ -2481,13 +2533,13 @@ class App extends Component {
       });
     };
     if (sample) {
-      const visible = { request: sample.request || {}, steps: {}, correlationId: 'preview-correlation-id' };
+      const visible = { request: sample.request || {}, steps: {}, correlationId: 'preview-correlation-id', ...(!scopeStep && sample.error ? { error: sample.error } : {}) };
       Object.keys(sample.steps || {}).forEach(n => { const o = f.steps.find(x => x.name === n); if (!scopeStep || (o && o.order < scopeStep.order)) visible.steps[n] = sample.steps[n]; });
       flat(visible, '$', 0);
     }
     const sorted = [...f.steps].sort((a, b) => a.order - b.order);
     const scopes = [...sorted.filter(st => !isCondition(st)).map(st => ({ id: st.id, label: st.name, sub: st.order + ' ·' })), { id: 'resp', label: 'Client response', sub: '→' },
-      ...(f.responses || []).map(r => ({ id: 'resp:' + r.id, label: r.name + ' · ' + (r.status || 200), sub: '⇒' }))];
+      ...(f.responses || []).map(r => ({ id: 'resp:' + r.id, label: r.name + ' · ' + statusText(r.rules, r.status), sub: '⇒' }))];
     /** A field the client sends, typed in the CONTEXT tree: a new rule reading it, into the current scope. */
     const addField = (section, raw) => {
       const sec = ADDABLE[section]; const name = String(raw || '').trim();
@@ -2513,7 +2565,7 @@ class App extends Component {
       });
     };
     const ruleAccept = d => ['src', 'conv', 'lookup', 'fh'].includes(d.kind);
-    const types = scopeStep ? (isSql(scopeStep) || isTransform(scopeStep) ? ['BODY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes) : ['BODY', 'HEADER'];
+    const types = scopeStep ? (isSql(scopeStep) || isTransform(scopeStep) ? ['BODY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes.filter(t => t !== 'STATUS')) : ['BODY', 'HEADER', 'STATUS'];
 
     const pv = s.preview && s.preview.key === f.code + '/' + (scopeStep ? scopeStep.name : respSel ? '@' + respSel.name : '') ? s.preview : null;
     const resText = (r, i) => {
@@ -2575,10 +2627,10 @@ class App extends Component {
       note = 'Built by the server from STEP_REQUEST rules with the real converters, lookups and field handlers. This step can read ' + (sorted.filter(x => x.order < scopeStep.order).map(x => x.name).join(', ') || 'only the inbound request') + '.';
       if (scopeStep.bodyTemplate && scopeStep.method !== 'GET') note = 'The body is the step\'s body template, filled from the sample context (and ${body.…} from the BODY rules) and escaped for ' + templateKind(scopeStep.bodyTemplate).toUpperCase() + '; it is sent exactly like this. Headers, query and path come from the rules.';
     } else {
-      line = 'HTTP/1.1 ' + (respSel ? respSel.status || 200 : f.successStatus);
+      line = 'HTTP/1.1 ' + (out && out.status != null ? out.status : respSel ? respSel.status || 200 : f.successStatus);
       headers = [{ n: 'X-Correlation-Id', v: 'preview-correlation-id' }, ...(out ? Object.keys(out.headers).map(k => ({ n: k, v: out.headers[k] })) : [])];
       body = out ? pretty(out.body) : '';
-      note = 'Built by the server from FLOW_RESPONSE rules using the sample context. Error responses are built by ' + (f.errorHandler || 'defaultErrorHandler') + ' instead.';
+      note = 'Built by the server from FLOW_RESPONSE rules using the sample context. A STATUS rule sets the HTTP status (e.g. ← $.steps.<step>.status to pass the backend\'s through). A failed step gets the error response of ' + (f.errorHandler || 'defaultErrorHandler') + ', unless its next_on_failure routes to a named response (RESPOND:<name>), whose rules map the failure like this.';
     }
     const pvErrs = sampleErr ? ['sample context is not valid JSON: ' + sampleErr] : pv ? (pv.errors || []) : [];
     const sampleValue = stored !== undefined ? stored : (sample ? pretty(sample) : '');
@@ -2631,8 +2683,8 @@ class App extends Component {
             ${scopes.map(x => html`<button onClick=${() => this.setState({ scope: x.id, preview: null }, () => this.changed())} style=${`display:flex;align-items:center;gap:7px;border:1px solid ${x.id === scope ? '#17181C' : '#E4E1D8'};background:${x.id === scope ? '#17181C' : '#fff'};color:${x.id === scope ? '#fff' : '#17181C'};border-radius:7px;padding:6px 10px;cursor:pointer;font-weight:500`}><span style=${`font:10.5px ${MONO};opacity:.7`}>${x.sub}</span>${x.label}</button>`)}
           </div>
           <div style="margin-top:20px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
-            <div style="font-size:18px;font-weight:600;letter-spacing:-0.01em">${scopeStep ? (isSql(scopeStep) ? 'Parameters of ' + scopeStep.name : isTransform(scopeStep) ? 'What ' + scopeStep.name + ' builds' : isStore(scopeStep) ? 'What ' + scopeStep.name + (scopeStep.method === 'DELETE' ? ' deletes' : ' stores') : 'What ' + scopeStep.name + ' sends') : respSel ? 'What the client gets · ' + respSel.name + ' (HTTP ' + (respSel.status || 200) + ')' : 'What the client gets'}</div>
-            <div style=${`font:11.5px ${MONO};color:#9A9CA2`}>${scopeStep ? (isSql(scopeStep) ? 'STEP_REQUEST · SQL · ' + scopeStep.target + ' · ' + (sqlParams(scopeStep.sql).map(p => ':' + p).join(' ') || 'no parameters') : isTransform(scopeStep) ? 'STEP_REQUEST · TRANSFORM → $.steps.' + scopeStep.name + '.body · no call' : 'STEP_REQUEST · ' + scopeStep.method + ' ' + scopeStep.target + scopeStep.path) : respSel ? 'FLOW_RESPONSE · response_name ' + respSel.name + ' · answered when a branch routes to Respond · ' + respSel.name : 'FLOW_RESPONSE'}</div>
+            <div style="font-size:18px;font-weight:600;letter-spacing:-0.01em">${scopeStep ? (isSql(scopeStep) ? 'Parameters of ' + scopeStep.name : isTransform(scopeStep) ? 'What ' + scopeStep.name + ' builds' : isStore(scopeStep) ? 'What ' + scopeStep.name + (scopeStep.method === 'DELETE' ? ' deletes' : ' stores') : 'What ' + scopeStep.name + ' sends') : respSel ? 'What the client gets · ' + respSel.name + ' (HTTP ' + statusText(respSel.rules, respSel.status) + ')' : 'What the client gets'}</div>
+            <div style=${`font:11.5px ${MONO};color:#9A9CA2`}>${scopeStep ? (isSql(scopeStep) ? 'STEP_REQUEST · SQL · ' + scopeStep.target + ' · ' + (sqlParams(scopeStep.sql).map(p => ':' + p).join(' ') || 'no parameters') : isTransform(scopeStep) ? 'STEP_REQUEST · TRANSFORM → $.steps.' + scopeStep.name + '.body · no call' : 'STEP_REQUEST · ' + scopeStep.method + ' ' + scopeStep.target + scopeStep.path) : respSel ? 'FLOW_RESPONSE · response_name ' + respSel.name + ' · answered when ' + (f.errorHandler === 'RESPOND:' + respSel.name ? 'a failure reaches On failure (error_handler; $.error describes it) or ' : '') + 'a branch routes to Respond · ' + respSel.name : 'FLOW_RESPONSE'}</div>
           </div>
           <div style="margin-top:4px;font-size:12px;color:#6A6D75;max-width:640px;line-height:1.45">${scopeStep && isSql(scopeStep) ? html`Each rule sets one SQL parameter: target ${mono('$.id')} is bound to ${mono(':id')}. ` : ''}${scopeStep && isTransform(scopeStep) ? html`Each rule writes a field of this step's result${scopeStep.bodyTemplate ? html`; with a <b>body template</b> (Pipeline → step) the template is the result and these rules only feed its ${mono('${body.<field>}')} placeholders` : ''}. ` : ''}${scopeStep && scopeStep.bodyTemplate && !isSql(scopeStep) && !isStore(scopeStep) && !isTransform(scopeStep) ? html`This step sends its <b>body template</b> (Pipeline → step); BODY rules here only feed its ${mono('${body.<field>}')} placeholders, HEADER / QUERY / PATH rules apply as usual. ` : ''}${scopeStep && isStore(scopeStep) ? html`BODY ${mono('$.file')} ← the upload (${mono('$.request.files.<field>')}), optional BODY ${mono('$.contentType')}; a PATH rule fills a key variable ${mono('{name}')} (built-ins need none: ${(cat.storageKeyVariables || []).join(', ')}). ` : ''}Rules run top to bottom: value → default → lookup → converter → field handler → required check → write. Drop a field on a rule to replace its source, or a converter / lookup / handler to add it.</div>
 
@@ -2644,10 +2696,10 @@ class App extends Component {
               <div ...${zoneProps(z)} style="position:relative;background:#fff;border:1px solid #E4E1D8;border-radius:9px;padding:9px 10px;display:flex;flex-direction:column;gap:7px">
                 <div style="display:flex;align-items:center;gap:8px">
                   <span style=${`width:18px;text-align:right;font:11px ${MONO};color:#9A9CA2`}>${i + 1}</span>
-                  <select value=${r.type} onChange=${e => { const v = e.currentTarget.value; updRule(r.id, x => { x.type = v; if (v !== 'BODY' && x.target.startsWith('$.')) x.target = x.target.slice(2); if (v === 'BODY' && !x.target.startsWith('$')) x.target = '$.' + x.target; }); }} style=${`height:28px;border:1px solid #E4E1D8;border-radius:5px;background:#FAF9F6;font:600 10.5px ${MONO};padding:0 4px`}>
+                  <select value=${r.type} onChange=${e => { const v = e.currentTarget.value; updRule(r.id, x => { x.type = v; if (v === 'STATUS') { x.target = 'status'; return; } if (v !== 'BODY' && x.target.startsWith('$.')) x.target = x.target.slice(2); if (v === 'BODY' && !x.target.startsWith('$')) x.target = '$.' + x.target; }); }} style=${`height:28px;border:1px solid #E4E1D8;border-radius:5px;background:#FAF9F6;font:600 10.5px ${MONO};padding:0 4px`}>
                     ${withType(types, r.type).map(o => html`<option value=${o}>${o}</option>`)}
                   </select>
-                  <input class="inp" value=${r.target} onInput=${set('target')} style=${`flex:1;min-width:120px;height:28px;border:1px solid #E4E1D8;border-radius:5px;padding:0 8px;font:12px ${MONO};background:#fff`}/>
+                  <input class="inp" value=${r.type === 'STATUS' ? 'HTTP status (100-599)' : r.target} readOnly=${r.type === 'STATUS'} title=${r.type === 'STATUS' ? 'Sets the HTTP status of this response, e.g. from $.steps.<step>.status; wins over the fixed status' : ''} onInput=${set('target')} style=${`flex:1;min-width:120px;height:28px;border:1px solid #E4E1D8;border-radius:5px;padding:0 8px;font:12px ${MONO};background:${r.type === 'STATUS' ? '#FAF9F6' : '#fff'};color:${r.type === 'STATUS' ? '#6A6D75' : 'inherit'}`}/>
                   <span style="color:#ADA99E">←</span>
                   ${r.source ? html`
                     <div style=${`flex:1.25;min-width:0;height:28px;display:flex;align-items:center;gap:6px;padding:0 4px 0 9px;border-radius:5px;background:oklch(0.96 0.025 255);font:11.5px ${MONO};color:oklch(0.38 0.12 255)`}>

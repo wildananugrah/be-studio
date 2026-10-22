@@ -598,6 +598,109 @@ class FlowExecutorTest {
     }
 
     @Test
+    void statusRulePassesTheBackendStatusThrough() {
+        var flow = rows.flow("F", "POST", "/f");
+        rows.step(flow, "s", 1);
+        rows.statusRule(flow, null, "$.steps.s.status", null, null);
+        rows.responseRule(flow, "$.id", "$.steps.s.body.id");
+        downstream.on("/s", r -> new DownstreamResponse(201, Map.of(), "{\"id\":\"A1\"}"));
+
+        var result = run("POST", "/f", "{}");
+
+        assertThat(result.response().status()).isEqualTo(201);
+        assertThat(result.response().body().toString()).isEqualTo("{\"id\":\"A1\"}");
+    }
+
+    @Test
+    void aFailedStepIsMappedByANamedResponseWithTheBackendStatus() {
+        var flow = rows.flow("F", "GET", "/f");
+        rows.step(flow, "s", 1, st -> st.withNext(null, "RESPOND:failed"));
+        rows.response(flow, "failed", 502);
+        rows.statusRule(flow, "failed", "$.steps.s.status", null, null);
+        rows.responseRule(flow, "failed", "$.errorCode", "$.steps.s.body.code", null);
+        rows.responseRule(flow, "failed", "$.errorMessage", "$.steps.s.body.message", null);
+        downstream.on("/s", r -> new DownstreamResponse(404, Map.of(), "{\"code\":\"NF01\",\"message\":\"Account not found\"}"));
+
+        var result = run("GET", "/f", "");
+
+        assertThat(result.response().status()).isEqualTo(404);
+        assertThat(result.response().body().toString())
+                .isEqualTo("{\"errorCode\":\"NF01\",\"errorMessage\":\"Account not found\"}");
+    }
+
+    @Test
+    void aLookupTranslatesTheStatusAndBadValuesAreMappingErrors() {
+        var flow = rows.flow("F", "GET", "/f");
+        rows.step(flow, "s", 1, st -> st.withNext(null, "RESPOND:failed"));
+        rows.response(flow, "failed", 500);
+        rows.lookup("HTTP_STATUS", "503", "502");
+        rows.lookup("HTTP_STATUS", "*", "500");
+        rows.statusRule(flow, "failed", "$.steps.s.status", null, "HTTP_STATUS");
+        downstream.on("/s", r -> new DownstreamResponse(503, Map.of(), "{}"));
+        assertThat(run("GET", "/f", "").response().status()).isEqualTo(502);
+
+        var bad = rows.flow("B", "GET", "/b");
+        rows.statusRule(bad, null, null, "\"abc\"", null);
+        var result = run("GET", "/b", "");
+        assertThat(result.response().status()).isEqualTo(500);
+        assertThat(text(result.response(), "errorCode")).isEqualTo("GW-500-MAPPING");
+    }
+
+    @Test
+    void statusRulesAreOnlyForTheClientResponse() {
+        var flow = rows.flow("F", "POST", "/f");
+        var step = rows.step(flow, "s", 1);
+        rows.rule(flow.id(), step.id(), "STEP_REQUEST", "STATUS", "status", "$.request.body.code", null);
+        assertThatThrownBy(this::registry).isInstanceOfSatisfying(ConfigValidationException.class, e -> assertThat(e.errors())
+                .anySatisfy(m -> assertThat(m).contains("target_type STATUS is not allowed for STEP_REQUEST")));
+    }
+
+    @Test
+    void errorHandlerRespondMapsEveryUnroutedFailure() {
+        var flow = rows.flow("F", "POST", "/f", f -> f.withHandlers(null, null, "RESPOND:error"));
+        rows.step(flow, "s", 1);
+        rows.response(flow, "error", 500);
+        rows.statusRule(flow, "error", "$.error.status", null, null);
+        rows.responseRule(flow, "error", "$.result.code", "$.error.code", null);
+        rows.responseRule(flow, "error", "$.result.type", "$.error.type", null);
+        rows.responseRule(flow, "error", "$.result.failedStep", "$.error.step", null);
+        rows.responseRule(flow, "error", "$.result.backendMessage", "$.steps.s.body.message", null);
+        rows.responseRule(flow, "error", "$.traceId", "$.correlationId", null);
+        downstream.on("/s", r -> new DownstreamResponse(500, Map.of(), "{\"message\":\"core exploded\"}"));
+
+        var result = run("POST", "/f", "{}");
+
+        assertThat(result.response().status()).isEqualTo(502);
+        assertThat(result.response().body().toString()).isEqualTo("{\"result\":{\"code\":\"GW-502-DOWNSTREAM\","
+                + "\"type\":\"DOWNSTREAM_HTTP_ERROR\",\"failedStep\":\"s\",\"backendMessage\":\"core exploded\"},"
+                + "\"traceId\":\"corr-1\"}");
+    }
+
+    @Test
+    void errorResponseMapsSchemaDetailsAndFallsBackToTheStandardErrorWhenItFails() {
+        rows.schema("REQ", "{\"type\":\"object\",\"required\":[\"amount\"]}");
+        var flow = rows.flow("F", "POST", "/f", f -> f.withSchemas("REQ", null).withHandlers(null, null, "RESPOND:error"));
+        rows.response(flow, "error", 422);
+        rows.responseRule(flow, "error", "$.problems", "$.error.details", null);
+        var invalid = run("POST", "/f", "{}");
+        assertThat(invalid.response().status()).isEqualTo(422);
+        assertThat(invalid.response().body().get("problems").get(0).asString()).contains("amount");
+
+        // a STATUS rule that gives no HTTP status: the standard error is sent instead
+        rows.statusRule(flow, "error", null, "\"oops\"", null);
+        var fallback = run("POST", "/f", "{}");
+        assertThat(fallback.response().status()).isEqualTo(400);
+        assertThat(text(fallback.response(), "errorCode")).isEqualTo("GW-400-SCHEMA");
+    }
+
+    @Test
+    void errorHandlerRespondMustNameAResponse() {
+        rows.flow("F", "POST", "/f", f -> f.withHandlers(null, null, "RESPOND:nope"));
+        assertThatThrownBy(this::registry).isInstanceOfSatisfying(ConfigValidationException.class, e -> assertThat(e.errors())
+                .anySatisfy(m -> assertThat(m).contains("error_handler 'RESPOND:nope' is not a response of this flow")));
+    }
+
+    @Test
     void aBranchCanAnswerWithANamedResponseOfItsOwn() {
         var flow = rows.flow("F", "POST", "/f");
         rows.step(flow, "debit", 1, s -> s.withSuccess("${steps.debit.body.code} == '00'").withNext("notify", "reversal"));

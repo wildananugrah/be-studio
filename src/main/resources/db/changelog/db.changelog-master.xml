@@ -51,4 +51,6 @@
     <include file="changes/110-dev-demo-transform.xml" relativeToChangelogFile="true"/>
     <include file="changes/111-dev-demo-condition.xml" relativeToChangelogFile="true"/>
     <include file="changes/112-dev-demo-document-forward.xml" relativeToChangelogFile="true"/>
+    <include file="changes/113-dev-demo-status-passthrough.xml" relativeToChangelogFile="true"/>
+    <include file="changes/114-dev-demo-error-response.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>
