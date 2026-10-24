@@ -160,7 +160,17 @@ public class ConfigCompiler {
             if (!errors.isEmpty()) {
                 throw new ConfigValidationException(errors);
             }
-            return new FlowRegistry(flows, lookups, targets, Instant.now());
+            List<FlowRegistry.Application> applications = rows.applications().stream()
+                    .filter(a -> a.code() != null && !a.code().isBlank())
+                    .sorted(Comparator.comparing(ConfigRows.ApplicationRow::code))
+                    .map(a -> new FlowRegistry.Application(a.code(), a.name(), a.description())).toList();
+            Map<String, String> flowApplications = new HashMap<>();
+            rows.flows().forEach(f -> {
+                if (f.code() != null && f.applicationCode() != null) {
+                    flowApplications.put(f.code(), f.applicationCode());
+                }
+            });
+            return new FlowRegistry(flows, lookups, targets, Instant.now(), applications, flowApplications);
         }
 
         /** application.yml targets, replaced by enabled gw_target_system rows of the same code (database wins). */

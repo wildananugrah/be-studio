@@ -19,6 +19,10 @@ class OpenApiGeneratorTest {
     private final Rows rows = new Rows();
 
     private JsonNode generate() {
+        return generate(null);
+    }
+
+    private JsonNode generate(String application) {
         ConfigCompiler compiler = new ConfigCompiler(
                 new ConfigCompiler.HandlerLookup() {
                     @Override
@@ -29,12 +33,36 @@ class OpenApiGeneratorTest {
                 Map.of("CORE", new GatewayProperties.TargetSystem("http://core", 1000, 2000, Map.of(), null)),
                 UnaryOperator.identity(), Duration.ofSeconds(5), Duration.ofSeconds(2));
         FlowRegistry registry = compiler.compile(rows.build());
-        return OpenApiGenerator.generate(registry, "/api", "Test API");
+        return OpenApiGenerator.generate(registry, "/api", "Test API", application);
     }
 
     private RuleRow required(RuleRow r) {
         return new RuleRow(r.id(), r.flowId(), r.stepId(), r.phase(), r.seq(), r.targetType(), r.targetPath(),
                 r.sourcePath(), r.constantValue(), r.defaultValue(), r.converter(), r.lookupCode(), r.fieldHandler(), true);
+    }
+
+    @Test
+    void operationsAreGroupedByApplicationAndCanBeFilteredByIt() {
+        rows.application("CORE", "Core banking", "Accounts and transfers");
+        rows.application("USERS", null, null);
+        rows.application("EMPTY", "No flows", null);
+        rows.flow("ACCOUNT", "GET", "/accounts", f -> f.withApplication("CORE"));
+        rows.flow("TRANSFER", "POST", "/transfers", f -> f.withApplication("CORE"));
+        rows.flow("USER", "GET", "/users", f -> f.withApplication("USERS"));
+        rows.flow("LOOSE", "GET", "/loose");
+
+        JsonNode all = generate();
+        assertThat(all.get("tags").toString()).isEqualTo("[{\"name\":\"CORE\",\"description\":\"Core banking. Accounts and"
+                + " transfers\"},{\"name\":\"USERS\"},{\"name\":\"Flows\",\"description\":\"Endpoints configured in gw_flow\"},"
+                + "{\"name\":\"Admin\",\"description\":\"Gateway administration\"}]");
+        assertThat(all.get("paths").get("/api/transfers").get("post").get("tags").toString()).isEqualTo("[\"CORE\"]");
+        assertThat(all.get("paths").get("/api/users").get("get").get("tags").toString()).isEqualTo("[\"USERS\"]");
+        assertThat(all.get("paths").get("/api/loose").get("get").get("tags").toString()).isEqualTo("[\"Flows\"]");
+
+        JsonNode core = generate("CORE");
+        assertThat(core.get("info").get("title").asString()).isEqualTo("Test API · Core banking");
+        assertThat(core.get("paths").propertyNames()).containsExactlyInAnyOrder("/api/accounts", "/api/transfers");
+        assertThat(core.get("tags").findValuesAsString("name")).containsExactly("CORE");
     }
 
     @Test

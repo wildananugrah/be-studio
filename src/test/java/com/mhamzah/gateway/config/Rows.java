@@ -109,8 +109,14 @@ public final class Rows {
         targetHeaders.add(new TargetHeaderRow(ids.getAndIncrement(), targetCode, name, value));
     }
 
+    private final List<ConfigRows.ApplicationRow> applications = new ArrayList<>();
+
+    public void application(String code, String name, String description) {
+        applications.add(new ConfigRows.ApplicationRow(ids.getAndIncrement(), code, name, description));
+    }
+
     public ConfigRows build() {
-        return new ConfigRows(flows, steps, rules, lookups, schemas, targets, targetHeaders, List.of(), List.of(),
+        return new ConfigRows(flows, steps, rules, lookups, schemas, targets, targetHeaders, List.of(), applications,
                 responses);
     }
 }

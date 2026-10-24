@@ -10,17 +10,37 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.server.PathContainer;
 import org.springframework.web.util.pattern.PathPattern;
 
-/** Immutable snapshot of all compiled configuration. Replaced as a whole on reload. */
+/**
+ * Immutable snapshot of all compiled configuration. Replaced as a whole on reload. {@code applications} and
+ * {@code flowApplications} (flow code to application code) group the flows, e.g. in the API documentation.
+ */
 public record FlowRegistry(
         List<FlowDefinition> flows,
         Map<String, LookupTable> lookups,
         Map<String, ResolvedTarget> targetSystems,
-        Instant loadedAt) {
+        Instant loadedAt,
+        List<Application> applications,
+        Map<String, String> flowApplications) {
 
     public FlowRegistry {
         flows = List.copyOf(flows);
         lookups = Map.copyOf(lookups);
         targetSystems = Map.copyOf(targetSystems);
+        applications = applications == null ? List.of() : List.copyOf(applications);
+        flowApplications = flowApplications == null ? Map.of() : Map.copyOf(flowApplications);
+    }
+
+    public FlowRegistry(List<FlowDefinition> flows, Map<String, LookupTable> lookups,
+            Map<String, ResolvedTarget> targetSystems, Instant loadedAt) {
+        this(flows, lookups, targetSystems, loadedAt, List.of(), Map.of());
+    }
+
+    /** A {@code gw_application}: the group a flow belongs to. */
+    public record Application(String code, String name, String description) {}
+
+    /** The application code of a flow; null when it has none. */
+    public String applicationOf(FlowDefinition flow) {
+        return flowApplications.get(flow.code());
     }
 
     public record RouteMatch(FlowDefinition flow, Map<String, String> pathVariables) {}
