@@ -468,7 +468,10 @@ class GatewayIntegrationTest {
 
         assertThat(page.statusCode()).isEqualTo(200);
         assertThat(page.headers().firstValue("Content-Type").orElse("")).startsWith("text/html");
-        assertThat(page.body()).contains("/webjars/swagger-ui/swagger-ui-bundle.js").contains("/docs/openapi.json");
+        assertThat(page.body()).contains("/webjars/swagger-ui/swagger-ui-bundle.js").contains("/docs/openapi.json")
+                .contains("swagger-ui-standalone-preset.js", "\"name\":\"All applications\"",
+                        "/docs/openapi.json?application=CORE_BANKING_API");
+        assertThat(get("/webjars/swagger-ui/swagger-ui-standalone-preset.js").statusCode()).isEqualTo(200);
         assertThat(get("/webjars/swagger-ui/swagger-ui-bundle.js").statusCode()).isEqualTo(200);
         assertThat(get("/webjars/swagger-ui/swagger-ui.css").statusCode()).isEqualTo(200);
     }
@@ -483,6 +486,13 @@ class GatewayIntegrationTest {
         assertThat(doc.get("paths").has("/api/v1/accounts/{accountNo}")).isTrue();
         assertThat(doc.get("paths").get("/api/v1/transfers").has("post")).isTrue();
         assertThat(doc.get("paths").has("/api/it/docs")).isFalse();
+        assertThat(doc.get("paths").get("/api/v1/transfers").get("post").get("tags").toString()).isEqualTo("[\"CORE_BANKING_API\"]");
+
+        JsonNode core = MAPPER.readTree(get("/docs/openapi.json?application=CORE_BANKING_API").body());
+        assertThat(core.get("paths").has("/api/v1/transfers")).isTrue();
+        assertThat(core.get("paths").has("/api/v1/users")).as("USER_SERVICE flows are left out").isFalse();
+        assertThat(core.get("paths").has("/admin/config/reload")).isFalse();
+        assertThat(get("/docs/openapi.json?application=NOPE").statusCode()).isEqualTo(404);
 
         insertConstantFlow("IT_DOCS", "/it/docs", "INHERIT");
         try {

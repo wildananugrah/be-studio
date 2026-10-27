@@ -15,6 +15,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.springframework.http.HttpMethod;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ArrayNode;
@@ -42,17 +44,54 @@ public final class OpenApiGenerator {
     private OpenApiGenerator() {}
 
     public static ObjectNode generate(FlowRegistry registry, String apiBasePath, String title) {
+        return generate(registry, apiBasePath, title, null);
+    }
+
+    /** Tag name of flows that belong to no application. */
+    static final String NO_APPLICATION = "Flows";
+
+    /**
+     * The OpenAPI description. Operations are tagged with their application ({@code gw_application.code}), so Swagger
+     * UI shows one section per application. {@code application}: only that application's flows (null: all, plus the
+     * admin endpoint).
+     */
+    public static ObjectNode generate(FlowRegistry registry, String apiBasePath, String title, String application) {
         ObjectNode doc = F.objectNode();
         doc.put("openapi", "3.1.0");
         ObjectNode info = doc.putObject("info");
-        info.put("title", title);
+        FlowRegistry.Application app = application == null ? null : registry.applications().stream()
+                .filter(a -> a.code().equals(application)).findFirst().orElse(null);
+        info.put("title", app == null ? title
+                : title + " · " + (app.name() == null || app.name().isBlank() ? app.code() : app.name()));
         info.put("version", registry.loadedAt().toString());
         info.put("description", "Generated from the flow configuration loaded at " + registry.loadedAt()
                 + ". Every enabled flow is listed; reload the configuration (POST /admin/config/reload) to refresh."
                 + " Error responses use the default format unless the flow has a custom error_handler.");
+        List<FlowDefinition> flows = registry.flows().stream()
+                .filter(f -> application == null || application.equals(registry.applicationOf(f))).toList();
+        // one tag per application that has flows here, in application order; flows without one under "Flows"
+        Set<String> known = registry.applications().stream().map(FlowRegistry.Application::code)
+                .collect(Collectors.toSet());
+        Function<FlowDefinition, String> tagOf = f -> {
+            String code = registry.applicationOf(f);
+            return code != null && known.contains(code) ? code : NO_APPLICATION;
+        };
+        Set<String> used = flows.stream().map(tagOf).collect(Collectors.toSet());
         ArrayNode tags = doc.putArray("tags");
-        tags.addObject().put("name", "Flows").put("description", "Endpoints configured in gw_flow");
-        tags.addObject().put("name", "Admin").put("description", "Gateway administration");
+        registry.applications().stream().filter(a -> used.contains(a.code())).forEach(a -> {
+            String name = a.name() == null || a.name().isBlank() ? null : a.name();
+            String desc = a.description() == null || a.description().isBlank() ? null : a.description();
+            ObjectNode tag = tags.addObject().put("name", a.code());
+            if (name != null || desc != null) {
+                tag.put("description", name == null ? desc : desc == null ? name : name + ". " + desc);
+            }
+        });
+        if (used.contains(NO_APPLICATION)) {
+            tags.addObject().put("name", NO_APPLICATION).put("description", "Endpoints configured in gw_flow");
+        }
+        if (application == null) {
+            tags.addObject().put("name", "Admin").put("description", "Gateway administration");
+        }
 
         ObjectNode paths = doc.putObject("paths");
         ObjectNode components = doc.putObject("components");
@@ -60,25 +99,27 @@ public final class OpenApiGenerator {
         schemas.set("ErrorResponse", errorResponseSchema());
 
         String base = apiBasePath.endsWith("/") ? apiBasePath.substring(0, apiBasePath.length() - 1) : apiBasePath;
-        registry.flows().stream()
+        flows.stream()
                 .sorted(Comparator.comparing((FlowDefinition f) -> f.pathPattern().getPatternString())
                         .thenComparing(f -> f.method().name()))
                 .forEach(flow -> {
                     Template template = template(flow.pathPattern().getPatternString());
                     ObjectNode item = paths.has(base + template.path)
                             ? (ObjectNode) paths.get(base + template.path) : paths.putObject(base + template.path);
-                    item.set(flow.method().name().toLowerCase(Locale.ROOT), operation(flow, template, schemas));
+                    item.set(flow.method().name().toLowerCase(Locale.ROOT), operation(flow, template, schemas, tagOf.apply(flow)));
                 });
 
-        paths.set("/admin/config/reload", adminReload());
+        if (application == null) {
+            paths.set("/admin/config/reload", adminReload());
+        }
         ObjectNode adminToken = components.putObject("securitySchemes").putObject("adminToken");
         adminToken.put("type", "apiKey").put("in", "header").put("name", "X-Admin-Token");
         return doc;
     }
 
-    private static ObjectNode operation(FlowDefinition flow, Template template, ObjectNode schemas) {
+    private static ObjectNode operation(FlowDefinition flow, Template template, ObjectNode schemas, String tag) {
         ObjectNode op = F.objectNode();
-        op.putArray("tags").add("Flows");
+        op.putArray("tags").add(tag);
         op.put("operationId", flow.code());
         op.put("summary", flow.code());
         op.put("description", "Flow `" + flow.code() + "`, timeout " + flow.timeout().toMillis() + " ms.");
