@@ -484,34 +484,139 @@ const routeTag = st => {
   if (!st.nextOk && !st.nextFail) return html`<span style=${`color:${st.onFailure === 'CONTINUE' ? C.out : '#9A9CA2'}`}>${st.onFailure}</span>`;
   return html`<span style="display:flex;gap:7px;white-space:nowrap">${st.nextOk && html`<span style=${`color:${OK_C}`}>✓ ${routeLabel(st.nextOk)}</span>`}${html`<span style=${`color:${FAIL_C}`}>✗ ${routeLabel(st.nextFail || st.onFailure)}</span>`}</span>`;
 };
-/** Draws the jumps of a flow as arcs over the pipeline row: success above the cards, failure below. */
+/**
+ * Orthogonal route from {@code s} (leaving in direction {@code sd}) to {@code t} (entered against {@code td}) that never
+ * crosses a rectangle of {@code rects}: A* over the grid of the rectangles' edges, each bend costing extra, edges already
+ * used by other arrows costing more (so parallel arrows spread out). Returns the corner points, or null.
+ */
+const orthoRoute = (rects, s, sd, t, td, used, stub = 10) => {
+  const M = 8;
+  const s0 = { x: s.x + sd[0] * stub, y: s.y + sd[1] * stub }, t0 = { x: t.x + td[0] * 10, y: t.y + td[1] * 10 };
+  const inside = (x, y, m) => rects.some(r => x > r.l - m && x < r.r + m && y > r.t - m && y < r.b + m);
+  const hits = (a, b) => rects.some(r => {
+    const m = M - 2;
+    if (a.y === b.y) return a.y > r.t - m && a.y < r.b + m && Math.max(a.x, b.x) > r.l - m && Math.min(a.x, b.x) < r.r + m;
+    return a.x > r.l - m && a.x < r.r + m && Math.max(a.y, b.y) > r.t - m && Math.min(a.y, b.y) < r.b + m;
+  });
+  const top = Math.min(...rects.map(r => r.t), s.y, t.y) - 26, bottom = Math.max(...rects.map(r => r.b), s.y, t.y) + 26;
+  const xs = [...new Set([s0.x, t0.x, ...rects.flatMap(r => [r.l - M, r.r + M])].map(Math.round))].sort((a, b) => a - b);
+  const ys = [...new Set([s0.y, t0.y, top, bottom, ...rects.flatMap(r => [r.t - M, r.b + M])].map(Math.round))].sort((a, b) => a - b);
+  const W = xs.length, key = (i, j) => j * W + i;
+  const si = xs.indexOf(Math.round(s0.x)), sj = ys.indexOf(Math.round(s0.y)), ti = xs.indexOf(Math.round(t0.x)), tj = ys.indexOf(Math.round(t0.y));
+  // state: node + direction it was entered (0..3), so bends can be charged
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const dist = new Map(), prev = new Map(), open = [];
+  const startDir = DIRS.findIndex(d => d[0] === sd[0] && d[1] === sd[1]);
+  const sk = key(si, sj) * 4 + startDir; dist.set(sk, 0); open.push([Math.abs(xs[ti] - xs[si]) + Math.abs(ys[tj] - ys[sj]), 0, si, sj, startDir]);
+  let goal = null;
+  while (open.length) {
+    let bi = 0; for (let n = 1; n < open.length; n++) if (open[n][0] < open[bi][0]) bi = n;
+    const [, g, i, j, d] = open.splice(bi, 1)[0];
+    const ck = key(i, j) * 4 + d; if (g > dist.get(ck)) continue;
+    if (i === ti && j === tj) { goal = ck; break; }
+    DIRS.forEach(([dx, dy], nd) => {
+      const ni = i + dx, nj = j + dy; if (ni < 0 || nj < 0 || ni >= W || nj >= ys.length) return;
+      const a = { x: xs[i], y: ys[j] }, b = { x: xs[ni], y: ys[nj] };
+      if (!(ni === ti && nj === tj) && inside(b.x, b.y, M - 1)) return;
+      if (hits(a, b)) return;
+      const ek = Math.min(key(i, j), key(ni, nj)) + ':' + Math.max(key(i, j), key(ni, nj));
+      const ng = g + Math.abs(b.x - a.x) + Math.abs(b.y - a.y) + (nd !== d ? 30 : 0) + (used.has(ek) ? 40 : 0);
+      const nk = key(ni, nj) * 4 + nd;
+      if (!dist.has(nk) || ng < dist.get(nk)) { dist.set(nk, ng); prev.set(nk, ck); open.push([ng + Math.abs(xs[ti] - b.x) + Math.abs(ys[tj] - b.y), ng, ni, nj, nd]); }
+    });
+  }
+  if (goal === null) return null;
+  const pts = []; let c = goal;
+  while (c !== undefined) { const n = Math.floor(c / 4); pts.unshift({ x: xs[n % W], y: ys[Math.floor(n / W)] }); const p = prev.get(c); if (p !== undefined) used.add(Math.min(n, Math.floor(p / 4)) + ':' + Math.max(n, Math.floor(p / 4))); c = p; }
+  const all = [s, ...pts, t];
+  return all.filter((p, n) => n === 0 || n === all.length - 1 || !((all[n - 1].x === p.x && p.x === all[n + 1].x) || (all[n - 1].y === p.y && p.y === all[n + 1].y)));
+};
+/** SVG path through corner points with rounded corners. */
+const roundedPath = (pts, r = 7) => {
+  let d = `M${pts[0].x},${pts[0].y}`;
+  for (let n = 1; n < pts.length - 1; n++) {
+    const a = pts[n - 1], p = pts[n], b = pts[n + 1];
+    const la = Math.hypot(p.x - a.x, p.y - a.y), lb = Math.hypot(b.x - p.x, b.y - p.y), k = Math.min(r, la / 2, lb / 2);
+    d += ` L${p.x - (p.x - a.x) / la * k},${p.y - (p.y - a.y) / la * k} Q${p.x},${p.y} ${p.x + (b.x - p.x) / lb * k},${p.y + (b.y - p.y) / lb * k}`;
+  }
+  const z = pts[pts.length - 1]; return d + ` L${z.x},${z.y}`;
+};
+/** Draws the jumps of a flow as elbow arrows around the cards: success leaves a card's top, failure its bottom. */
 const drawRoutes = (svg, f) => {
   const box = svg.parentElement; if (!box) return;
   const b = box.getBoundingClientRect();
+  const rel = el => { const r = el.getBoundingClientRect(); return { l: Math.round(r.left - b.left), r: Math.round(r.right - b.left), t: Math.round(r.top - b.top), b: Math.round(r.bottom - b.top), el }; };
+  const rects = [...box.querySelectorAll('[data-step],[data-node],[data-resp],[data-ob]')].map(rel);
   const card = name => box.querySelector(name === 'END' ? '[data-node="out"]' : name.startsWith('RESPOND:') ? `[data-resp="${CSS.escape(name.slice(8))}"]` : `[data-step="${CSS.escape(name)}"]`);
-  const at = (el, side) => { const r = el.getBoundingClientRect(); return { x: r.left - b.left + r.width / 2, y: (side === 'top' ? r.top : r.bottom) - b.top, w: r.width }; };
+  const used = new Set(); const esc = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   let out = '';
-  const arc = (from, to, ok, label, k, isCase) => {
-    const side = ok ? 'top' : 'bottom'; const s = at(from, side), t = at(to, side); const dir = ok ? -1 : 1;
-    const sx = s.x + (ok ? 16 : -16) + k * 6, tx = t.x - t.w / 2 + 18 + k * 6, lift = 34 + k * 15;
-    const ys = s.y, yt = t.y, peak = (ok ? Math.min(ys, yt) : Math.max(ys, yt)) + dir * lift;
-    const c = isCase ? C.cond : ok ? OK_C : FAIL_C;
-    const esc = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    out += `<path d="M${sx},${ys} C${sx},${peak} ${tx},${peak} ${tx},${yt}" fill="none" stroke="${c}" stroke-width="1.6" stroke-dasharray="${ok ? '' : '5 3'}" marker-end="url(#arr-${isCase ? 'case' : ok ? 'ok' : 'fail'})"/>`;
-    out += `<text x="${(sx + tx) / 2}" y="${peak + (ok ? -4 : 12)}" text-anchor="middle" font-size="10.5" font-family="${MONO.replace(/"/g, '')}" fill="${c}">${isCase ? '◆' : ok ? '✓' : '✗'} ${esc(label)}</text>`;
+  const arrow = (from, to, ok, label, k, isCase) => {
+    const S = rel(from), T = rel(to);
+    // leave by the top (success) or bottom (failure), else by a side when a card sits right against that edge
+    const sources = [
+      [{ x: Math.round(ok ? S.r - 24 - k * 8 : S.l + 24 + k * 8), y: ok ? S.t : S.b }, [0, ok ? -1 : 1], 0],
+      [{ x: S.r, y: Math.round(S.t + (ok ? 18 : S.b - S.t - 18) + k * 10) }, [1, 0], 0],
+      [{ x: S.l, y: Math.round(S.t + (ok ? 18 : S.b - S.t - 18) + k * 10) }, [-1, 0], 90]];
+    // enter the target from its left, top or bottom
+    const targets = [
+      [{ x: T.l, y: Math.round(T.t + 18 + k * 12) }, [-1, 0]],
+      [{ x: Math.round(T.l + 26 + k * 8), y: T.t }, [0, -1]],
+      [{ x: Math.round(T.l + 26 + k * 8), y: T.b }, [0, 1]]];
+    let best = null;
+    sources.forEach(([s, sd, extra]) => targets.forEach(([t, td]) => {
+      // every card is an obstacle, source and target included: the stubs at the ports start outside their margins;
+      // each arrow's stub has its own length, so arrows leaving through the same gap take separate lanes
+      const trial = new Set(used); const pts = orthoRoute(rects, s, sd, t, td, trial, 10 + k * 5);
+      if (!pts) return;
+      const len = pts.reduce((a, p, n) => a + (n ? Math.abs(p.x - pts[n - 1].x) + Math.abs(p.y - pts[n - 1].y) : 0), 0) + pts.length * 30 + extra;
+      if (!best || len < best.len) best = { pts, len, trial };
+    }));
+    if (!best) return;
+    best.trial.forEach(e => used.add(e));
+    const c = isCase ? C.cond : ok ? OK_C : FAIL_C; const pts = best.pts;
+    out += `<path d="${roundedPath(pts)}" fill="none" stroke="${c}" stroke-width="1.6" stroke-dasharray="${ok ? '' : '5 3'}" stroke-linejoin="round" marker-end="url(#arr-${isCase ? 'case' : ok ? 'ok' : 'fail'})"/>`;
+    drawn.push({ pts, c, ok, text: (isCase ? '◆' : ok ? '✓' : '✗') + ' ' + label });
   };
+  /**
+   * Labels go last, where they cover no card, no line and no other label: along a horizontal leg (longest first, above
+   * or below it), else beside a vertical leg or next to where the arrow leaves its card. When nothing is free the label
+   * is left out (the step card shows its routes too).
+   */
+  const placeLabels = () => {
+    const taken = drawn.flatMap(d => d.pts.slice(1).map((z, n) => { const a = d.pts[n];
+      return { l: Math.min(a.x, z.x) - 2, r: Math.max(a.x, z.x) + 2, t: Math.min(a.y, z.y) - 2, b: Math.max(a.y, z.y) + 2 }; }));
+    drawn.forEach(({ pts, c, ok, text }) => {
+      const w = text.length * 6.4 + 6, h = 13;
+      const box = (x, y) => ({ l: x - w / 2, r: x + w / 2, t: y - h + 3, b: y + 3 });
+      const free = (x, y) => { const r = box(x, y); return ![...rects, ...taken].some(o => r.l < o.r && r.r > o.l && r.t < o.b && r.b > o.t); };
+      const legs = pts.slice(1).map((z, n) => [pts[n], z]).filter(([a, z]) => Math.abs(z.x - a.x) + Math.abs(z.y - a.y) > 20);
+      const spots = [];
+      legs.filter(([a, z]) => a.y === z.y).sort((p1, p2) => Math.abs(p2[1].x - p2[0].x) - Math.abs(p1[1].x - p1[0].x)).forEach(([a, z]) => {
+        const mid = (a.x + z.x) / 2, half = Math.max(0, (Math.abs(z.x - a.x) - w) / 2);
+        [0, -half, half].forEach(dx => [a.y - 5, a.y + 13].forEach(y => spots.push([mid + dx, y])));
+      });
+      legs.filter(([a, z]) => a.x === z.x).forEach(([a, z]) => [a.x + w / 2 + 5, a.x - w / 2 - 5].forEach(x => spots.push([x, (a.y + z.y) / 2 + 4])));
+      [[0, ok ? -6 : 14], [0, ok ? -20 : 28], [w / 2 + 6, 4], [-w / 2 - 6, 4]].forEach(([dx, dy]) => spots.push([pts[1].x + dx, pts[1].y + dy]));
+      const spot = spots.find(([x, y]) => free(x, y));
+      if (!spot) return;
+      taken.push(box(spot[0], spot[1]));
+      out += `<text x="${spot[0]}" y="${spot[1]}" text-anchor="middle" font-size="10.5" font-family="${MONO.replace(/"/g, '')}" fill="${c}" paint-order="stroke" stroke="#F4F3EF" stroke-width="3">${esc(text)}</text>`;
+    });
+  };
+  const drawn = [];
   let k = 0;
   f.steps.forEach(st => {
     const from = box.querySelector(`[data-step="${CSS.escape(st.name)}"]`); if (!from) return;
     [[st.nextOk, true], [st.nextFail, false]].forEach(([to, ok]) => {
       if (!to || to === 'FAIL') return; const el = card(to); if (!el) return;
-      arc(from, el, ok, to === 'END' ? 'END' : (isCondition(st) ? 'otherwise' : st.name) + via(to), k++ % 4);
+      arrow(from, el, ok, to === 'END' ? 'END' : (isCondition(st) ? 'otherwise' : st.name) + via(to), k++ % 3);
     });
     (isCondition(st) ? st.cases : []).forEach((c, n) => {
       if (!c.then || c.then === 'FAIL') return; const el = card(c.then); if (!el) return;
-      arc(from, el, true, (c.label || 'case ' + (n + 1)) + via(c.then), k++ % 4, true);
+      arrow(from, el, true, (c.label || 'case ' + (n + 1)) + via(c.then), k++ % 3, true);
     });
   });
+  placeLabels();
   svg.setAttribute('width', box.scrollWidth); svg.setAttribute('height', box.scrollHeight);
   svg.innerHTML = `<defs><marker id="arr-ok" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="${OK_C}"/></marker><marker id="arr-fail" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="${FAIL_C}"/></marker><marker id="arr-case" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="${C.cond}"/></marker></defs>` + out;
 };
@@ -639,7 +744,7 @@ class App extends Component {
       this.histIndex = e.state && typeof e.state.i === 'number' ? e.state.i : 0;
       const next = this.stateOfRoute(location.hash) || { screen: 'flows' };
       this.restoring = true;
-      this.setState({ ...next, appModal: null, confirm: null }, () => { this.restoring = false; this.changed(); });
+      this.setState({ ...next, appModal: null, specModal: null, confirm: null }, () => { this.restoring = false; this.changed(); });
     });
     document.addEventListener('keydown', e => {
       if (this.state.confirm) { // modal: Esc cancels, Enter confirms, Tab stays between its two buttons
@@ -954,6 +1059,7 @@ class App extends Component {
         ${s.toast && this.renderToast()}
         ${s.confirm && this.renderConfirm()}
         ${s.appModal && this.renderAppModal()}
+        ${s.specModal && this.renderSpecModal()}
         ${s.catalog.assistantEnabled && s.assistant && s.assistant.open && this.renderAssistant()}
       </div>`;
   }
@@ -1186,7 +1292,7 @@ class App extends Component {
             <span class="ro-hide" style="display:flex;gap:8px">${small('+ New application', () => this.openAppModal('new'))}${small('Import application…', pickFile, false, 'Load a JSON export as unsaved changes')}</span>
             <span style="flex:1"></span>
             <span title="One document for every live endpoint, built from the API description (Swagger)">API specification of all endpoints</span>
-            ${['docx:Word', 'pdf:PDF', 'md:Markdown'].map(x => { const [fmt, label] = x.split(':'); return small(label, () => this.downloadSpec(null, fmt), dirty, dirty ? 'Save & reload first: the spec comes from the live configuration' : ''); })}
+            ${['docx:Word', 'pdf:PDF', 'md:Markdown'].map(x => { const [fmt, label] = x.split(':'); return small(label, () => this.openSpecModal(fmt), dirty, dirty ? 'Save & reload first: the spec comes from the live configuration' : 'Choose the applications and endpoints, then generate'); })}
           </div>
           ${sections.map(({ app, flows }) => html`
           <div style="margin-top:18px;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:auto">
@@ -1948,14 +2054,14 @@ class App extends Component {
 
               <div style=${`position:relative;display:flex;align-items:flex-start;${f.steps.some(x => x.nextOk || x.nextFail) ? 'padding:44px 0 56px' : ''}`}>
                 <svg ref=${el => el && requestAnimationFrame(() => drawRoutes(el, f))} aria-hidden="true" style="position:absolute;left:0;top:0;pointer-events:none;overflow:visible;z-index:2"></svg>
-                <div onClick=${select({ kind: 'in' })} title="Method and path" style="width:156px;flex:none;padding:12px 13px;border-radius:9px;background:#17181C;color:#F4F3EF;cursor:pointer">
+                <div data-ob="1" onClick=${select({ kind: 'in' })} title="Method and path" style="width:156px;flex:none;padding:12px 13px;border-radius:9px;background:#17181C;color:#F4F3EF;cursor:pointer">
                   <div style=${`font:600 10px ${MONO};letter-spacing:.08em;color:#8E9097`}>CLIENT REQUEST</div>
                   <div style=${`margin-top:8px;font:600 12px ${MONO};color:oklch(0.75 0.14 50)`}>${f.method}</div>
                   <div style=${`margin-top:2px;font:11.5px/1.4 ${MONO};word-break:break-all`}>${cat.apiBasePath}${f.path}</div>
                 </div>
                 ${connector}
 
-                <div onClick=${select({ kind: 'in' })} ...${zoneProps(inZone)} style=${card(sel.kind === 'in', 'width:206px')}>
+                <div data-ob="1" onClick=${select({ kind: 'in' })} ...${zoneProps(inZone)} style=${card(sel.kind === 'in', 'width:206px')}>
                   <div style="display:flex;align-items:center;gap:7px"><span style=${`width:7px;height:7px;border-radius:2px;background:${C.in}`}></span><span style="font-weight:600">Inbound</span></div>
                   <div style="margin-top:4px;font-size:11.5px;color:#6A6D75;line-height:1.4">Runs before any downstream call</div>
                   ${inChips.length > 0 ? html`<div style="margin-top:10px;display:flex;flex-direction:column;gap:4px">${inChips.map(chipView)}</div>`
@@ -1973,7 +2079,7 @@ class App extends Component {
                       </div>`}
                     <div ...${zoneProps(g.zone)} style="position:relative;width:240px;flex:none;display:flex;flex-direction:column;gap:8px">
                       <div style=${`display:flex;justify-content:space-between;align-items:center;height:16px;margin-top:-22px;font:600 10px ${MONO};letter-spacing:.06em;text-transform:uppercase;color:#6A6D75;padding:0 2px`}>
-                        <span>step_order ${g.order}</span>
+                        <span data-ob="1">step_order ${g.order}</span>
                         ${g.steps.length > 1 && html`<span style="color:oklch(0.55 0.16 42)">parallel · ${g.steps.length}</span>`}
                       </div>
                       ${g.steps.map(x => html`
@@ -2022,10 +2128,10 @@ class App extends Component {
                     <div style=${`margin-top:4px;font:11px ${MONO};color:#6A6D75`}>${r.rules.length} FLOW_RESPONSE rules · ${f.errorHandler === 'RESPOND:' + r.name ? 'answers every failure' : f.steps.some(x => x.nextOk === 'RESPOND:' + r.name || x.nextFail === 'RESPOND:' + r.name || (x.cases || []).some(c => c.then === 'RESPOND:' + r.name)) ? 'answered by a branch' : 'no step responds with it'}</div>
                     <button class="btn-line" onClick=${toMap('resp:' + r.id)} style="margin-top:9px;width:100%;border:1px solid #E4E1D8;background:#FAF9F6;border-radius:6px;padding:6px 8px;cursor:pointer;font-size:12px;font-weight:500;text-align:left;display:flex;justify-content:space-between">Edit response mapping<span>→</span></button>
                   </div>`)}
-                <button class="btn-line ro-hide" title="Another response a branch can answer with (its own status and mapping)" onClick=${e => { e.stopPropagation(); this.mut(fl => { fl.responses = fl.responses || []; let k = 1; while (fl.responses.some(x => x.name === 'response' + k)) k++; const r = { id: uid('o'), name: 'response' + k, status: '200', description: '', rules: [] }; fl.responses.push(r); return { sel: { kind: 'resp', id: r.id } }; }); }} style="width:216px;border:1.5px dashed #C9C6BC;background:transparent;border-radius:9px;padding:8px;cursor:pointer;font-size:12px;color:#6A6D75">+ Response</button>
+                <button data-ob="1" class="btn-line ro-hide" title="Another response a branch can answer with (its own status and mapping)" onClick=${e => { e.stopPropagation(); this.mut(fl => { fl.responses = fl.responses || []; let k = 1; while (fl.responses.some(x => x.name === 'response' + k)) k++; const r = { id: uid('o'), name: 'response' + k, status: '200', description: '', rules: [] }; fl.responses.push(r); return { sel: { kind: 'resp', id: r.id } }; }); }} style="width:216px;border:1.5px dashed #C9C6BC;background:transparent;border-radius:9px;padding:8px;cursor:pointer;font-size:12px;color:#6A6D75">+ Response</button>
                 </div>
                 ${connector}
-                <div style="width:120px;flex:none;padding:12px 13px;border-radius:9px;background:#17181C;color:#F4F3EF">
+                <div data-ob="1" style="width:120px;flex:none;padding:12px 13px;border-radius:9px;background:#17181C;color:#F4F3EF">
                   <div style=${`font:600 10px ${MONO};letter-spacing:.08em;color:#8E9097`}>CLIENT</div>
                   <div style=${`margin-top:8px;font:600 20px ${MONO};color:oklch(0.78 0.12 160)`}>${f.successStatus}</div>
                   <div style=${`margin-top:2px;font:11px ${MONO};color:#8E9097`}>+ X-Correlation-Id</div>
@@ -2922,14 +3028,147 @@ class App extends Component {
     if (err) this.setTests(f, x => { x.error = err; });
   }
 
-  /** The API specification (from the live API description) of one flow, or of all flows when code is null. */
-  async downloadSpec(code, format) {
-    const err = await this.download('api/tests/spec?format=' + format + (code ? '&flow=' + encodeURIComponent(code) : ''), 'api-spec.' + format);
+  /** The API specification (from the live API description) of the given flows, or of all flows when codes is empty. */
+  async downloadSpec(codes, format) {
+    const key = codes.join(',') + ':' + format;
+    if (this.state.specBusy) return;
+    this.setState({ specBusy: key });
+    try {
+      const qs = codes.length ? '&flows=' + codes.map(encodeURIComponent).join(',') : '';
+      return await this.download('api/tests/spec?format=' + format + qs, 'api-spec.' + format);
+    } catch (e) {
+      return 'Could not reach the gateway: ' + e.message;
+    } finally {
+      this.setState({ specBusy: null });
+    }
+  }
+
+  async downloadFlowSpec(code, format) {
+    const err = await this.downloadSpec([code], format);
     if (err) this.setState({ toast: { status: 'API spec', color: 'oklch(0.72 0.15 25)', body: err, note: 'The specification is built from the live (saved) configuration.' } });
+  }
+
+  /** The specification dialog: which applications and endpoints go into the document, and in which format. */
+  openSpecModal(format) {
+    const picked = {};
+    this.state.cfg.flows.forEach(f => { if (f.enabled) picked[f.code] = true; });
+    this.setState({ specModal: { format, picked, order: this.specOrder(), error: '' } });
+  }
+
+  /** The default order of the document: applications by code, their endpoints by path, then method. */
+  specOrder() {
+    const byPath = (a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method);
+    return this.appSections().filter(sec => sec.flows.length)
+      .map(sec => ({ code: sec.app.code, flows: sec.flows.map(x => x.f).sort(byPath).map(f => f.code) }));
+  }
+
+  async generateSpec() {
+    const m = this.state.specModal; const enabled = new Set(this.state.cfg.flows.filter(f => f.enabled).map(f => f.code));
+    // in the order shown: the document follows it
+    const codes = m.order.flatMap(g => g.flows).filter(c => enabled.has(c) && m.picked[c]);
+    if (!codes.length) { this.setState({ specModal: { ...m, error: 'Choose at least one endpoint.' } }); return; }
+    const err = await this.downloadSpec(codes, m.format);
+    if (!this.state.specModal) return;
+    if (err) this.setState({ specModal: { ...this.state.specModal, error: err } });
+    else this.setState({ specModal: null });
+  }
+
+  renderSpecModal() {
+    const s = this.state; const m = s.specModal; const busy = !!s.specBusy; const base = s.catalog.apiBasePath;
+    const set = patch => this.setState({ specModal: { ...m, ...patch, error: '' } });
+    const pick = (codes, on) => { const p = { ...m.picked }; codes.forEach(c => { if (on) p[c] = true; else delete p[c]; }); set({ picked: p }); };
+    const close = () => { if (!busy) this.setState({ specModal: null }); };
+    const byCode = {}; s.cfg.flows.forEach(f => { byCode[f.code] = f; });
+    const appsByCode = {}; this.appSections().forEach(sec => { appsByCode[sec.app.code] = sec.app; });
+    const live = s.cfg.flows.filter(f => f.enabled);
+    const chosen = live.filter(f => m.picked[f.code]).length;
+    const FORMATS = [['docx', 'Word'], ['pdf', 'PDF'], ['md', 'Markdown']];
+    const label = (FORMATS.find(x => x[0] === m.format) || FORMATS[0])[1];
+    const box = (checked, mixed, onChange, disabled) => html`<input type="checkbox" class="ro-ok" checked=${checked} disabled=${disabled || busy}
+      ref=${el => { if (el) el.indeterminate = mixed; }} onChange=${onChange} onClick=${e => e.stopPropagation()} style="margin:0;flex:none;accent-color:#17181C;cursor:pointer"/>`;
+    const link = (text, go) => html`<button class="ro-ok" disabled=${busy} onClick=${go} style="border:0;background:none;padding:0;color:oklch(0.55 0.16 42);cursor:pointer;font-size:12px">${text}</button>`;
+    // reordering: drag a row by its handle, or ↑ / ↓; applications among applications, endpoints within theirs
+    const mv = (arr, i, j) => { const a = [...arr]; const [x] = a.splice(i, 1); a.splice(j, 0, x); return a; };
+    const moveApp = (i, j) => { if (j >= 0 && j < m.order.length && i !== j) set({ order: mv(m.order, i, j) }); };
+    const moveFlow = (g, i, j) => { const fl = m.order[g].flows; if (j >= 0 && j < fl.length && i !== j) set({ order: m.order.map((x, k) => (k === g ? { ...x, flows: mv(fl, i, j) } : x)) }); };
+    const drag = this.specDrag || (this.specDrag = {});
+    const dnd = (kind, g, i) => ({
+      draggable: !busy,
+      onDragStart: e => { drag.cur = { kind, g, i }; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', kind); },
+      onDragOver: e => { const d = drag.cur; if (d && d.kind === kind && (kind === 'app' || d.g === g)) e.preventDefault(); },
+      onDrop: e => { const d = drag.cur; drag.cur = null; if (!d || d.kind !== kind) return; e.preventDefault(); if (kind === 'app') moveApp(d.i, g); else if (d.g === g) moveFlow(g, d.i, i); },
+      onDragEnd: () => { drag.cur = null; },
+    });
+    const handle = html`<span title="Drag to reorder" style="flex:none;color:#B5B2A8;cursor:grab;font-size:13px;line-height:1;user-select:none">⠿</span>`;
+    const arrows = (up, down, first, last) => html`<span style="display:flex;gap:2px;flex:none">${[['↑', up, first, 'Move up'], ['↓', down, last, 'Move down']].map(([t, go, off, tip]) => html`
+      <button class="btn-line ro-ok" title=${tip} disabled=${busy || off} onClick=${e => { e.preventDefault(); e.stopPropagation(); go(); }}
+        style="width:22px;height:20px;padding:0;border:1px solid #E4E1D8;background:#fff;border-radius:5px;cursor:pointer;font-size:11px;line-height:1">${t}</button>`)}</span>`;
+    return html`
+      <div onClick=${close} style="position:fixed;inset:0;z-index:50;background:rgba(23,24,28,.45);display:grid;place-items:center;padding:16px">
+        <div role="dialog" aria-modal="true" aria-labelledby="spec-title" onClick=${e => e.stopPropagation()} onKeyDown=${e => { if (e.key === 'Escape') close(); }}
+          style="width:min(640px,100%);max-height:min(720px,calc(100vh - 32px));display:flex;flex-direction:column;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden">
+          <div id="spec-title" style="padding:18px 20px 4px;font-size:15px;font-weight:600">API specification</div>
+          <div style="padding:6px 20px 0;font-size:12px;color:#6A6D75;line-height:1.5">Choose the applications and endpoints that go into the document, and their order (drag a row, or ↑ / ↓): the document follows it, with a table of contents. It is built from the live (saved) configuration; disabled flows are not live, so they cannot be included.</div>
+          <div style="padding:14px 20px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:12px;font-weight:500">Format</span>
+            <span style="display:flex;border:1px solid #E4E1D8;border-radius:6px;overflow:hidden">${FORMATS.map(([fmt, text]) => html`<button class="ro-ok" disabled=${busy} onClick=${() => set({ format: fmt })}
+              style=${`border:0;padding:5px 12px;cursor:pointer;font:600 11.5px ${MONO};background:${m.format === fmt ? '#17181C' : '#fff'};color:${m.format === fmt ? '#fff' : '#6A6D75'}`}>${text}</button>`)}</span>
+            <span style="flex:1"></span>
+            ${link('Reset order', () => set({ order: this.specOrder() }))}<span style="color:#C9C6BD">·</span>${link('All', () => pick(live.map(f => f.code), true))}<span style="color:#C9C6BD">·</span>${link('None', () => set({ picked: {} }))}
+          </div>
+          <div style="margin:12px 20px 0;border:1px solid #E4E1D8;border-radius:8px;overflow:auto;min-height:0;flex:1">
+            ${m.order.map((grp, g) => {
+              const app = appsByCode[grp.code] || { code: grp.code, name: '' };
+              const flows = grp.flows.map(c => byCode[c]).filter(Boolean);
+              const codes = flows.filter(f => f.enabled).map(f => f.code);
+              const n = codes.filter(c => m.picked[c]).length;
+              // the numbers the document will use: only what is ticked counts
+              const gn = n ? m.order.slice(0, g + 1).filter(x => x.flows.some(c => byCode[c] && byCode[c].enabled && m.picked[c])).length : 0;
+              let en = 0; const num = f => (gn && f.enabled && m.picked[f.code] ? gn + '.' + (++en) : '–');
+              return html`
+              <div style="border-bottom:1px solid #EFEDE6">
+                <div ...${dnd('app', g, g)} style="display:flex;align-items:center;gap:9px;padding:8px 12px;background:#FAF9F6">
+                  ${handle}
+                  <label style="display:flex;align-items:center;gap:9px;flex:1;min-width:0;cursor:pointer">
+                    ${box(codes.length > 0 && n === codes.length, n > 0 && n < codes.length, e => pick(codes, e.currentTarget.checked), !codes.length)}
+                    <span style=${`font:11px ${MONO};color:#9A9CA2;flex:none;min-width:14px`}>${gn ? gn + '.' : '–'}</span>
+                    <span style=${`font:600 12px ${MONO}`}>${app.code}</span>
+                    ${app.name && html`<span style="font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${app.name}</span>`}
+                    <span style="flex:1"></span>
+                    <span style=${`font:11px ${MONO};color:#9A9CA2;flex:none`}>${n} of ${codes.length}</span>
+                  </label>
+                  ${arrows(() => moveApp(g, g - 1), () => moveApp(g, g + 1), g === 0, g === m.order.length - 1)}
+                </div>
+                ${flows.map((f, i) => html`
+                <div ...${dnd('flow', g, i)} title=${f.enabled ? '' : 'Disabled: not live, so not in the specification'} style=${`display:flex;align-items:center;gap:9px;padding:6px 12px 6px 22px;border-top:1px solid #F3F1EC;opacity:${f.enabled ? 1 : 0.5}`}>
+                  ${handle}
+                  <label style=${`display:flex;align-items:center;gap:9px;flex:1;min-width:0;cursor:${f.enabled ? 'pointer' : 'default'}`}>
+                    ${box(!!m.picked[f.code], false, e => pick([f.code], e.currentTarget.checked), !f.enabled)}
+                    <span style=${`font:11px ${MONO};color:#9A9CA2;flex:none;min-width:28px`}>${num(f)}</span>
+                    <span style=${`width:44px;text-align:center;flex:none;font:600 9.5px ${MONO};color:#fff;background:${MC[f.method] || '#555'};padding:2px 0;border-radius:4px`}>${f.method}</span>
+                    <span style=${`font:12px ${MONO};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0`}>${base}${f.path}</span>
+                    <span style="flex:1"></span>
+                    <span style=${`font:11px ${MONO};color:#6A6D75;white-space:nowrap`}>${f.enabled ? f.code : 'disabled'}</span>
+                  </label>
+                  ${arrows(() => moveFlow(g, i, i - 1), () => moveFlow(g, i, i + 1), i === 0, i === flows.length - 1)}
+                </div>`)}
+              </div>`;
+            })}
+          </div>
+          ${m.error && html`<div style=${`padding:10px 20px 0;font:11.5px ${MONO};color:${C.err}`}>${m.error}</div>`}
+          <div style="padding:14px 20px 18px;display:flex;align-items:center;justify-content:flex-end;gap:8px">
+            <span style=${`margin-right:auto;font:11.5px ${MONO};color:#6A6D75`}>${chosen} of ${live.length} endpoint${live.length === 1 ? '' : 's'}</span>
+            <button class="btn-line" disabled=${busy} onClick=${close} style="border:1px solid #E4E1D8;background:#fff;border-radius:7px;padding:8px 14px;cursor:pointer;font-weight:500">Cancel</button>
+            <button id="spec-ok" class="btn-dark" disabled=${busy || !chosen} onClick=${() => this.generateSpec()} style=${`display:flex;align-items:center;gap:8px;border:0;background:#17181C;color:#fff;border-radius:7px;padding:8px 14px;cursor:pointer;font-weight:600${busy ? ';opacity:1' : ''}`}>
+              ${busy && html`<span class="spin"></span>`}${busy ? 'Generating ' + label + '…' : 'Generate ' + label}</button>
+          </div>
+        </div>
+      </div>`;
   }
 
   renderTests(f) {
     const s = this.state; const t = this.testsOf(f); const dirty = this.dirty();
+    const specBtn = (fmt, label) => (s.specBusy === f.code + ':' + fmt ? html`<span style="display:inline-flex;align-items:center;gap:7px"><span class="spin"></span>${label}…</span>` : label);
     const audited = f.audit === 'ON' || (f.audit === 'INHERIT' && s.catalog.auditEnabled);
     const upd = (id, fn) => this.setTests(f, x => { const c = x.cases.find(y => y.id === id); if (c) fn(c, x); });
     const runIdx = id => (t.run && t.runCaseIds ? t.runCaseIds.indexOf(id) : -1);
@@ -2985,9 +3224,9 @@ class App extends Component {
           ${html`<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 16px;background:#fff;border:1px solid #E4E1D8;border-radius:10px">
             <span style="font-weight:600">API specification</span>
             <span style="flex:1;min-width:200px;font-size:12px;color:#6A6D75">This endpoint's spec document from the same API description (Swagger): URL, parameters, request and response fields with type and mandatory, examples and errors.</span>
-            ${btn('Word', () => this.downloadSpec(f.code, 'docx'), true, dirty, dirty ? 'Save & reload first: the spec comes from the live configuration' : '')}
-            ${btn('PDF', () => this.downloadSpec(f.code, 'pdf'), true, dirty, dirty ? 'Save & reload first: the spec comes from the live configuration' : '')}
-            ${btn('Markdown', () => this.downloadSpec(f.code, 'md'), false, dirty, dirty ? 'Save & reload first: the spec comes from the live configuration' : '')}
+            ${btn(specBtn('docx', 'Word'), () => this.downloadFlowSpec(f.code, 'docx'), true, dirty || !!s.specBusy, dirty ? 'Save & reload first: the spec comes from the live configuration' : '')}
+            ${btn(specBtn('pdf', 'PDF'), () => this.downloadFlowSpec(f.code, 'pdf'), true, dirty || !!s.specBusy, dirty ? 'Save & reload first: the spec comes from the live configuration' : '')}
+            ${btn(specBtn('md', 'Markdown'), () => this.downloadFlowSpec(f.code, 'md'), false, dirty || !!s.specBusy, dirty ? 'Save & reload first: the spec comes from the live configuration' : '')}
           </div>`}
           ${t.run && html`
             <div style="background:#fff;border:1px solid #E4E1D8;border-radius:10px;padding:14px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">

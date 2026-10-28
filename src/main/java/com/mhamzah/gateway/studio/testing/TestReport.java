@@ -24,7 +24,17 @@ public final class TestReport {
 
     public record Title(String text, String subtitle) implements Block {}
 
-    public record Heading(int level, String text) implements Block {}
+    /** A heading; {@code anchor} (may be null) is what a {@link Contents} entry links to. */
+    public record Heading(int level, String text, String anchor) implements Block {
+        public Heading(int level, String text) {
+            this(level, text, null);
+        }
+    }
+
+    /** A table of contents: one line per entry, linking to the heading with the same anchor. */
+    public record Contents(List<Entry> entries) implements Block {
+        public record Entry(int level, String text, String anchor) {}
+    }
 
     public record Paragraph(String text) implements Block {}
 

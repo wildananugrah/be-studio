@@ -27,6 +27,10 @@ input,select,textarea,button{font:inherit;color:inherit}
 .btn-line:hover{border-color:#BDB9AE!important}
 .btn-del:hover{border-color:oklch(0.75 0.1 25)!important}
 button:disabled{opacity:.55;cursor:default!important}
+/* busy indicator: a ring that turns */
+.spin{display:inline-block;width:11px;height:11px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:-2px;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+button:disabled .spin{opacity:1}
 input[type=search]::-webkit-search-cancel-button,input[type=search]::-webkit-search-decoration{-webkit-appearance:none;appearance:none;display:none}
 /* scrolling everywhere (wheel, trackpad, keyboard, touch) but no visible scrollbars */
 *{scrollbar-width:none;-ms-overflow-style:none}

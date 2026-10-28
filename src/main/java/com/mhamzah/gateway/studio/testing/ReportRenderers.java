@@ -2,6 +2,7 @@ package com.mhamzah.gateway.studio.testing;
 
 import com.mhamzah.gateway.studio.testing.TestReport.Block;
 import com.mhamzah.gateway.studio.testing.TestReport.Code;
+import com.mhamzah.gateway.studio.testing.TestReport.Contents;
 import com.mhamzah.gateway.studio.testing.TestReport.Fields;
 import com.mhamzah.gateway.studio.testing.TestReport.Heading;
 import com.mhamzah.gateway.studio.testing.TestReport.PageBreak;
@@ -24,6 +25,12 @@ import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
+import org.apache.pdfbox.pdmodel.interactive.action.PDActionGoTo;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDBorderStyleDictionary;
+import org.apache.pdfbox.pdmodel.interactive.documentnavigation.destination.PDPageXYZDestination;
+import org.apache.pdfbox.pdmodel.interactive.documentnavigation.outline.PDDocumentOutline;
+import org.apache.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineItem;
 import org.apache.poi.xwpf.usermodel.ParagraphAlignment;
 import org.apache.poi.xwpf.usermodel.TableRowAlign;
 import org.apache.poi.xwpf.usermodel.TableWidthType;
@@ -33,7 +40,15 @@ import org.apache.poi.xwpf.usermodel.XWPFRun;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
 import org.apache.poi.xwpf.usermodel.XWPFTableCell;
 import org.apache.poi.xwpf.usermodel.XWPFTableRow;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTBookmark;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTHyperlink;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPPr;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTRPr;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTabStop;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.STFldCharType;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.STTabJc;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.STTabTlc;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPageMar;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTPageSz;
 import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTTblGrid;
@@ -81,7 +96,17 @@ public final class ReportRenderers {
         for (Block block : blocks) {
             switch (block) {
                 case Title t -> b.append("# ").append(t.text()).append("\n\n_").append(t.subtitle()).append("_\n\n");
-                case Heading h -> b.append("#".repeat(h.level() + 1)).append(' ').append(h.text()).append("\n\n");
+                case Heading h -> {
+                    if (h.anchor() != null) {
+                        b.append("<a id=\"").append(h.anchor()).append("\"></a>\n\n");
+                    }
+                    b.append("#".repeat(h.level() + 1)).append(' ').append(h.text()).append("\n\n");
+                }
+                case Contents c -> {
+                    c.entries().forEach(e -> b.append("  ".repeat(e.level() - 1)).append("- [")
+                            .append(e.text().replace("[", "\\[").replace("]", "\\]")).append("](#").append(e.anchor()).append(")\n"));
+                    b.append('\n');
+                }
                 case Paragraph p -> b.append(p.text()).append("\n\n");
                 case Fields f -> {
                     b.append("| Field | Value |\n|---|---|\n");
@@ -134,6 +159,7 @@ public final class ReportRenderers {
             mar.setTop(margin);
             mar.setBottom(margin);
             boolean breakBefore = false;
+            int bookmarks = 0;
             for (Block block : blocks) {
                 switch (block) {
                     case Title t -> {
@@ -149,7 +175,24 @@ public final class ReportRenderers {
                         p.setSpacingBefore(h.level() == 1 ? 240 : 180);
                         p.setSpacingAfter(80);
                         p.setKeepNext(true);
+                        CTPPr ppr = p.getCTP().isSetPPr() ? p.getCTP().getPPr() : p.getCTP().addNewPPr();
+                        ppr.addNewOutlineLvl().setVal(BigInteger.valueOf(h.level() - 1)); // Word's navigation pane
+                        if (h.anchor() != null) {
+                            CTBookmark mark = p.getCTP().addNewBookmarkStart();
+                            mark.setName(h.anchor());
+                            mark.setId(BigInteger.valueOf(++bookmarks));
+                        }
                         run(p, h.text(), true, h.level() == 1 ? 15 : h.level() == 2 ? 12.5 : 11, h.level() == 1 ? null : "3E4047", false);
+                        if (h.anchor() != null) {
+                            p.getCTP().addNewBookmarkEnd().setId(BigInteger.valueOf(bookmarks));
+                        }
+                    }
+                    case Contents c -> {
+                        for (Contents.Entry e : c.entries()) {
+                            contentsLine(doc.createParagraph(), e);
+                        }
+                        doc.enforceUpdateFields(); // Word fills in the page numbers when it opens the file
+                        doc.createParagraph();
                     }
                     case Paragraph p -> run(doc.createParagraph(), p.text(), false, 10, null, false);
                     case Fields f -> {
@@ -287,6 +330,47 @@ public final class ReportRenderers {
         }
     }
 
+    /** A contents line: the entry linked to its heading's bookmark, dot leaders, and a PAGEREF field for its page. */
+    private static void contentsLine(XWPFParagraph p, Contents.Entry e) {
+        p.setSpacingAfter(e.level() == 1 ? 60 : 30);
+        p.setSpacingBefore(e.level() == 1 ? 80 : 0);
+        p.setIndentationLeft((e.level() - 1) * 360);
+        CTPPr ppr = p.getCTP().isSetPPr() ? p.getCTP().getPPr() : p.getCTP().addNewPPr();
+        CTTabStop tab = ppr.addNewTabs().addNewTab();
+        tab.setVal(STTabJc.RIGHT);
+        tab.setLeader(STTabTlc.DOT);
+        tab.setPos(BigInteger.valueOf(DOCX_TEXT_WIDTH));
+        CTHyperlink link = p.getCTP().addNewHyperlink();
+        link.setAnchor(e.anchor());
+        CTR text = link.addNewR();
+        style(text, e.level() == 1);
+        text.addNewT().setStringValue(e.text());
+        CTR r = p.getCTP().addNewR();
+        style(r, false);
+        r.addNewTab();
+        r = p.getCTP().addNewR();
+        r.addNewFldChar().setFldCharType(STFldCharType.BEGIN);
+        r = p.getCTP().addNewR();
+        r.addNewInstrText().setStringValue(" PAGEREF " + e.anchor() + " \\h ");
+        r = p.getCTP().addNewR();
+        r.addNewFldChar().setFldCharType(STFldCharType.SEPARATE);
+        r = p.getCTP().addNewR();
+        style(r, e.level() == 1);
+        r.addNewT().setStringValue("");
+        r = p.getCTP().addNewR();
+        r.addNewFldChar().setFldCharType(STFldCharType.END);
+    }
+
+    private static void style(CTR r, boolean bold) {
+        CTRPr pr = r.addNewRPr();
+        pr.addNewRFonts().setAscii(DOCX_FONT);
+        pr.getRFontsArray(0).setHAnsi(DOCX_FONT);
+        pr.addNewSz().setVal(BigInteger.valueOf(20));
+        if (bold) {
+            pr.addNewB();
+        }
+    }
+
     private static void shade(XWPFParagraph p, String fill) {
         CTPPr ppr = p.getCTP().isSetPPr() ? p.getCTP().getPPr() : p.getCTP().addNewPPr();
         CTShd shd = ppr.isSetShd() ? ppr.getShd() : ppr.addNewShd();
@@ -318,10 +402,31 @@ public final class ReportRenderers {
         private PDPageContentStream cs;
         private float y;
         private String footer = "";
+        /** Where each anchored heading landed: {page index, y}. */
+        private Map<String, float[]> targets = new HashMap<>();
+        /** Page numbers of the anchors, known from a first pass; contents lines show them. */
+        private Map<String, float[]> known = Map.of();
+        private final List<Link> links = new ArrayList<>();
 
+        private record Link(int page, float x, float y, float width, float height, String anchor) {}
+
+        /** With contents, laid out twice: the first pass finds the page of every heading the contents point at. */
         byte[] render(List<Block> blocks) throws IOException {
+            if (blocks.stream().anyMatch(b -> b instanceof Contents)) {
+                Pdf first = new Pdf();
+                first.layout(blocks);
+                known = first.targets;
+            }
+            return layout(blocks);
+        }
+
+        private byte[] layout(List<Block> blocks) throws IOException {
             try (PDDocument d = new PDDocument(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
                 doc = d;
+                targets = new HashMap<>();
+                links.clear();
+                cs = null;
+                footer = "";
                 newPage();
                 for (Block block : blocks) {
                     switch (block) {
@@ -335,9 +440,13 @@ public final class ReportRenderers {
                             float size = h.level() == 1 ? 14 : h.level() == 2 ? 11.5f : 10;
                             ensure(size * 4); // keep a heading with what follows
                             y -= h.level() == 1 ? 6 : 4;
+                            if (h.anchor() != null) {
+                                targets.put(h.anchor(), new float[] {doc.getNumberOfPages() - 1, y + 4});
+                            }
                             text(h.text(), bold, size, h.level() == 1 ? INK : new Color(0x3E, 0x40, 0x47), 0, size * 1.35f);
                             y -= 2;
                         }
+                        case Contents c -> contents(c);
                         case Paragraph p -> {
                             text(p.text(), regular, 9.5f, INK, 0, 12.5f);
                             y -= 4;
@@ -353,6 +462,7 @@ public final class ReportRenderers {
                     }
                 }
                 cs.close();
+                links(blocks);
                 int total = doc.getNumberOfPages();
                 for (int i = 0; i < total; i++) {
                     try (PDPageContentStream f = new PDPageContentStream(doc, doc.getPage(i), PDPageContentStream.AppendMode.APPEND, true, true)) {
@@ -368,6 +478,92 @@ public final class ReportRenderers {
                 doc.save(out);
                 return out.toByteArray();
             }
+        }
+
+        /** Contents lines: the entry, dot leaders and its page number, the whole line linking to the heading. */
+        private void contents(Contents c) throws IOException {
+            float size = 9.5f;
+            float leading = 14;
+            for (Contents.Entry e : c.entries()) {
+                PDType1Font font = e.level() == 1 ? bold : regular;
+                float indent = (e.level() - 1) * 16;
+                float[] at = known.get(e.anchor());
+                String number = at == null ? "" : String.valueOf((int) at[0] + 1);
+                float numberWidth = width(number, font, size);
+                if (e.level() == 1) {
+                    y -= 3;
+                }
+                List<String> lines = wrap(e.text(), font, size, WIDTH - indent - 36);
+                for (int i = 0; i < lines.size(); i++) {
+                    ensure(leading);
+                    float baseline = y - size;
+                    write(lines.get(i), font, size, INK, MARGIN + indent, baseline);
+                    if (i == lines.size() - 1) {
+                        float from = MARGIN + indent + width(lines.get(i), font, size) + 4;
+                        float to = MARGIN + WIDTH - numberWidth - 4;
+                        float dot = width(".", regular, size);
+                        if (to > from + dot) {
+                            write(".".repeat((int) ((to - from) / dot)), regular, size, LINE.darker(), from, baseline);
+                        }
+                        write(number, font, size, INK, MARGIN + WIDTH - numberWidth, baseline);
+                    }
+                    links.add(new Link(doc.getNumberOfPages() - 1, MARGIN + indent, y - leading + 2, WIDTH - indent, leading,
+                            e.anchor()));
+                    y -= leading;
+                }
+            }
+            y -= 8;
+        }
+
+        /** The contents lines become links, and the contents become the PDF's bookmarks (outline). */
+        private void links(List<Block> blocks) throws IOException {
+            PDBorderStyleDictionary none = new PDBorderStyleDictionary();
+            none.setWidth(0);
+            for (Link l : links) {
+                float[] to = targets.get(l.anchor());
+                if (to == null) {
+                    continue;
+                }
+                PDAnnotationLink a = new PDAnnotationLink();
+                a.setRectangle(new PDRectangle(l.x(), l.y(), l.width(), l.height()));
+                a.setBorderStyle(none);
+                PDActionGoTo go = new PDActionGoTo();
+                go.setDestination(destination(to));
+                a.setAction(go);
+                doc.getPage(l.page()).getAnnotations().add(a);
+            }
+            PDDocumentOutline outline = new PDDocumentOutline();
+            PDOutlineItem parent = null;
+            for (Block block : blocks) {
+                if (block instanceof Contents c) {
+                    for (Contents.Entry e : c.entries()) {
+                        float[] to = targets.get(e.anchor());
+                        if (to == null) {
+                            continue;
+                        }
+                        PDOutlineItem item = new PDOutlineItem();
+                        item.setTitle(e.text());
+                        item.setDestination(destination(to));
+                        if (e.level() > 1 && parent != null) {
+                            parent.addLast(item);
+                        } else {
+                            outline.addLast(item);
+                            parent = item;
+                        }
+                    }
+                }
+            }
+            if (outline.hasChildren()) {
+                doc.getDocumentCatalog().setDocumentOutline(outline);
+            }
+        }
+
+        private PDPageXYZDestination destination(float[] to) {
+            PDPageXYZDestination d = new PDPageXYZDestination();
+            d.setPage(doc.getPage((int) to[0]));
+            d.setTop((int) to[1]);
+            d.setLeft(0);
+            return d;
         }
 
         private void newPage() throws IOException {
