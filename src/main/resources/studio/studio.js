@@ -744,7 +744,7 @@ class App extends Component {
       this.histIndex = e.state && typeof e.state.i === 'number' ? e.state.i : 0;
       const next = this.stateOfRoute(location.hash) || { screen: 'flows' };
       this.restoring = true;
-      this.setState({ ...next, appModal: null, confirm: null }, () => { this.restoring = false; this.changed(); });
+      this.setState({ ...next, appModal: null, specModal: null, confirm: null }, () => { this.restoring = false; this.changed(); });
     });
     document.addEventListener('keydown', e => {
       if (this.state.confirm) { // modal: Esc cancels, Enter confirms, Tab stays between its two buttons
@@ -1059,6 +1059,7 @@ class App extends Component {
         ${s.toast && this.renderToast()}
         ${s.confirm && this.renderConfirm()}
         ${s.appModal && this.renderAppModal()}
+        ${s.specModal && this.renderSpecModal()}
         ${s.catalog.assistantEnabled && s.assistant && s.assistant.open && this.renderAssistant()}
       </div>`;
   }
@@ -1291,7 +1292,7 @@ class App extends Component {
             <span class="ro-hide" style="display:flex;gap:8px">${small('+ New application', () => this.openAppModal('new'))}${small('Import application…', pickFile, false, 'Load a JSON export as unsaved changes')}</span>
             <span style="flex:1"></span>
             <span title="One document for every live endpoint, built from the API description (Swagger)">API specification of all endpoints</span>
-            ${['docx:Word', 'pdf:PDF', 'md:Markdown'].map(x => { const [fmt, label] = x.split(':'); return small(label, () => this.downloadSpec(null, fmt), dirty, dirty ? 'Save & reload first: the spec comes from the live configuration' : ''); })}
+            ${['docx:Word', 'pdf:PDF', 'md:Markdown'].map(x => { const [fmt, label] = x.split(':'); return small(label, () => this.openSpecModal(fmt), dirty, dirty ? 'Save & reload first: the spec comes from the live configuration' : 'Choose the applications and endpoints, then generate'); })}
           </div>
           ${sections.map(({ app, flows }) => html`
           <div style="margin-top:18px;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:auto">
@@ -3027,14 +3028,108 @@ class App extends Component {
     if (err) this.setTests(f, x => { x.error = err; });
   }
 
-  /** The API specification (from the live API description) of one flow, or of all flows when code is null. */
-  async downloadSpec(code, format) {
-    const err = await this.download('api/tests/spec?format=' + format + (code ? '&flow=' + encodeURIComponent(code) : ''), 'api-spec.' + format);
+  /** The API specification (from the live API description) of the given flows, or of all flows when codes is empty. */
+  async downloadSpec(codes, format) {
+    const key = codes.join(',') + ':' + format;
+    if (this.state.specBusy) return;
+    this.setState({ specBusy: key });
+    try {
+      const qs = codes.length ? '&flows=' + codes.map(encodeURIComponent).join(',') : '';
+      return await this.download('api/tests/spec?format=' + format + qs, 'api-spec.' + format);
+    } catch (e) {
+      return 'Could not reach the gateway: ' + e.message;
+    } finally {
+      this.setState({ specBusy: null });
+    }
+  }
+
+  async downloadFlowSpec(code, format) {
+    const err = await this.downloadSpec([code], format);
     if (err) this.setState({ toast: { status: 'API spec', color: 'oklch(0.72 0.15 25)', body: err, note: 'The specification is built from the live (saved) configuration.' } });
+  }
+
+  /** The specification dialog: which applications and endpoints go into the document, and in which format. */
+  openSpecModal(format) {
+    const picked = {};
+    this.state.cfg.flows.forEach(f => { if (f.enabled) picked[f.code] = true; });
+    this.setState({ specModal: { format, picked, error: '' } });
+  }
+
+  async generateSpec() {
+    const m = this.state.specModal; const live = this.state.cfg.flows.filter(f => f.enabled);
+    const codes = live.filter(f => m.picked[f.code]).map(f => f.code);
+    if (!codes.length) { this.setState({ specModal: { ...m, error: 'Choose at least one endpoint.' } }); return; }
+    // every live flow chosen: ask for all of them (a short URL, and the file is named ALL)
+    const err = await this.downloadSpec(codes.length === live.length ? [] : codes, m.format);
+    if (!this.state.specModal) return;
+    if (err) this.setState({ specModal: { ...this.state.specModal, error: err } });
+    else this.setState({ specModal: null });
+  }
+
+  renderSpecModal() {
+    const s = this.state; const m = s.specModal; const busy = !!s.specBusy; const base = s.catalog.apiBasePath;
+    const set = patch => this.setState({ specModal: { ...m, ...patch, error: '' } });
+    const pick = (codes, on) => { const p = { ...m.picked }; codes.forEach(c => { if (on) p[c] = true; else delete p[c]; }); set({ picked: p }); };
+    const close = () => { if (!busy) this.setState({ specModal: null }); };
+    const sections = this.appSections().filter(sec => sec.flows.length);
+    const live = s.cfg.flows.filter(f => f.enabled);
+    const chosen = live.filter(f => m.picked[f.code]).length;
+    const FORMATS = [['docx', 'Word'], ['pdf', 'PDF'], ['md', 'Markdown']];
+    const label = (FORMATS.find(x => x[0] === m.format) || FORMATS[0])[1];
+    const box = (checked, mixed, onChange, disabled) => html`<input type="checkbox" class="ro-ok" checked=${checked} disabled=${disabled || busy}
+      ref=${el => { if (el) el.indeterminate = mixed; }} onChange=${onChange} onClick=${e => e.stopPropagation()} style="margin:0;flex:none;accent-color:#17181C;cursor:pointer"/>`;
+    const link = (text, go) => html`<button class="ro-ok" disabled=${busy} onClick=${go} style="border:0;background:none;padding:0;color:oklch(0.55 0.16 42);cursor:pointer;font-size:12px">${text}</button>`;
+    return html`
+      <div onClick=${close} style="position:fixed;inset:0;z-index:50;background:rgba(23,24,28,.45);display:grid;place-items:center;padding:16px">
+        <div role="dialog" aria-modal="true" aria-labelledby="spec-title" onClick=${e => e.stopPropagation()} onKeyDown=${e => { if (e.key === 'Escape') close(); }}
+          style="width:min(640px,100%);max-height:min(720px,calc(100vh - 32px));display:flex;flex-direction:column;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden">
+          <div id="spec-title" style="padding:18px 20px 4px;font-size:15px;font-weight:600">API specification</div>
+          <div style="padding:6px 20px 0;font-size:12px;color:#6A6D75;line-height:1.5">Choose the applications and endpoints that go into the document. It is built from the live (saved) configuration; disabled flows are not live, so they cannot be included.</div>
+          <div style="padding:14px 20px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:12px;font-weight:500">Format</span>
+            <span style="display:flex;border:1px solid #E4E1D8;border-radius:6px;overflow:hidden">${FORMATS.map(([fmt, text]) => html`<button class="ro-ok" disabled=${busy} onClick=${() => set({ format: fmt })}
+              style=${`border:0;padding:5px 12px;cursor:pointer;font:600 11.5px ${MONO};background:${m.format === fmt ? '#17181C' : '#fff'};color:${m.format === fmt ? '#fff' : '#6A6D75'}`}>${text}</button>`)}</span>
+            <span style="flex:1"></span>
+            ${link('All', () => pick(live.map(f => f.code), true))}<span style="color:#C9C6BD">·</span>${link('None', () => set({ picked: {} }))}
+          </div>
+          <div style="margin:12px 20px 0;border:1px solid #E4E1D8;border-radius:8px;overflow:auto;min-height:0;flex:1">
+            ${sections.map(({ app, flows }) => {
+              const codes = flows.filter(({ f }) => f.enabled).map(({ f }) => f.code);
+              const n = codes.filter(c => m.picked[c]).length;
+              return html`
+              <div style="border-bottom:1px solid #EFEDE6">
+                <label style="display:flex;align-items:center;gap:9px;padding:9px 12px;background:#FAF9F6;cursor:pointer">
+                  ${box(codes.length > 0 && n === codes.length, n > 0 && n < codes.length, e => pick(codes, e.currentTarget.checked), !codes.length)}
+                  <span style=${`font:600 12px ${MONO}`}>${app.code}</span>
+                  ${app.name && html`<span style="font-size:12px;font-weight:500">${app.name}</span>`}
+                  <span style="flex:1"></span>
+                  <span style=${`font:11px ${MONO};color:#9A9CA2`}>${n} of ${codes.length}</span>
+                </label>
+                ${flows.map(({ f }) => html`
+                <label title=${f.enabled ? '' : 'Disabled: not live, so not in the specification'} style=${`display:flex;align-items:center;gap:9px;padding:7px 12px 7px 32px;border-top:1px solid #F3F1EC;cursor:${f.enabled ? 'pointer' : 'default'};opacity:${f.enabled ? 1 : 0.5}`}>
+                  ${box(!!m.picked[f.code], false, e => pick([f.code], e.currentTarget.checked), !f.enabled)}
+                  <span style=${`width:44px;text-align:center;flex:none;font:600 9.5px ${MONO};color:#fff;background:${MC[f.method] || '#555'};padding:2px 0;border-radius:4px`}>${f.method}</span>
+                  <span style=${`font:12px ${MONO};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0`}>${base}${f.path}</span>
+                  <span style="flex:1"></span>
+                  <span style=${`font:11px ${MONO};color:#6A6D75;white-space:nowrap`}>${f.enabled ? f.code : 'disabled'}</span>
+                </label>`)}
+              </div>`;
+            })}
+          </div>
+          ${m.error && html`<div style=${`padding:10px 20px 0;font:11.5px ${MONO};color:${C.err}`}>${m.error}</div>`}
+          <div style="padding:14px 20px 18px;display:flex;align-items:center;justify-content:flex-end;gap:8px">
+            <span style=${`margin-right:auto;font:11.5px ${MONO};color:#6A6D75`}>${chosen} of ${live.length} endpoint${live.length === 1 ? '' : 's'}</span>
+            <button class="btn-line" disabled=${busy} onClick=${close} style="border:1px solid #E4E1D8;background:#fff;border-radius:7px;padding:8px 14px;cursor:pointer;font-weight:500">Cancel</button>
+            <button id="spec-ok" class="btn-dark" disabled=${busy || !chosen} onClick=${() => this.generateSpec()} style=${`display:flex;align-items:center;gap:8px;border:0;background:#17181C;color:#fff;border-radius:7px;padding:8px 14px;cursor:pointer;font-weight:600${busy ? ';opacity:1' : ''}`}>
+              ${busy && html`<span class="spin"></span>`}${busy ? 'Generating ' + label + '…' : 'Generate ' + label}</button>
+          </div>
+        </div>
+      </div>`;
   }
 
   renderTests(f) {
     const s = this.state; const t = this.testsOf(f); const dirty = this.dirty();
+    const specBtn = (fmt, label) => (s.specBusy === f.code + ':' + fmt ? html`<span style="display:inline-flex;align-items:center;gap:7px"><span class="spin"></span>${label}…</span>` : label);
     const audited = f.audit === 'ON' || (f.audit === 'INHERIT' && s.catalog.auditEnabled);
     const upd = (id, fn) => this.setTests(f, x => { const c = x.cases.find(y => y.id === id); if (c) fn(c, x); });
     const runIdx = id => (t.run && t.runCaseIds ? t.runCaseIds.indexOf(id) : -1);
@@ -3090,9 +3185,9 @@ class App extends Component {
           ${html`<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 16px;background:#fff;border:1px solid #E4E1D8;border-radius:10px">
             <span style="font-weight:600">API specification</span>
             <span style="flex:1;min-width:200px;font-size:12px;color:#6A6D75">This endpoint's spec document from the same API description (Swagger): URL, parameters, request and response fields with type and mandatory, examples and errors.</span>
-            ${btn('Word', () => this.downloadSpec(f.code, 'docx'), true, dirty, dirty ? 'Save & reload first: the spec comes from the live configuration' : '')}
-            ${btn('PDF', () => this.downloadSpec(f.code, 'pdf'), true, dirty, dirty ? 'Save & reload first: the spec comes from the live configuration' : '')}
-            ${btn('Markdown', () => this.downloadSpec(f.code, 'md'), false, dirty, dirty ? 'Save & reload first: the spec comes from the live configuration' : '')}
+            ${btn(specBtn('docx', 'Word'), () => this.downloadFlowSpec(f.code, 'docx'), true, dirty || !!s.specBusy, dirty ? 'Save & reload first: the spec comes from the live configuration' : '')}
+            ${btn(specBtn('pdf', 'PDF'), () => this.downloadFlowSpec(f.code, 'pdf'), true, dirty || !!s.specBusy, dirty ? 'Save & reload first: the spec comes from the live configuration' : '')}
+            ${btn(specBtn('md', 'Markdown'), () => this.downloadFlowSpec(f.code, 'md'), false, dirty || !!s.specBusy, dirty ? 'Save & reload first: the spec comes from the live configuration' : '')}
           </div>`}
           ${t.run && html`
             <div style="background:#fff;border:1px solid #E4E1D8;border-radius:10px;padding:14px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">

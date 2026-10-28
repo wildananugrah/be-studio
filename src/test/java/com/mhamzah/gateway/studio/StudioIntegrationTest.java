@@ -316,7 +316,14 @@ class StudioIntegrationTest {
         assertThat(call("GET", "/studio/api/tests/spec?format=docx", "studio-token", null).text()).startsWith("PK");
         assertThat(call("GET", "/studio/api/tests/spec?format=pdf&flow=SOAP_TRANSFER", "studio-token", null).text())
                 .startsWith("%PDF");
+        // a chosen set of endpoints: only those
+        Response some = call("GET", "/studio/api/tests/spec?format=md&flows=SOAP_TRANSFER,ACCOUNT_INQUIRY", "studio-token", null);
+        assertThat(some.status()).as(some.text()).isEqualTo(200);
+        assertThat(some.text()).contains("2 endpoints", "/api/v1/soap/transfers", "/api/v1/accounts/{accountNo}")
+                .doesNotContain("/api/v1/transfers/with-reversal");
         assertThat(call("GET", "/studio/api/tests/spec?format=md&flow=NOPE", "studio-token", null).status()).isEqualTo(409);
+        assertThat(call("GET", "/studio/api/tests/spec?format=md&flows=SOAP_TRANSFER,NOPE", "studio-token", null).status())
+                .isEqualTo(409);
         assertThat(call("GET", "/studio/api/tests/spec?format=md", null, null).status()).isEqualTo(401);
     }
 

@@ -104,16 +104,18 @@ public class TestRunner {
     }
 
     /**
-     * The API specification document of one live flow, or of every live flow when {@code flowCode} is null.
+     * The API specification document of the given live flows, or of every live flow when {@code flowCodes} is null or
+     * empty. Endpoints are grouped by application, then ordered by path and method.
      *
      * @param baseUrl what clients call, e.g. {@code https://gateway.example.com}
      */
-    public List<TestReport.Block> spec(String flowCode, String baseUrl) {
+    public List<TestReport.Block> spec(List<String> flowCodes, String baseUrl) {
         FlowRegistry registry = holder.current();
-        List<FlowDefinition> flows = flowCode == null
-                ? registry.flows().stream().sorted(java.util.Comparator.comparing(
-                        (FlowDefinition f) -> f.pathPattern().getPatternString()).thenComparing(f -> f.method().name())).toList()
-                : List.of(live(registry, flowCode));
+        List<FlowDefinition> chosen = flowCodes == null || flowCodes.isEmpty() ? registry.flows()
+                : flowCodes.stream().distinct().map(code -> live(registry, code)).toList();
+        List<FlowDefinition> flows = chosen.stream().sorted(java.util.Comparator
+                .comparing((FlowDefinition f) -> java.util.Objects.requireNonNullElse(registry.applicationOf(f), "DEFAULT"))
+                .thenComparing(f -> f.pathPattern().getPatternString()).thenComparing(f -> f.method().name())).toList();
         JsonNode openApi = OpenApiGenerator.generate(registry, properties.apiBasePath(), properties.docs().title());
         Map<String, String> names = new java.util.HashMap<>();
         flows.forEach(f -> names.put(f.code(), flowName(f.code())));
