@@ -321,6 +321,18 @@ class StudioIntegrationTest {
         assertThat(some.status()).as(some.text()).isEqualTo(200);
         assertThat(some.text()).contains("2 endpoints", "/api/v1/soap/transfers", "/api/v1/accounts/{accountNo}")
                 .doesNotContain("/api/v1/transfers/with-reversal");
+        // in the order given, with a table of contents linking to the sections
+        assertThat(some.text()).contains("## Contents", "](#overview)", "](#ep_1_1)", "<a id=\"ep_1_1\"></a>",
+                "](#errors)");
+        assertThat(some.text().indexOf("/api/v1/soap/transfers"))
+                .isLessThan(some.text().indexOf("/api/v1/accounts/{accountNo}"));
+        Response reversed = call("GET", "/studio/api/tests/spec?format=md&flows=ACCOUNT_INQUIRY,SOAP_TRANSFER", "studio-token", null);
+        assertThat(reversed.text().indexOf("/api/v1/accounts/{accountNo}"))
+                .isLessThan(reversed.text().indexOf("/api/v1/soap/transfers"));
+        assertThat(call("GET", "/studio/api/tests/spec?format=pdf&flows=ACCOUNT_INQUIRY,SOAP_TRANSFER", "studio-token", null)
+                .text()).startsWith("%PDF");
+        assertThat(call("GET", "/studio/api/tests/spec?format=docx&flows=ACCOUNT_INQUIRY,SOAP_TRANSFER", "studio-token", null)
+                .text()).startsWith("PK");
         assertThat(call("GET", "/studio/api/tests/spec?format=md&flow=NOPE", "studio-token", null).status()).isEqualTo(409);
         assertThat(call("GET", "/studio/api/tests/spec?format=md&flows=SOAP_TRANSFER,NOPE", "studio-token", null).status())
                 .isEqualTo(409);

@@ -1,12 +1,14 @@
 package com.mhamzah.gateway.studio.testing;
 
 import com.mhamzah.gateway.config.FlowDefinition;
+import com.mhamzah.gateway.config.FlowRegistry.Application;
 import com.mhamzah.gateway.config.StepDefinition;
 import com.mhamzah.gateway.extension.ErrorType;
 import com.mhamzah.gateway.mapping.CompiledRule;
 import com.mhamzah.gateway.mapping.JsonValues;
 import com.mhamzah.gateway.studio.testing.TestReport.Block;
 import com.mhamzah.gateway.studio.testing.TestReport.Code;
+import com.mhamzah.gateway.studio.testing.TestReport.Contents;
 import com.mhamzah.gateway.studio.testing.TestReport.Fields;
 import com.mhamzah.gateway.studio.testing.TestReport.Heading;
 import com.mhamzah.gateway.studio.testing.TestReport.PageBreak;
@@ -36,11 +38,24 @@ public final class ApiSpec {
 
     private ApiSpec() {}
 
-    /** An endpoint: its flow, its operation in the API description and the path it is under. */
-    public record Endpoint(FlowDefinition flow, String name, String path, JsonNode operation) {}
+    /**
+     * An endpoint: its flow, its operation in the API description, the path it is under and its application (null
+     * when unknown).
+     */
+    public record Endpoint(FlowDefinition flow, String name, String path, JsonNode operation, Application application) {
+        public Endpoint(FlowDefinition flow, String name, String path, JsonNode operation) {
+            this(flow, name, path, operation, null);
+        }
+    }
 
     /** The endpoints of {@code flows} (in that order) found in {@code openApi}; flows not in it are left out. */
     public static List<Endpoint> endpoints(JsonNode openApi, List<FlowDefinition> flows, Map<String, String> names) {
+        return endpoints(openApi, flows, names, Map.of());
+    }
+
+    /** As above, with each flow's application ({@code applications} by flow code). */
+    public static List<Endpoint> endpoints(JsonNode openApi, List<FlowDefinition> flows, Map<String, String> names,
+            Map<String, Application> applications) {
         List<Endpoint> out = new ArrayList<>();
         for (FlowDefinition flow : flows) {
             String method = flow.method().name().toLowerCase(Locale.ROOT);
@@ -48,7 +63,8 @@ public final class ApiSpec {
                 JsonNode op = path.getValue().get(method);
                 if (op != null && flow.code().equals(op.path("operationId").asString(null))) {
                     String name = names.get(flow.code());
-                    out.add(new Endpoint(flow, name == null || name.isBlank() ? flow.code() : name, path.getKey(), op));
+                    out.add(new Endpoint(flow, name == null || name.isBlank() ? flow.code() : name, path.getKey(), op,
+                            applications.get(flow.code())));
                 }
             }
         }
@@ -72,34 +88,102 @@ public final class ApiSpec {
                 row("Correlation ID", "Optional X-Correlation-Id request header (1-64 of A-Z a-z 0-9 . _ : -); generated"
                         + " when absent and returned in the X-Correlation-Id response header"),
                 row("Errors", "JSON error body, see 'Error response format' at the end"))));
-        if (endpoints.size() > 1) {
-            out.add(new Heading(1, "Endpoints"));
-            List<List<String>> rows = new ArrayList<>();
-            int n = 1;
-            for (Endpoint e : endpoints) {
-                rows.add(List.of(String.valueOf(n++), e.flow().method().name(), e.path(), e.name()));
-            }
-            out.add(new Table(List.of("#", "Method", "Path", "Name"), rows));
+        if (endpoints.size() == 1) { // one endpoint: one flowing document, no contents or page breaks
+            endpoint(out, openApi, endpoints.getFirst(), "", baseUrl, 1, null);
+            errorFormat(out, null);
+            return out;
         }
-        int n = 1;
-        boolean several = endpoints.size() > 1; // one endpoint: one flowing document, no page breaks
+        // several: in the order given, consecutive endpoints of one application under its heading
+        List<List<Endpoint>> groups = new ArrayList<>();
         for (Endpoint e : endpoints) {
-            if (several) {
-                out.add(new PageBreak());
+            if (groups.isEmpty() || !sameApplication(groups.getLast().getFirst(), e)) {
+                groups.add(new ArrayList<>());
             }
-            endpoint(out, openApi, e, several ? (n++) + ". " : "", baseUrl);
+            groups.getLast().add(e);
         }
-        if (several) {
-            out.add(new PageBreak());
+        boolean grouped = endpoints.stream().anyMatch(e -> e.application() != null);
+        List<String> numbers = new ArrayList<>();
+        for (int g = 0; g < groups.size(); g++) {
+            for (int i = 0; i < groups.get(g).size(); i++) {
+                numbers.add(grouped ? (g + 1) + "." + (i + 1) : String.valueOf(numbers.size() + 1));
+            }
         }
-        errorFormat(out);
+
+        List<Contents.Entry> contents = new ArrayList<>();
+        contents.add(new Contents.Entry(1, "Endpoints overview", "overview"));
+        int k = 0;
+        for (int g = 0; g < groups.size(); g++) {
+            if (grouped) {
+                contents.add(new Contents.Entry(1, (g + 1) + ". " + groupTitle(groups.get(g).getFirst()), "app_" + (g + 1)));
+            }
+            for (Endpoint e : groups.get(g)) {
+                String number = numbers.get(k++);
+                contents.add(new Contents.Entry(grouped ? 2 : 1, number + (grouped ? " " : ". ") + e.name() + "  ("
+                        + e.flow().method() + " " + e.path() + ")", "ep_" + number.replace('.', '_')));
+            }
+        }
+        contents.add(new Contents.Entry(1, "Error response format", "errors"));
+        out.add(new Heading(1, "Contents"));
+        out.add(new Contents(contents));
+
+        out.add(new PageBreak());
+        out.add(new Heading(1, "Endpoints overview", "overview"));
+        List<List<String>> rows = new ArrayList<>();
+        k = 0;
+        for (List<Endpoint> group : groups) {
+            for (Endpoint e : group) {
+                List<String> row = new ArrayList<>(List.of(numbers.get(k++)));
+                if (grouped) {
+                    row.add(e.application() == null ? "" : e.application().code());
+                }
+                row.addAll(List.of(e.flow().method().name(), e.path(), e.name()));
+                rows.add(row);
+            }
+        }
+        out.add(new Table(grouped ? List.of("#", "Application", "Method", "Path", "Name")
+                : List.of("#", "Method", "Path", "Name"), rows));
+
+        k = 0;
+        for (int g = 0; g < groups.size(); g++) {
+            boolean first = true;
+            for (Endpoint e : groups.get(g)) {
+                out.add(new PageBreak());
+                if (grouped && first) {
+                    Application app = e.application();
+                    out.add(new Heading(1, (g + 1) + ". " + groupTitle(e), "app_" + (g + 1)));
+                    if (app != null && app.description() != null && !app.description().isBlank()) {
+                        out.add(new Paragraph(app.description()));
+                    }
+                }
+                first = false;
+                String number = numbers.get(k++);
+                endpoint(out, openApi, e, number + (grouped ? " " : ". "), baseUrl, grouped ? 2 : 1, "ep_" + number.replace('.', '_'));
+            }
+        }
+        out.add(new PageBreak());
+        errorFormat(out, "errors");
         return out;
     }
 
-    private static void endpoint(List<Block> out, JsonNode doc, Endpoint e, String number, String baseUrl) {
+    private static boolean sameApplication(Endpoint a, Endpoint b) {
+        return a.application() == null ? b.application() == null
+                : b.application() != null && a.application().code().equals(b.application().code());
+    }
+
+    private static String groupTitle(Endpoint e) {
+        Application app = e.application();
+        if (app == null) {
+            return "Other endpoints";
+        }
+        return app.name() == null || app.name().isBlank() ? app.code() : app.name() + " (" + app.code() + ")";
+    }
+
+    /** {@code level}: the endpoint's heading level; its sections are one deeper. */
+    private static void endpoint(List<Block> out, JsonNode doc, Endpoint e, String number, String baseUrl, int level,
+            String anchor) {
         FlowDefinition flow = e.flow();
         JsonNode op = e.operation();
-        out.add(new Heading(1, number + e.name()));
+        out.add(new Heading(level, number + e.name(), anchor));
         List<String[]> facts = new ArrayList<>();
         facts.add(row("Method", flow.method().name()));
         facts.add(row("URL", baseUrl + e.path()));
@@ -115,7 +199,7 @@ public final class ApiSpec {
         out.add(new Fields(facts));
 
         // ---- request
-        out.add(new Heading(2, "Request"));
+        out.add(new Heading(level + 1, "Request"));
         List<List<String>> params = new ArrayList<>();
         Map<String, String> exampleQuery = new LinkedHashMap<>();
         Map<String, String> exampleHeaders = new LinkedHashMap<>();
@@ -191,7 +275,7 @@ public final class ApiSpec {
         out.add(new Code(req.toString().stripTrailing()));
 
         // ---- response
-        out.add(new Heading(2, "Response"));
+        out.add(new Heading(level + 1, "Response"));
         JsonNode ok = op.path("responses").path(String.valueOf(flow.successStatus()));
         List<List<String>> headers = new ArrayList<>();
         ok.path("headers").properties().forEach(h -> headers.add(List.of(h.getKey(),
@@ -227,7 +311,7 @@ public final class ApiSpec {
                 .path("application/json").path("schema");
         boolean okHasMore = okSchema.has("oneOf");
         if (!others.isEmpty() || okHasMore) {
-            out.add(new Heading(2, "Other responses"));
+            out.add(new Heading(level + 1, "Other responses"));
             out.add(new Paragraph("Depending on the path the request takes through the flow, it can also answer with:"));
             List<Map.Entry<String, JsonNode>> all = new ArrayList<>(others);
             if (okHasMore) {
@@ -256,7 +340,7 @@ public final class ApiSpec {
         }
 
         // ---- errors
-        out.add(new Heading(2, "Errors"));
+        out.add(new Heading(level + 1, "Errors"));
         List<List<String>> errors = new ArrayList<>();
         for (Map.Entry<String, String[]> err : errors(flow).entrySet()) {
             errors.add(List.of(err.getValue()[0], err.getKey(), err.getValue()[1]));
@@ -412,8 +496,8 @@ public final class ApiSpec {
         out.put(type.defaultCode(), new String[] {String.valueOf(type.defaultStatus()), when});
     }
 
-    private static void errorFormat(List<Block> out) {
-        out.add(new Heading(1, "Error response format"));
+    private static void errorFormat(List<Block> out, String anchor) {
+        out.add(new Heading(1, "Error response format", anchor));
         out.add(new Paragraph("Every error (unless an endpoint has a custom error handler) is a JSON body with the HTTP"
                 + " status of the error:"));
         out.add(new Table(List.of("Field", "Type", "Notes"), List.of(

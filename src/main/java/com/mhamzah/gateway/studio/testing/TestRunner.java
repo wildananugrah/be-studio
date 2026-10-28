@@ -104,23 +104,37 @@ public class TestRunner {
     }
 
     /**
-     * The API specification document of the given live flows, or of every live flow when {@code flowCodes} is null or
-     * empty. Endpoints are grouped by application, then ordered by path and method.
+     * The API specification document of the given live flows, in that order (the document groups consecutive flows
+     * of one application), or of every live flow when {@code flowCodes} is null or empty: grouped by application,
+     * then ordered by path and method.
      *
      * @param baseUrl what clients call, e.g. {@code https://gateway.example.com}
      */
     public List<TestReport.Block> spec(List<String> flowCodes, String baseUrl) {
         FlowRegistry registry = holder.current();
-        List<FlowDefinition> chosen = flowCodes == null || flowCodes.isEmpty() ? registry.flows()
+        List<FlowDefinition> flows = flowCodes == null || flowCodes.isEmpty()
+                ? registry.flows().stream().sorted(java.util.Comparator
+                        .comparing((FlowDefinition f) -> java.util.Objects.requireNonNullElse(registry.applicationOf(f), "DEFAULT"))
+                        .thenComparing(f -> f.pathPattern().getPatternString()).thenComparing(f -> f.method().name())).toList()
                 : flowCodes.stream().distinct().map(code -> live(registry, code)).toList();
-        List<FlowDefinition> flows = chosen.stream().sorted(java.util.Comparator
-                .comparing((FlowDefinition f) -> java.util.Objects.requireNonNullElse(registry.applicationOf(f), "DEFAULT"))
-                .thenComparing(f -> f.pathPattern().getPatternString()).thenComparing(f -> f.method().name())).toList();
         JsonNode openApi = OpenApiGenerator.generate(registry, properties.apiBasePath(), properties.docs().title());
         Map<String, String> names = new java.util.HashMap<>();
-        flows.forEach(f -> names.put(f.code(), flowName(f.code())));
-        return ApiSpec.build(openApi, ApiSpec.endpoints(openApi, flows, names), properties.docs().title(), baseUrl,
-                java.time.ZonedDateTime.now());
+        Map<String, FlowRegistry.Application> applications = new java.util.HashMap<>();
+        for (FlowDefinition f : flows) {
+            names.put(f.code(), flowName(f.code()));
+            String app = java.util.Objects.requireNonNullElse(registry.applicationOf(f), "DEFAULT");
+            applications.put(f.code(), registry.applications().stream().filter(a -> a.code().equals(app)).findFirst()
+                    .orElse(new FlowRegistry.Application(app, null, null)));
+        }
+        return ApiSpec.build(openApi, ApiSpec.endpoints(openApi, flows, names, applications), properties.docs().title(),
+                baseUrl, java.time.ZonedDateTime.now());
+    }
+
+    /** True when {@code flowCodes} names every live flow. */
+    public boolean coversAllLive(java.util.Collection<String> flowCodes) {
+        java.util.Set<String> live = new java.util.HashSet<>();
+        holder.current().flows().forEach(f -> live.add(f.code()));
+        return live.equals(new java.util.HashSet<>(flowCodes));
     }
 
     public synchronized TestRun run(String flowCode, List<TestCase> cases) {

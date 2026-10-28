@@ -32,8 +32,8 @@ import org.springframework.web.bind.annotation.RestController;
  * GET  /studio/api/tests/{flow}/cases          cases generated from the flow's operation in the API description
  * POST /studio/api/tests/{flow}/runs  {cases}  runs them against this gateway and returns the evidence (403 view-only)
  * GET  /studio/api/tests/runs/{id}/report?format=md|docx|pdf&amp;audit=true&amp;logs=true   the unit test document
- * GET  /studio/api/tests/spec?format=md|docx|pdf[&amp;flows=A,B]   the API specification of the given flows, or of all
- *      flows (flow=CODE is the same as flows=CODE)
+ * GET  /studio/api/tests/spec?format=md|docx|pdf[&amp;flows=A,B]   the API specification of the given flows (in that
+ *      order), or of all flows (flow=CODE is the same as flows=CODE)
  * </pre>
  */
 @RestController
@@ -144,7 +144,8 @@ public class StudioTestController {
         } catch (TestRunner.NotLiveException e) {
             return ResponseEntity.status(409).body(Map.of("errors", List.of(e.getMessage())));
         }
-        String name = "API_SPEC_" + (codes.isEmpty() ? "ALL" : codes.size() == 1 ? codes.getFirst() : "SELECTION") + "_"
+        String name = "API_SPEC_" + (codes.isEmpty() || (codes.size() > 1 && runner.coversAllLive(codes)) ? "ALL"
+                : codes.size() == 1 ? codes.getFirst() : "SELECTION") + "_"
                 + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmm")) + "." + f.extension;
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_TYPE, f.contentType)

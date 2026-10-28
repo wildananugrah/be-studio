@@ -3052,15 +3052,22 @@ class App extends Component {
   openSpecModal(format) {
     const picked = {};
     this.state.cfg.flows.forEach(f => { if (f.enabled) picked[f.code] = true; });
-    this.setState({ specModal: { format, picked, error: '' } });
+    this.setState({ specModal: { format, picked, order: this.specOrder(), error: '' } });
+  }
+
+  /** The default order of the document: applications by code, their endpoints by path, then method. */
+  specOrder() {
+    const byPath = (a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method);
+    return this.appSections().filter(sec => sec.flows.length)
+      .map(sec => ({ code: sec.app.code, flows: sec.flows.map(x => x.f).sort(byPath).map(f => f.code) }));
   }
 
   async generateSpec() {
-    const m = this.state.specModal; const live = this.state.cfg.flows.filter(f => f.enabled);
-    const codes = live.filter(f => m.picked[f.code]).map(f => f.code);
+    const m = this.state.specModal; const enabled = new Set(this.state.cfg.flows.filter(f => f.enabled).map(f => f.code));
+    // in the order shown: the document follows it
+    const codes = m.order.flatMap(g => g.flows).filter(c => enabled.has(c) && m.picked[c]);
     if (!codes.length) { this.setState({ specModal: { ...m, error: 'Choose at least one endpoint.' } }); return; }
-    // every live flow chosen: ask for all of them (a short URL, and the file is named ALL)
-    const err = await this.downloadSpec(codes.length === live.length ? [] : codes, m.format);
+    const err = await this.downloadSpec(codes, m.format);
     if (!this.state.specModal) return;
     if (err) this.setState({ specModal: { ...this.state.specModal, error: err } });
     else this.setState({ specModal: null });
@@ -3071,7 +3078,8 @@ class App extends Component {
     const set = patch => this.setState({ specModal: { ...m, ...patch, error: '' } });
     const pick = (codes, on) => { const p = { ...m.picked }; codes.forEach(c => { if (on) p[c] = true; else delete p[c]; }); set({ picked: p }); };
     const close = () => { if (!busy) this.setState({ specModal: null }); };
-    const sections = this.appSections().filter(sec => sec.flows.length);
+    const byCode = {}; s.cfg.flows.forEach(f => { byCode[f.code] = f; });
+    const appsByCode = {}; this.appSections().forEach(sec => { appsByCode[sec.app.code] = sec.app; });
     const live = s.cfg.flows.filter(f => f.enabled);
     const chosen = live.filter(f => m.picked[f.code]).length;
     const FORMATS = [['docx', 'Word'], ['pdf', 'PDF'], ['md', 'Markdown']];
@@ -3079,40 +3087,71 @@ class App extends Component {
     const box = (checked, mixed, onChange, disabled) => html`<input type="checkbox" class="ro-ok" checked=${checked} disabled=${disabled || busy}
       ref=${el => { if (el) el.indeterminate = mixed; }} onChange=${onChange} onClick=${e => e.stopPropagation()} style="margin:0;flex:none;accent-color:#17181C;cursor:pointer"/>`;
     const link = (text, go) => html`<button class="ro-ok" disabled=${busy} onClick=${go} style="border:0;background:none;padding:0;color:oklch(0.55 0.16 42);cursor:pointer;font-size:12px">${text}</button>`;
+    // reordering: drag a row by its handle, or ↑ / ↓; applications among applications, endpoints within theirs
+    const mv = (arr, i, j) => { const a = [...arr]; const [x] = a.splice(i, 1); a.splice(j, 0, x); return a; };
+    const moveApp = (i, j) => { if (j >= 0 && j < m.order.length && i !== j) set({ order: mv(m.order, i, j) }); };
+    const moveFlow = (g, i, j) => { const fl = m.order[g].flows; if (j >= 0 && j < fl.length && i !== j) set({ order: m.order.map((x, k) => (k === g ? { ...x, flows: mv(fl, i, j) } : x)) }); };
+    const drag = this.specDrag || (this.specDrag = {});
+    const dnd = (kind, g, i) => ({
+      draggable: !busy,
+      onDragStart: e => { drag.cur = { kind, g, i }; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', kind); },
+      onDragOver: e => { const d = drag.cur; if (d && d.kind === kind && (kind === 'app' || d.g === g)) e.preventDefault(); },
+      onDrop: e => { const d = drag.cur; drag.cur = null; if (!d || d.kind !== kind) return; e.preventDefault(); if (kind === 'app') moveApp(d.i, g); else if (d.g === g) moveFlow(g, d.i, i); },
+      onDragEnd: () => { drag.cur = null; },
+    });
+    const handle = html`<span title="Drag to reorder" style="flex:none;color:#B5B2A8;cursor:grab;font-size:13px;line-height:1;user-select:none">⠿</span>`;
+    const arrows = (up, down, first, last) => html`<span style="display:flex;gap:2px;flex:none">${[['↑', up, first, 'Move up'], ['↓', down, last, 'Move down']].map(([t, go, off, tip]) => html`
+      <button class="btn-line ro-ok" title=${tip} disabled=${busy || off} onClick=${e => { e.preventDefault(); e.stopPropagation(); go(); }}
+        style="width:22px;height:20px;padding:0;border:1px solid #E4E1D8;background:#fff;border-radius:5px;cursor:pointer;font-size:11px;line-height:1">${t}</button>`)}</span>`;
     return html`
       <div onClick=${close} style="position:fixed;inset:0;z-index:50;background:rgba(23,24,28,.45);display:grid;place-items:center;padding:16px">
         <div role="dialog" aria-modal="true" aria-labelledby="spec-title" onClick=${e => e.stopPropagation()} onKeyDown=${e => { if (e.key === 'Escape') close(); }}
           style="width:min(640px,100%);max-height:min(720px,calc(100vh - 32px));display:flex;flex-direction:column;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden">
           <div id="spec-title" style="padding:18px 20px 4px;font-size:15px;font-weight:600">API specification</div>
-          <div style="padding:6px 20px 0;font-size:12px;color:#6A6D75;line-height:1.5">Choose the applications and endpoints that go into the document. It is built from the live (saved) configuration; disabled flows are not live, so they cannot be included.</div>
+          <div style="padding:6px 20px 0;font-size:12px;color:#6A6D75;line-height:1.5">Choose the applications and endpoints that go into the document, and their order (drag a row, or ↑ / ↓): the document follows it, with a table of contents. It is built from the live (saved) configuration; disabled flows are not live, so they cannot be included.</div>
           <div style="padding:14px 20px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <span style="font-size:12px;font-weight:500">Format</span>
             <span style="display:flex;border:1px solid #E4E1D8;border-radius:6px;overflow:hidden">${FORMATS.map(([fmt, text]) => html`<button class="ro-ok" disabled=${busy} onClick=${() => set({ format: fmt })}
               style=${`border:0;padding:5px 12px;cursor:pointer;font:600 11.5px ${MONO};background:${m.format === fmt ? '#17181C' : '#fff'};color:${m.format === fmt ? '#fff' : '#6A6D75'}`}>${text}</button>`)}</span>
             <span style="flex:1"></span>
-            ${link('All', () => pick(live.map(f => f.code), true))}<span style="color:#C9C6BD">·</span>${link('None', () => set({ picked: {} }))}
+            ${link('Reset order', () => set({ order: this.specOrder() }))}<span style="color:#C9C6BD">·</span>${link('All', () => pick(live.map(f => f.code), true))}<span style="color:#C9C6BD">·</span>${link('None', () => set({ picked: {} }))}
           </div>
           <div style="margin:12px 20px 0;border:1px solid #E4E1D8;border-radius:8px;overflow:auto;min-height:0;flex:1">
-            ${sections.map(({ app, flows }) => {
-              const codes = flows.filter(({ f }) => f.enabled).map(({ f }) => f.code);
+            ${m.order.map((grp, g) => {
+              const app = appsByCode[grp.code] || { code: grp.code, name: '' };
+              const flows = grp.flows.map(c => byCode[c]).filter(Boolean);
+              const codes = flows.filter(f => f.enabled).map(f => f.code);
               const n = codes.filter(c => m.picked[c]).length;
+              // the numbers the document will use: only what is ticked counts
+              const gn = n ? m.order.slice(0, g + 1).filter(x => x.flows.some(c => byCode[c] && byCode[c].enabled && m.picked[c])).length : 0;
+              let en = 0; const num = f => (gn && f.enabled && m.picked[f.code] ? gn + '.' + (++en) : '–');
               return html`
               <div style="border-bottom:1px solid #EFEDE6">
-                <label style="display:flex;align-items:center;gap:9px;padding:9px 12px;background:#FAF9F6;cursor:pointer">
-                  ${box(codes.length > 0 && n === codes.length, n > 0 && n < codes.length, e => pick(codes, e.currentTarget.checked), !codes.length)}
-                  <span style=${`font:600 12px ${MONO}`}>${app.code}</span>
-                  ${app.name && html`<span style="font-size:12px;font-weight:500">${app.name}</span>`}
-                  <span style="flex:1"></span>
-                  <span style=${`font:11px ${MONO};color:#9A9CA2`}>${n} of ${codes.length}</span>
-                </label>
-                ${flows.map(({ f }) => html`
-                <label title=${f.enabled ? '' : 'Disabled: not live, so not in the specification'} style=${`display:flex;align-items:center;gap:9px;padding:7px 12px 7px 32px;border-top:1px solid #F3F1EC;cursor:${f.enabled ? 'pointer' : 'default'};opacity:${f.enabled ? 1 : 0.5}`}>
-                  ${box(!!m.picked[f.code], false, e => pick([f.code], e.currentTarget.checked), !f.enabled)}
-                  <span style=${`width:44px;text-align:center;flex:none;font:600 9.5px ${MONO};color:#fff;background:${MC[f.method] || '#555'};padding:2px 0;border-radius:4px`}>${f.method}</span>
-                  <span style=${`font:12px ${MONO};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0`}>${base}${f.path}</span>
-                  <span style="flex:1"></span>
-                  <span style=${`font:11px ${MONO};color:#6A6D75;white-space:nowrap`}>${f.enabled ? f.code : 'disabled'}</span>
-                </label>`)}
+                <div ...${dnd('app', g, g)} style="display:flex;align-items:center;gap:9px;padding:8px 12px;background:#FAF9F6">
+                  ${handle}
+                  <label style="display:flex;align-items:center;gap:9px;flex:1;min-width:0;cursor:pointer">
+                    ${box(codes.length > 0 && n === codes.length, n > 0 && n < codes.length, e => pick(codes, e.currentTarget.checked), !codes.length)}
+                    <span style=${`font:11px ${MONO};color:#9A9CA2;flex:none;min-width:14px`}>${gn ? gn + '.' : '–'}</span>
+                    <span style=${`font:600 12px ${MONO}`}>${app.code}</span>
+                    ${app.name && html`<span style="font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${app.name}</span>`}
+                    <span style="flex:1"></span>
+                    <span style=${`font:11px ${MONO};color:#9A9CA2;flex:none`}>${n} of ${codes.length}</span>
+                  </label>
+                  ${arrows(() => moveApp(g, g - 1), () => moveApp(g, g + 1), g === 0, g === m.order.length - 1)}
+                </div>
+                ${flows.map((f, i) => html`
+                <div ...${dnd('flow', g, i)} title=${f.enabled ? '' : 'Disabled: not live, so not in the specification'} style=${`display:flex;align-items:center;gap:9px;padding:6px 12px 6px 22px;border-top:1px solid #F3F1EC;opacity:${f.enabled ? 1 : 0.5}`}>
+                  ${handle}
+                  <label style=${`display:flex;align-items:center;gap:9px;flex:1;min-width:0;cursor:${f.enabled ? 'pointer' : 'default'}`}>
+                    ${box(!!m.picked[f.code], false, e => pick([f.code], e.currentTarget.checked), !f.enabled)}
+                    <span style=${`font:11px ${MONO};color:#9A9CA2;flex:none;min-width:28px`}>${num(f)}</span>
+                    <span style=${`width:44px;text-align:center;flex:none;font:600 9.5px ${MONO};color:#fff;background:${MC[f.method] || '#555'};padding:2px 0;border-radius:4px`}>${f.method}</span>
+                    <span style=${`font:12px ${MONO};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0`}>${base}${f.path}</span>
+                    <span style="flex:1"></span>
+                    <span style=${`font:11px ${MONO};color:#6A6D75;white-space:nowrap`}>${f.enabled ? f.code : 'disabled'}</span>
+                  </label>
+                  ${arrows(() => moveFlow(g, i, i - 1), () => moveFlow(g, i, i + 1), i === 0, i === flows.length - 1)}
+                </div>`)}
               </div>`;
             })}
           </div>
