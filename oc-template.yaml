@@ -83,10 +83,13 @@ objects:
       DB_POOL_LEAK_DETECTION_MS: "0"
       LIQUIBASE_ENABLED: "false"
 
+      GATEWAY_ADMIN_TOKEN: "supersecretpassword!"
       GATEWAY_AUDIT_ENABLED: "true"
       GATEWAY_STUDIO_ENABLED: "false"
+      GATEWAY_STUDIO_MODE: "view-only"
       GATEWAY_ASSISTANT_ENABLED: "false"
       GATEWAY_DOCS_ENABLED: "true"
+      GATEWAY_DOCS_TITLE: "Transaction Banking Platform B2B Gateway"
       GATEWAY_AUDIT_PARTITION_INTERVAL: "MONTH"
       GATEWAY_AUDIT_RETENTION: ""
       GATEWAY_MASKING_FIELDS: "pin,password,cardNo,cvv,authorization,x-admin-token"
@@ -114,25 +117,6 @@ objects:
       tls:
         termination: edge
         insecureEdgeTerminationPolicy: Redirect
-  - apiVersion: autoscaling/v2
-    kind: HorizontalPodAutoscaler
-    metadata:
-      name: ${APP_NAME}
-      namespace: ${NS_NAME}
-    spec:
-      scaleTargetRef:
-        apiVersion: apps/v1
-        kind: Deployment
-        name: ${APP_NAME}
-      minReplicas: 1
-      maxReplicas: 5
-      metrics:
-        - type: Resource
-          resource:
-            name: cpu
-            target:
-              averageUtilization: 85
-              type: Utilization
   - apiVersion: v1
     kind: Service
     metadata:
