@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Why a step failed (error type, message and details), e.g. a success_expr that was false on a 2xx response:
+        the audit trail showed FAILED next to a 201 without saying why.
+    -->
+    <changeSet id="016-gw-audit-step-error" author="json-gateway">
+        <addColumn tableName="${tbl.audit_step}">
+            <column name="error_message" type="varchar(2000)"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

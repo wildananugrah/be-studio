@@ -35,6 +35,7 @@ public record AuditRecord(
 
     /**
      * @param outcome SUCCESS, FAILED, SKIPPED, TIMEOUT or CANCELLED (stopped because a sibling failed or the flow timed out)
+     * @param error why the step failed (error type, message, details); null when it did not
      */
     public record StepRecord(
             String stepName,
@@ -48,12 +49,13 @@ public record AuditRecord(
             Instant startedAt,
             Long durationMs,
             Map<String, String> requestHeaders,
-            Map<String, String> responseHeaders) {
+            Map<String, String> responseHeaders,
+            String error) {
 
         public StepRecord(String stepName, String targetSystem, String httpMethod, String url, Integer httpStatus,
                 String outcome, JsonNode requestPayload, JsonNode responsePayload, Instant startedAt, Long durationMs) {
             this(stepName, targetSystem, httpMethod, url, httpStatus, outcome, requestPayload, responsePayload,
-                    startedAt, durationMs, null, null);
+                    startedAt, durationMs, null, null, null);
         }
     }
 }

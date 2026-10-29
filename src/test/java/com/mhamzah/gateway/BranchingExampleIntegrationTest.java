@@ -64,5 +64,11 @@ class BranchingExampleIntegrationTest {
         assertThat(r.body()).isEqualTo("{\"status\":\"REVERSED\",\"reason\":\"Insufficient funds\","
                 + "\"reversalRef\":\"REV-0001\",\"correlationId\":\"branch-fail\"}");
         assertThat(steps("branch-fail", 3)).containsExactly("debit=FAILED", "reversal=SUCCESS", "notify=SKIPPED");
+        // a 2xx whose success_expr is false: the audit says why the step failed
+        Map<String, Object> debit = jdbc.queryForMap("SELECT s.http_status, s.error_message FROM gw_audit_step s"
+                + " JOIN gw_audit_transaction t ON t.id = s.transaction_id WHERE t.correlation_id = ? AND s.step_name = 'debit'",
+                "branch-fail");
+        assertThat(((Number) debit.get("http_status")).intValue()).isBetween(200, 299);
+        assertThat(debit.get("error_message")).isEqualTo("DOWNSTREAM_BUSINESS_ERROR: success_expr of step 'debit' is false");
     }
 }

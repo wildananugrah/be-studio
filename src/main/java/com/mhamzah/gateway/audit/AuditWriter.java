@@ -43,8 +43,8 @@ public class AuditWriter implements AuditService.BatchWriter {
                 + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         this.insertStep = "INSERT INTO " + db.qualify(db.tables().auditStep())
                 + " (transaction_id, transaction_started_at, step_name, target_system, http_method, url, http_status, outcome,"
-                + " request_payload, response_payload, started_at, duration_ms, request_headers, response_headers)"
-                + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                + " request_payload, response_payload, started_at, duration_ms, request_headers, response_headers,"
+                + " error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         this.keyColumn = generatedKeyColumn(dataSource);
     }
 
@@ -84,7 +84,7 @@ public class AuditWriter implements AuditService.BatchWriter {
                     .params(id, Timestamp.from(r.startedAt()), s.stepName(), s.targetSystem(), s.httpMethod(), truncate(s.url(), 2000), s.httpStatus(),
                             s.outcome(), payload(s.requestPayload()), payload(s.responsePayload()),
                             s.startedAt() == null ? null : Timestamp.from(s.startedAt()), s.durationMs(),
-                            headers(s.requestHeaders()), headers(s.responseHeaders()))
+                            headers(s.requestHeaders()), headers(s.responseHeaders()), truncate(s.error(), 2000))
                     .update();
         }
     }
