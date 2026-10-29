@@ -15,7 +15,7 @@
 	<description>Database-configured JSON transformation and orchestration gateway</description>
 
 	<properties>
-		<java.version>21</java.version>
+		<java.version>25</java.version>
 		<json-schema-validator.version>3.0.8</json-schema-validator.version>
 		<wiremock.version>3.13.2</wiremock.version>
 		<swagger-ui.version>5.29.5</swagger-ui.version>

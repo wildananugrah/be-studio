@@ -578,13 +578,23 @@ final class StepRunner {
             if (durationMs == null) {
                 finishCall();
             }
-            log.info("step={} target={} {} {} status={} outcome={} {}ms", step.name(), step.targetSystemName(),
-                    step.methodName(), url, status, outcome, durationMs);
+            String reason = reason(error);
+            log.info("step={} target={} {} {} status={} outcome={} {}ms{}", step.name(), step.targetSystemName(),
+                    step.methodName(), url, status, outcome, durationMs, reason == null ? "" : " error=" + reason);
             StepRecord record = new StepRecord(step.name(), step.targetSystemName(), step.methodName(), url,
                     status, outcome, wireRequest != null ? F.stringNode(wireRequest) : requestPayload,
                     wireResponse != null ? F.stringNode(wireResponse) : responsePayload, startedAt, durationMs,
-                    sentHeaders, status == null || headers.isEmpty() ? null : headers);
+                    sentHeaders, status == null || headers.isEmpty() ? null : headers, reason);
             return new StepOutcome(step, error, record, route);
+        }
+
+        /** Why the step failed, for the audit and the log: e.g. a success_expr that was false on a 2xx response. */
+        private static String reason(GatewayError error) {
+            if (error == null) {
+                return null;
+            }
+            String text = error.type().name() + ": " + error.getMessage();
+            return error.details().isEmpty() ? text : text + " (" + String.join("; ", error.details()) + ")";
         }
     }
 }

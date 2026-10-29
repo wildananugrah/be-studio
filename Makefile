@@ -2,8 +2,11 @@
 
 SHELL := /bin/bash
 
-# JDK 21: use JAVA_HOME if set, otherwise macOS java_home, otherwise Homebrew's openjdk@21
-JAVA_HOME ?= $(shell /usr/libexec/java_home -v 21 2>/dev/null || echo /opt/homebrew/opt/openjdk@21)
+# JDK 25: JAVA_HOME when it is 25 or newer, otherwise macOS java_home, otherwise Homebrew's openjdk@25
+# (a JAVA_HOME of an older JDK, e.g. from the shell profile, is passed over: it cannot build this project)
+ifneq ($(shell "$(JAVA_HOME)/bin/java" -version 2>&1 | grep -Eq 'version "(2[5-9]|[3-9][0-9])' && echo ok),ok)
+JAVA_HOME := $(shell /usr/libexec/java_home -v 25 2>/dev/null || echo /opt/homebrew/opt/openjdk@25)
+endif
 export JAVA_HOME
 
 MVN      := ./mvnw -B

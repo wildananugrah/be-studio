@@ -1721,6 +1721,7 @@ class App extends Component {
                         ${outcomeChip(x.outcome)} ${x.http_status != null && statusChip(x.http_status)}
                         <span style=${`font:11px ${MONO};color:#9A9CA2`}>${x.target_system} · ${x.duration_ms == null ? '' : x.duration_ms + ' ms'}</span>
                       </div>
+                      ${x.error_message && html`<div style=${`font:11.5px/1.45 ${MONO};color:oklch(0.5 0.17 25);background:oklch(0.97 0.02 25);border:1px solid oklch(0.9 0.05 25);border-radius:6px;padding:6px 9px;white-space:pre-wrap;word-break:break-word`}>${x.error_message}</div>`}
                       ${x.url && html`<div class="hscroll" style=${`font:11.5px ${MONO};color:#3E4047`}><span style=${`font:600 10px ${MONO};color:#fff;background:${MC[x.http_method] || '#555'};padding:1px 5px;border-radius:4px;margin-right:6px`}>${x.http_method}</span>${x.url}</div>`}
                       <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px">
                         ${x.url && (x.request_headers || x.http_status != null) ? headersBlock('Sent headers', x.request_headers) : ''}
