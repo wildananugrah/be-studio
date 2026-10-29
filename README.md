@@ -6,7 +6,7 @@ Design spec: [`docs/superpowers/specs/2026-10-08-json-gateway-design.md`](docs/s
 
 ## Running locally
 
-Requirements: JDK 21 and Docker. The quickest way is the Makefile. See **[docs/MAKEFILE.md](docs/MAKEFILE.md)** for every target.
+Requirements: JDK 25 and Docker. The quickest way is the Makefile. See **[docs/MAKEFILE.md](docs/MAKEFILE.md)** for every target.
 
 ```bash
 make up      # PostgreSQL + WireMock via docker-compose.yml

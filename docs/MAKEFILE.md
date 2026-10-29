@@ -6,18 +6,18 @@ The `Makefile` wraps the everyday commands for building, running and testing the
 
 | Tool | Why | Check |
 |---|---|---|
-| JDK 21 | builds and runs the app | `java -version` |
+| JDK 25 | builds and runs the app | `java -version` |
 | Docker (with Compose v2) | local PostgreSQL + WireMock, Testcontainers | `docker compose version` |
 | `make`, `curl` | commands and demo calls | preinstalled on macOS / most Linux |
 
 Maven isn't needed because the project ships the Maven wrapper (`./mvnw`).
 
-The Makefile finds JDK 21 by itself, in this order:
-1. `JAVA_HOME`, if it is already set
-2. `/usr/libexec/java_home -v 21` (macOS)
-3. Homebrew's `/opt/homebrew/opt/openjdk@21`
+The Makefile finds JDK 25 by itself, in this order:
+1. `JAVA_HOME`, if it is set to JDK 25 or newer (an older one, e.g. from your shell profile, is skipped)
+2. `/usr/libexec/java_home -v 25` (macOS)
+3. Homebrew's `/opt/homebrew/opt/openjdk@25`
 
-To use a different JDK, pass it: `make test JAVA_HOME=/path/to/jdk-21`.
+To use a different JDK, pass it: `make test JAVA_HOME=/path/to/jdk-25`.
 
 ## Quick start
 
@@ -187,7 +187,7 @@ If the new rows are invalid, `make reload` returns `422` with the list of proble
 
 | Symptom | Fix |
 |---|---|
-| `Unable to locate a Java Runtime` / wrong Java version | Install JDK 21 (`brew install openjdk@21`), or pass `JAVA_HOME=...`. |
+| `Unable to locate a Java Runtime` / wrong Java version | Install JDK 25 (`brew install openjdk@25`), or pass `JAVA_HOME=...`. |
 | `port is already allocated` on `make up` | Another service uses the port. Use `make up DB_PORT=5433` (and the same `DB_PORT` for `make run`), or stop the other service. |
 | `make run` can't connect to the DB | Check `make ps` shows postgres `healthy`. |
 | Demo calls return `GW-502-CONNECTION` | WireMock isn't running. Run `make up` and check `make ps`. |
