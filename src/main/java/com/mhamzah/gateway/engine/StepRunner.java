@@ -189,7 +189,7 @@ final class StepRunner {
         }
         a.headers = lowerCase(response.headers());
         a.responsePayload = response.body();
-        if (step.responseSchema() != null) {
+        if (step.responseSchema() != null && step.validateResponse()) {
             List<String> errors = step.responseSchema().validate(response.body());
             if (!errors.isEmpty()) {
                 throw GatewayError.of(ErrorType.DOWNSTREAM_INVALID_RESPONSE).step(step.name())
@@ -241,7 +241,7 @@ final class StepRunner {
             FlowExecutor.invoke(step.responseHandler(), result, ctx, "response_handler of step '" + step.name() + "'", false);
         }
         a.responsePayload = result.body();
-        if (step.responseSchema() != null) {
+        if (step.responseSchema() != null && step.validateResponse()) {
             List<String> errors = step.responseSchema().validate(result.body());
             if (!errors.isEmpty()) {
                 throw GatewayError.of(ErrorType.MAPPING_ERROR).step(step.name())
@@ -328,7 +328,7 @@ final class StepRunner {
             FlowExecutor.invoke(step.responseHandler(), response, ctx, "response_handler of step '" + step.name() + "'", false);
         }
         a.responsePayload = response.body();
-        if (step.responseSchema() != null) {
+        if (step.responseSchema() != null && step.validateResponse()) {
             List<String> errors = step.responseSchema().validate(response.body());
             if (!errors.isEmpty()) {
                 throw GatewayError.of(ErrorType.DOWNSTREAM_INVALID_RESPONSE).step(step.name())
@@ -435,7 +435,7 @@ final class StepRunner {
             FlowExecutor.invoke(step.responseHandler(), response, ctx, "response_handler of step '" + step.name() + "'", false);
         }
         a.responsePayload = response.body();
-        if (step.responseSchema() != null) {
+        if (step.responseSchema() != null && step.validateResponse()) {
             List<String> errors = step.responseSchema().validate(response.body());
             if (!errors.isEmpty()) {
                 throw GatewayError.of(ErrorType.DOWNSTREAM_INVALID_RESPONSE).step(step.name())

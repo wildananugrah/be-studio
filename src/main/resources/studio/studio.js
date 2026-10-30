@@ -50,10 +50,10 @@ function fromApi(c) {
     flows: c.flows.map(f => ({
       code: str(f.code), name: str(f.name), method: f.method || 'GET', path: str(f.path), reqSchema: str(f.requestSchema), respSchema: str(f.responseSchema),
       reqHandler: str(f.requestHandler), respHandler: str(f.responseHandler), errorHandler: str(f.errorHandler), successStatus: str(f.successStatus || 200),
-      timeout: str(f.timeoutMs), audit: f.auditMode || 'INHERIT', enabled: f.enabled, application: str(f.application) || 'DEFAULT',
+      timeout: str(f.timeoutMs), audit: f.auditMode || 'INHERIT', validation: f.schemaValidation || 'BOTH', enabled: f.enabled, application: str(f.application) || 'DEFAULT',
       steps: f.steps.map(s => ({ id: uid('s'), name: str(s.name), order: s.order, target: str(s.targetSystem), method: s.method || 'GET', path: str(s.path), onFailure: s.onFailure || 'STOP',
         timeout: str(s.timeoutMs), condition: str(s.condition), success: str(s.success), reqHandler: str(s.requestHandler), respHandler: str(s.responseHandler),
-        respSchema: str(s.responseSchema), bodyCodec: str(s.bodyCodec), enabled: s.enabled, rules: s.rules.map(ruleIn), sql: s.sql == null ? null : String(s.sql), bodyTemplate: str(s.bodyTemplate), nextOk: str(s.nextOnSuccess), nextFail: str(s.nextOnFailure), example: str(s.responseExample), cases: (s.cases || []).map(c => ({ id: uid('c'), when: str(c.when), then: str(c.then), label: str(c.label), builder: c.builder || null })) })),
+        respSchema: str(s.responseSchema), respValidation: s.responseValidation || 'INHERIT', bodyCodec: str(s.bodyCodec), enabled: s.enabled, rules: s.rules.map(ruleIn), sql: s.sql == null ? null : String(s.sql), bodyTemplate: str(s.bodyTemplate), nextOk: str(s.nextOnSuccess), nextFail: str(s.nextOnFailure), example: str(s.responseExample), cases: (s.cases || []).map(c => ({ id: uid('c'), when: str(c.when), then: str(c.then), label: str(c.label), builder: c.builder || null })) })),
       response: f.response.map(ruleIn),
       responses: (f.responses || []).map(r => ({ id: uid('o'), name: str(r.name), status: str(r.status || 200), description: str(r.description), rules: (r.rules || []).map(ruleIn) }))
     })),
@@ -208,9 +208,9 @@ function toApi(cfg) {
   return {
     flows: cfg.flows.map(f => ({
       code: f.code, name: nn(f.name), method: f.method, path: f.path, requestSchema: nn(f.reqSchema), responseSchema: nn(f.respSchema), requestHandler: nn(f.reqHandler),
-      responseHandler: nn(f.respHandler), errorHandler: nn(f.errorHandler), successStatus: int(f.successStatus) || 200, timeoutMs: int(f.timeout), auditMode: f.audit, enabled: f.enabled, application: nn(f.application),
+      responseHandler: nn(f.respHandler), errorHandler: nn(f.errorHandler), successStatus: int(f.successStatus) || 200, timeoutMs: int(f.timeout), auditMode: f.audit, schemaValidation: f.validation && f.validation !== 'BOTH' ? f.validation : null, enabled: f.enabled, application: nn(f.application),
       steps: [...f.steps].sort((a, b) => a.order - b.order).map(s => ({ name: s.name, order: s.order, targetSystem: s.target, method: isSql(s) || isLocal(s) ? null : s.method, path: isSql(s) || isLocal(s) ? null : s.path, sql: isSql(s) ? s.sql : null, bodyTemplate: isSql(s) || isStore(s) || isCondition(s) ? null : nn(s.bodyTemplate), condition: nn(s.condition), success: nn(s.success),
-        onFailure: s.onFailure, timeoutMs: int(s.timeout), responseSchema: nn(s.respSchema), requestHandler: nn(s.reqHandler), responseHandler: nn(s.respHandler), bodyCodec: nn(s.bodyCodec),
+        onFailure: s.onFailure, timeoutMs: int(s.timeout), responseSchema: nn(s.respSchema), responseValidation: s.respValidation && s.respValidation !== 'INHERIT' && !isCondition(s) ? s.respValidation : null, requestHandler: nn(s.reqHandler), responseHandler: nn(s.respHandler), bodyCodec: nn(s.bodyCodec),
         enabled: s.enabled, rules: s.rules.map(ruleOut), nextOnSuccess: nn(s.nextOk), nextOnFailure: nn(s.nextFail), responseExample: isSql(s) || isStore(s) || isLocal(s) ? null : nn(s.example), cases: isCondition(s) ? (s.cases || []).map(c => ({ when: c.when, then: c.then, label: nn(c.label), builder: c.builder || null })) : [] })),
       response: f.response.map(ruleOut),
       responses: (f.responses || []).map(r => ({ name: r.name, status: int(r.status) || 200, description: nn(r.description), rules: r.rules.map(ruleOut) }))
@@ -407,14 +407,14 @@ function flowSql(f, lookupsUsed) {
   const opt = (c, v, num, cols, vals) => { if (v !== '' && v != null) { cols.push(c); vals.push(num ? v : q(v)); } };
   const fc = ['code', 'name', 'http_method', 'path_pattern'], fv = [q(f.code), q(f.name || f.code), q(f.method), q(f.path)];
   opt('request_schema_code', f.reqSchema, 0, fc, fv); opt('response_schema_code', f.respSchema, 0, fc, fv); opt('request_handler', f.reqHandler, 0, fc, fv); opt('response_handler', f.respHandler, 0, fc, fv); opt('error_handler', f.errorHandler, 0, fc, fv);
-  if (String(f.successStatus) !== '200') opt('success_status', f.successStatus, 1, fc, fv); opt('timeout_ms', f.timeout, 1, fc, fv); if (f.audit !== 'INHERIT') opt('audit_mode', f.audit, 0, fc, fv); if (!f.enabled) opt('enabled', 'false', 1, fc, fv); opt('application_code', f.application, 0, fc, fv);
+  if (String(f.successStatus) !== '200') opt('success_status', f.successStatus, 1, fc, fv); opt('timeout_ms', f.timeout, 1, fc, fv); if (f.audit !== 'INHERIT') opt('audit_mode', f.audit, 0, fc, fv); if (f.validation && f.validation !== 'BOTH') opt('schema_validation', f.validation, 0, fc, fv); if (!f.enabled) opt('enabled', 'false', 1, fc, fv); opt('application_code', f.application, 0, fc, fv);
   out.push('-- ' + (f.name || f.code) + '\nINSERT INTO gw_flow (' + fc.join(', ') + ')\nVALUES (' + fv.join(', ') + ');');
   const steps = [...f.steps].sort((a, b) => a.order - b.order);
   steps.forEach(st => {
     const c = isSql(st) ? ['flow_id', 'name', 'step_order', 'target_system', 'sql_text'] : isLocal(st) ? ['flow_id', 'name', 'step_order', 'target_system'] : ['flow_id', 'name', 'step_order', 'target_system', 'http_method', 'path_template'];
     const v = isSql(st) ? ['id', q(st.name), st.order, q(st.target), q(st.sql)] : isLocal(st) ? ['id', q(st.name), st.order, q(st.target)] : ['id', q(st.name), st.order, q(st.target), q(st.method), q(st.path)];
     opt('condition_expr', st.condition, 0, c, v); opt('success_expr', st.success, 0, c, v); if (st.onFailure !== 'STOP') opt('on_failure', st.onFailure, 0, c, v); opt('timeout_ms', st.timeout, 1, c, v);
-    opt('response_schema_code', st.respSchema, 0, c, v); opt('request_handler', st.reqHandler, 0, c, v); opt('response_handler', st.respHandler, 0, c, v); if (!isSql(st) && !isLocal(st)) opt('body_codec', st.bodyCodec, 0, c, v); if (!isSql(st) && !isCondition(st)) opt('body_template', st.bodyTemplate, 0, c, v); if (isCondition(st) && st.cases.length) opt('cases', JSON.stringify(st.cases.map(x => ({ when: x.when, then: x.then, ...(x.label ? { label: x.label } : {}), ...(x.builder ? { builder: x.builder } : {}) }))), 0, c, v); opt('next_on_success', st.nextOk, 0, c, v); opt('next_on_failure', st.nextFail, 0, c, v); if (!st.enabled) opt('enabled', 'false', 1, c, v);
+    opt('response_schema_code', st.respSchema, 0, c, v); if (st.respValidation && st.respValidation !== 'INHERIT' && !isCondition(st)) opt('response_validation', st.respValidation, 0, c, v); opt('request_handler', st.reqHandler, 0, c, v); opt('response_handler', st.respHandler, 0, c, v); if (!isSql(st) && !isLocal(st)) opt('body_codec', st.bodyCodec, 0, c, v); if (!isSql(st) && !isCondition(st)) opt('body_template', st.bodyTemplate, 0, c, v); if (isCondition(st) && st.cases.length) opt('cases', JSON.stringify(st.cases.map(x => ({ when: x.when, then: x.then, ...(x.label ? { label: x.label } : {}), ...(x.builder ? { builder: x.builder } : {}) }))), 0, c, v); opt('next_on_success', st.nextOk, 0, c, v); opt('next_on_failure', st.nextFail, 0, c, v); if (!st.enabled) opt('enabled', 'false', 1, c, v);
     out.push('INSERT INTO gw_flow_step (' + c.join(', ') + ')\nSELECT ' + v.join(', ') + '\nFROM gw_flow WHERE code = ' + q(f.code) + ';');
   });
   const ruleSql = (r, i, st, resp) => {
@@ -1970,7 +1970,10 @@ class App extends Component {
     const flowZone = this.zone('flow', isPal('flow'), applyFlow('flow'));
     const inZone = this.zone('in', isPal('in'), applyFlow('in'));
     const inChips = [];
-    if (f.reqSchema) inChips.push(chip('schema ' + f.reqSchema, C.in, fl => { fl.reqSchema = ''; }));
+    // schema_validation: a schema that is not checked at run time still serves mapping and docs
+    const checks = part => { const m = f.validation || 'BOTH'; return m === 'BOTH' || m === part; };
+    const schemaChip = (code, checked) => (checked ? 'schema ' : 'unchecked schema ') + code;
+    if (f.reqSchema) inChips.push(chip(schemaChip(f.reqSchema, checks('REQUEST')), C.in, fl => { fl.reqSchema = ''; }));
     if (f.reqHandler) inChips.push(chip(f.reqHandler, C.java, fl => { fl.reqHandler = ''; }));
 
     const orders = [...new Set(f.steps.map(x => x.order))].sort((a, b) => a - b);
@@ -1982,7 +1985,7 @@ class App extends Component {
         if (st.condition) ch.push(chip('run if ' + st.condition.replace(/\$\{|\}/g, ''), C.step, fl => { S2(fl).condition = ''; }));
         if (st.success) ch.push(chip('ok if ' + st.success.replace(/\$\{|\}/g, ''), C.step, fl => { S2(fl).success = ''; }));
         if (st.timeout) ch.push(chip('timeout ' + st.timeout + 'ms', C.step, fl => { S2(fl).timeout = ''; }));
-        if (st.respSchema) ch.push(chip('schema ' + st.respSchema, C.step, fl => { S2(fl).respSchema = ''; }));
+        if (st.respSchema) ch.push(chip(schemaChip(st.respSchema, st.respValidation === 'ON' || (st.respValidation !== 'OFF' && checks('RESPONSE'))), C.step, fl => { S2(fl).respSchema = ''; }));
         if (st.reqHandler) ch.push(chip(st.reqHandler, C.java, fl => { S2(fl).reqHandler = ''; }));
         if (st.respHandler) ch.push(chip(st.respHandler, C.java, fl => { S2(fl).respHandler = ''; }));
         if (st.bodyCodec) ch.push(chip(st.bodyCodec, C.java, fl => { S2(fl).bodyCodec = ''; }));
@@ -1996,7 +1999,7 @@ class App extends Component {
 
     const outZone = this.zone('out', isPal('out'), applyFlow('out'));
     const outChips = [];
-    if (f.respSchema) outChips.push(chip('schema ' + f.respSchema, C.out, fl => { fl.respSchema = ''; }));
+    if (f.respSchema) outChips.push(chip(schemaChip(f.respSchema, checks('RESPONSE')), C.out, fl => { fl.respSchema = ''; }));
     if (f.respHandler) outChips.push(chip(f.respHandler, C.java, fl => { fl.respHandler = ''; }));
     if (String(f.successStatus) !== '200') outChips.push(chip('success_status ' + f.successStatus, C.out, fl => { fl.successStatus = '200'; }));
     const toMap = scope => e => { if (e) e.stopPropagation(); this.setState({ tab: 'mapping', scope, preview: null }, () => this.changed()); };
@@ -2049,6 +2052,7 @@ class App extends Component {
                 <span style="font-weight:600">${f.name || f.code}</span>
                 <span style=${`font:11.5px ${MONO};color:#6A6D75`}>timeout ${f.timeout ? f.timeout + 'ms' : 'default'}</span>
                 <span style=${`font:11.5px ${MONO};color:#6A6D75`}>audit ${f.audit}</span>
+                ${f.validation && f.validation !== 'BOTH' && html`<span style=${`font:11.5px ${MONO};color:#6A6D75`} title="schema_validation: which schemas are checked at run time">validate ${f.validation}</span>`}
                 <span style=${`font:11.5px ${MONO};color:${f.enabled ? '#6A6D75' : C.err}`}>${f.enabled ? 'enabled' : 'disabled'}</span>
                 ${zoneOverlay(flowZone, C.call)}
               </div>
@@ -2430,6 +2434,12 @@ class App extends Component {
     const plain = arr => arr.map(v => ({ v, l: v }));
     const fld = (label, col, value, kind, onSet, extra = {}) => ({ label, col, value: str(value), kind, onSet, ...extra });
     const withCurrent = (opts, v) => (v && !opts.some(o => o.v === v) ? [...opts, { v, l: v + ' (unknown)' }] : opts);
+    /** The flow's schema_validation: which schemas are checked at run time (all are still used for mapping and docs). */
+    const flowValidates = (f, part) => { const m = f.validation || 'BOTH'; return m === 'BOTH' || m === part; };
+    /** A step's response_validation: INHERIT follows the flow, ON / OFF override it for this step's schema. */
+    const validationField = (st, f, S2, what = 'response') => fld('Validate ' + what, 'response_validation', st.respValidation || 'INHERIT', 'select', (fl, v) => { S2(fl).respValidation = v; }, {
+      options: [{ v: 'INHERIT', l: 'INHERIT · ' + (flowValidates(f, 'RESPONSE') ? 'checked' : 'not checked') + ' (flow: ' + (f.validation || 'BOTH') + ')' }, { v: 'ON', l: 'ON · always checked' }, { v: 'OFF', l: 'OFF · not checked (schema kept for mapping and docs)' }],
+      hint: st.respSchema ? '' : 'Only matters once a schema is chosen' });
     /** "If it succeeds" / "If it fails" for a step: the default, END / FAIL, or a jump to a later step. */
     const routeFields = (st, f, S2) => {
       const later = f.steps.filter(x => x.order > st.order).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
@@ -2463,6 +2473,7 @@ class App extends Component {
         fld('Success when', 'success_expr', st.success, 'area', (fl, v) => { S2(fl).success = v; }, { placeholder: '${steps.' + st.name + '.body.rowCount} > 0', hint: 'False → 422 GW-422-BUSINESS (e.g. no row found)' }),
         fld('Timeout (ms)', 'timeout_ms', st.timeout, 'text', (fl, v) => { S2(fl).timeout = v.replace(/\D/g, ''); }, { hint: 'Query timeout. Empty = ' + cat.defaultStepTimeoutMs }),
         fld('Response schema', 'response_schema_code', st.respSchema, 'select', (fl, v) => { S2(fl).respSchema = v; }, { options: withCurrent(none(this.schemaCodes()), st.respSchema) }),
+        validationField(st, f, S2, 'result'),
         fld('Request handler', 'request_handler', st.reqHandler, 'select', (fl, v) => { S2(fl).reqHandler = v; }, { options: withCurrent(none(cat.messageHandlers), st.reqHandler), hint: 'Sees the parameters as the body' }),
         fld('Response handler', 'response_handler', st.respHandler, 'select', (fl, v) => { S2(fl).respHandler = v; }, { options: withCurrent(none(cat.messageHandlers), st.respHandler), hint: 'Sees the result as the body' }),
         fld('Enabled', 'enabled', String(st.enabled), 'select', (fl, v) => { S2(fl).enabled = v === 'true'; }, { options: [{ v: 'true', l: 'true' }, { v: 'false', l: 'false · skipped with its rules' }] })
@@ -2489,6 +2500,7 @@ class App extends Component {
         fld('Body template', 'body_template', st.bodyTemplate, 'template', (fl, v) => { S2(fl).bodyTemplate = v; }, { hint: 'Optional. Write the result as JSON with placeholders: ${request.body.x}, ${request.headers.x}, ${steps.a.body.y}, ${body.z} (what this step\'s rules built, with converters and lookups) and ${x:default}. Text goes inside quotes ("${…}"), numbers and arrays without. Empty = the rules alone build the result.' }), { kind: 'slots', st, f },
         fld('Success when', 'success_expr', st.success, 'area', (fl, v) => { S2(fl).success = v; }, { placeholder: '${steps.' + st.name + '.body.amount} > 0', hint: 'Checks what it built; false = the step fails (422, or its If it fails route)' }),
         fld('Result schema', 'response_schema_code', st.respSchema, 'select', (fl, v) => { S2(fl).respSchema = v; }, { options: withCurrent(none(this.schemaCodes()), st.respSchema), hint: 'Validates what it built; invalid → 500 GW-500-MAPPING' }),
+        validationField(st, f, S2, 'result'),
         fld('Post-process handler', 'response_handler', st.respHandler, 'select', (fl, v) => { S2(fl).respHandler = v; }, { options: withCurrent(none(cat.messageHandlers), st.respHandler), hint: 'Optional Java MessageHandler that can change the result after the rules' }),
         fld('Enabled', 'enabled', String(st.enabled), 'select', (fl, v) => { S2(fl).enabled = v === 'true'; }, { options: [{ v: 'true', l: 'true' }, { v: 'false', l: 'false · skipped with its rules' }] })
       ], mapping: { label: 'Edit transform mapping · ' + st.rules.length + ' rules', go: toMap(st.id) },
@@ -2535,6 +2547,7 @@ class App extends Component {
         fld('Success when', 'success_expr', st.success, 'area', (fl, v) => { S2(fl).success = v; }, { placeholder: '${steps.' + st.name + ".body.responseCode} == '00'" }),
         fld('Timeout (ms)', 'timeout_ms', st.timeout, 'text', (fl, v) => { S2(fl).timeout = v.replace(/\D/g, ''); }, { hint: 'Empty = target read timeout, else ' + cat.defaultStepTimeoutMs }),
         fld('Response schema', 'response_schema_code', st.respSchema, 'select', (fl, v) => { S2(fl).respSchema = v; }, { options: withCurrent(none(this.schemaCodes()), st.respSchema), actions: this.schemaActions(st.respSchema, () => this.sampleOf(f).steps?.[st.name]?.body, f.code + '_' + st.name.toUpperCase().replace(/[^A-Z0-9_]/g, '_') + '_RESPONSE', (fl, c) => { S2(fl).respSchema = c; }) }),
+        validationField(st, f, S2),
         fld('Request handler', 'request_handler', st.reqHandler, 'select', (fl, v) => { S2(fl).reqHandler = v; }, { options: withCurrent(none(cat.messageHandlers), st.reqHandler) }),
         fld('Response handler', 'response_handler', st.respHandler, 'select', (fl, v) => { S2(fl).respHandler = v; }, { options: withCurrent(none(cat.messageHandlers), st.respHandler) }),
         fld('Wire format', 'body_codec', st.bodyCodec, 'select', (fl, v) => { S2(fl).bodyCodec = v; }, { options: withCurrent(none(cat.bodyCodecs, st.bodyTemplate && templateKind(st.bodyTemplate) === 'xml' ? '— default: ' + (/:?Envelope/.test(st.bodyTemplate) ? 'soapCodec' : 'xmlCodec') + ' (XML template)' : '— target system default'), st.bodyCodec), hint: st.bodyTemplate ? 'Decodes the response; the request is the template.' : '' }),
@@ -2547,7 +2560,7 @@ class App extends Component {
       insp = { kind: 'Inbound', color: C.in, title: f.method + ' ' + f.path, table: 'gw_flow', fields: [
         fld('Method', 'http_method', f.method, 'select', (fl, v) => { fl.method = v; }, { options: plain(METHODS) }),
         fld('Path', 'path_pattern', f.path, 'text', (fl, v) => { fl.path = v; }, { hint: 'Relative to ' + cat.apiBasePath + '. {name} → $.request.path.name' }),
-        fld('Request schema', 'request_schema_code', f.reqSchema, 'select', (fl, v) => { fl.reqSchema = v; }, { options: withCurrent(none(this.schemaCodes()), f.reqSchema), hint: 'Invalid body → 400', actions: this.schemaActions(f.reqSchema, () => this.sampleOf(f).request?.body, f.code + '_REQUEST', (fl, c) => { fl.reqSchema = c; }) }),
+        fld('Request schema', 'request_schema_code', f.reqSchema, 'select', (fl, v) => { fl.reqSchema = v; }, { options: withCurrent(none(this.schemaCodes()), f.reqSchema), hint: flowValidates(f, 'REQUEST') ? 'Invalid body → 400' : 'Not checked (schema validation ' + f.validation + '): used for mapping and docs', actions: this.schemaActions(f.reqSchema, () => this.sampleOf(f).request?.body, f.code + '_REQUEST', (fl, c) => { fl.reqSchema = c; }) }),
         fld('Request handler', 'request_handler', f.reqHandler, 'select', (fl, v) => { fl.reqHandler = v; }, { options: withCurrent(none(cat.messageHandlers), f.reqHandler), hint: 'MessageHandler. May short-circuit with its own response.' })
       ] };
     } else if (sel.kind === 'out') {
@@ -2555,7 +2568,7 @@ class App extends Component {
       insp = { kind: 'Client response · default', color: C.out, title: 'HTTP ' + statusText(f.response, f.successStatus), table: 'gw_flow', fields: [
         this.statusSource(f, pass, fl => fl.response),
         fld(pass ? 'Fallback status' : 'Success status', 'success_status', f.successStatus, 'select', (fl, v) => { fl.successStatus = v; }, { options: withCurrent(plain(['200', '201', '202', '204']), f.successStatus), hint: pass ? 'Used when the STATUS rule gives nothing (e.g. no status after a timeout)' : '' }),
-        fld('Response schema', 'response_schema_code', f.respSchema, 'select', (fl, v) => { fl.respSchema = v; }, { options: withCurrent(none(this.schemaCodes()), f.respSchema), hint: 'Invalid → 500', actions: this.schemaActions(f.respSchema, () => this.responseExample(f), f.code + '_RESPONSE', (fl, c) => { fl.respSchema = c; }) }),
+        fld('Response schema', 'response_schema_code', f.respSchema, 'select', (fl, v) => { fl.respSchema = v; }, { options: withCurrent(none(this.schemaCodes()), f.respSchema), hint: flowValidates(f, 'RESPONSE') ? 'Invalid → 500' : 'Not checked (schema validation ' + f.validation + '): used for docs', actions: this.schemaActions(f.respSchema, () => this.responseExample(f), f.code + '_RESPONSE', (fl, c) => { fl.respSchema = c; }) }),
         fld('Response handler', 'response_handler', f.respHandler, 'select', (fl, v) => { fl.respHandler = v; }, { options: withCurrent(none(cat.messageHandlers), f.respHandler) })
       ], mapping: { label: 'Edit response mapping · ' + f.response.length + ' rules', go: toMap('resp') } };
     } else if (sel.kind === 'resp' && (f.responses || []).some(r => r.id === sel.id)) {
@@ -2586,6 +2599,8 @@ class App extends Component {
         fld('Path', 'path_pattern', f.path, 'text', (fl, v) => { fl.path = v; }, { hint: 'Relative to ' + cat.apiBasePath + '. {name} → $.request.path.name' }),
         fld('Flow timeout (ms)', 'timeout_ms', f.timeout, 'text', (fl, v) => { fl.timeout = v.replace(/\D/g, ''); }, { hint: 'Empty = ' + cat.defaultFlowTimeoutMs + '. Exceeded → 504' }),
         fld('Audit', 'audit_mode', f.audit, 'select', (fl, v) => { fl.audit = v; }, { options: plain(['INHERIT', 'ON', 'OFF']) }),
+        fld('Schema validation', 'schema_validation', f.validation || 'BOTH', 'select', (fl, v) => { fl.validation = v; }, { options: [{ v: 'BOTH', l: 'BOTH · request and responses' }, { v: 'REQUEST', l: 'REQUEST · client request only' }, { v: 'RESPONSE', l: 'RESPONSE · responses only' }, { v: 'NONE', l: 'NONE · nothing checked' }],
+          hint: 'Which schemas are checked at run time. Responses = each step’s response schema (a step can override) and the reply to the client. Schemas stay in use for mapping and docs.' }),
         fld('Enabled', 'enabled', String(f.enabled), 'select', (fl, v) => { fl.enabled = v === 'true'; }, { options: [{ v: 'true', l: 'true' }, { v: 'false', l: 'false · not routed' }] })
       ], del: { label: 'Delete flow', body: `${f.method} ${cat.apiBasePath}${f.path} stops being routed. Its ${f.steps.length} step(s) and ${f.response.length + f.steps.reduce((a, x) => a + x.rules.length, 0)} mapping rule(s) are removed too. Nothing changes in the database until Save & reload.`, go: () => this.mutCfg((cfg, st2) => { cfg.flows.splice(st2.cur, 1); setTimeout(() => this.setState({ screen: 'flows', cur: 0, sel: { kind: 'flow' } }), 0); }) } };
     }

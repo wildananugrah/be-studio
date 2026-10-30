@@ -254,6 +254,7 @@ Then run `make reload`. To switch a flow off without deleting it, use `UPDATE gw
 | `path_pattern` | ✔ | | Starts with `/`, relative to `/api`. `{name}` captures a segment into `$.request.path.name`. When several patterns match, the most specific wins (`/accounts/me` before `/accounts/{id}`). Two flows with the same method and pattern are rejected. |
 | `request_schema_code` | | | `gw_json_schema.code` that validates the request body → `400 GW-400-SCHEMA` |
 | `response_schema_code` | | | Validates the final response body → `500 GW-500-RESPONSE-SCHEMA` |
+| `schema_validation` | | `BOTH` (null) | Which schemas are checked at run time: `BOTH`, `REQUEST` (only `request_schema_code`), `RESPONSE` (only the steps' `response_schema_code` and this flow's `response_schema_code`) or `NONE`. A schema that is not checked is still used for mapping in Studio, OpenAPI and the API spec. A step can override it for its own response with `response_validation`. |
 | `request_handler` | | | `MessageHandler` bean run before the steps; can short-circuit ([§5.2](#52-messagehandler--headers--body)) |
 | `response_handler` | | | `MessageHandler` bean run on the final response |
 | `error_handler` | | `defaultErrorHandler` | `ErrorHandler` bean that builds error responses ([§5.3](#53-errorhandler--error-responses)) |
@@ -305,6 +306,7 @@ Applying an export replaces the application and its flows (also a flow with the 
 | `next_on_failure` | | `on_failure` | Where to go after a failure: `END` or the name of a later step. The failure is then handled (`on_failure` is not used) |
 | `timeout_ms` | | target `read-timeout-ms`, else `gateway.default-step-timeout-ms` (10000) | Read timeout → `504 GW-504-DOWNSTREAM` |
 | `response_schema_code` | | | Validates the downstream response body → `502 GW-502-INVALID-RESPONSE` |
+| `response_validation` | | `INHERIT` (null) | Whether `response_schema_code` is checked: `INHERIT` (as the flow's `schema_validation` says), `ON` (always) or `OFF` (never; the schema still serves mapping and docs) |
 | `request_handler` | | | `MessageHandler` run after the request is mapped, before sending |
 | `response_handler` | | | `MessageHandler` run on a 2xx response (already decoded to JSON), before schema check and storing |
 | `body_codec` | | target's `body_codec`, else `jsonCodec` | Wire format of this call: `jsonCodec`, `xmlCodec`, `soapCodec`, `soap12Codec` or a custom `BodyCodec` bean ([§4.15](#415-xml-or-soap-downstream)). Wins over the target system's. |
@@ -488,7 +490,7 @@ Values arrive as text, numbers, booleans, or `null` when missing. **Numeric comp
 | 2xx, body empty or JSON, schema OK, `success_expr` true or unset | `SUCCESS` | |
 | `condition_expr` false | `SKIPPED` | |
 | Non-2xx response | `FAILED` | `DOWNSTREAM_HTTP_ERROR` |
-| 2xx but body is not JSON (or cannot be decoded by the step's body codec), or fails `response_schema_code` | `FAILED` | `DOWNSTREAM_INVALID_RESPONSE` |
+| 2xx but body is not JSON (or cannot be decoded by the step's body codec), or fails `response_schema_code` (when checked: `response_validation` / the flow's `schema_validation`) | `FAILED` | `DOWNSTREAM_INVALID_RESPONSE` |
 | Request body cannot be encoded by the body codec (e.g. XML with two root fields) | `FAILED` | `MAPPING_ERROR` |
 | `success_expr` false | `FAILED` | `DOWNSTREAM_BUSINESS_ERROR` |
 | Read timeout | `TIMEOUT` | `DOWNSTREAM_TIMEOUT` |

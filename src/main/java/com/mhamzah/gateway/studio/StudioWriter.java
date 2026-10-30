@@ -101,11 +101,12 @@ class StudioWriter {
             flowIds.put(r.id(), insert("INSERT INTO " + db.qualify(t.flow())
                             + " (code, name, http_method, path_pattern, request_schema_code, response_schema_code,"
                             + " request_handler, response_handler, error_handler, success_status, timeout_ms,"
-                            + " audit_mode, enabled, application_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            + " audit_mode, enabled, application_code, schema_validation)"
+                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     r.code(), r.name(), r.httpMethod(), r.pathPattern(), r.requestSchemaCode(),
                     r.responseSchemaCode(), r.requestHandler(), r.responseHandler(), r.errorHandler(),
                     r.successStatus(), r.timeoutMs(), r.auditMode(), r.enabled(),
-                    r.applicationCode() == null ? "DEFAULT" : r.applicationCode()));
+                    r.applicationCode() == null ? "DEFAULT" : r.applicationCode(), r.schemaValidation()));
         }
         Map<Long, Long> stepIds = new HashMap<>();
         for (StepRow r : rows.steps()) {
@@ -113,13 +114,13 @@ class StudioWriter {
                             + " (flow_id, name, step_order, target_system, http_method, path_template, condition_expr,"
                             + " success_expr, on_failure, timeout_ms, response_schema_code, request_handler,"
                             + " response_handler, body_codec, enabled, sql_text, body_template, next_on_success,"
-                            + " next_on_failure, response_example, cases)"
-                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            + " next_on_failure, response_example, cases, response_validation)"
+                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     flowIds.get(r.flowId()), r.name(), r.stepOrder(), r.targetSystem(), r.httpMethod(),
                     r.pathTemplate(), r.conditionExpr(), r.successExpr(), r.onFailure(), r.timeoutMs(),
                     r.responseSchemaCode(), r.requestHandler(), r.responseHandler(), r.bodyCodec(), r.enabled(),
                     r.sqlText(), r.bodyTemplate(), r.nextOnSuccess(), r.nextOnFailure(), r.responseExample(),
-                    r.cases()));
+                    r.cases(), r.responseValidation()));
         }
         for (ConfigRows.ResponseRow r : rows.responses()) {
             jdbc.sql("INSERT INTO " + db.qualify(t.flowResponse())

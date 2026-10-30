@@ -21,6 +21,7 @@ import com.mhamzah.gateway.invoke.DownstreamResponse;
 import com.mhamzah.gateway.mapping.MappingEngine;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -271,6 +272,57 @@ class FlowExecutorTest {
         var result = run("POST", "/f", "{}");
         assertThat(result.response().status()).isEqualTo(500);
         assertThat(text(result.response(), "errorCode")).isEqualTo("GW-500-RESPONSE-SCHEMA");
+    }
+
+    @Test
+    void schemaValidationChoosesWhichSchemasAreChecked() {
+        rows.schema("REQ", "{\"type\":\"object\",\"required\":[\"amount\"]}");
+        rows.schema("RES", "{\"type\":\"object\",\"required\":[\"id\"]}");
+        rows.schema("DOWN", "{\"type\":\"object\",\"required\":[\"fileId\"]}");
+        var both = rows.flow("BOTH", "POST", "/both", f -> f.withSchemas("REQ", "RES"));
+        rows.step(both, "s1", 1, s -> s.withResponseSchema("DOWN"));
+        var request = rows.flow("REQUEST", "POST", "/request", f -> f.withSchemas("REQ", "RES").withSchemaValidation("REQUEST"));
+        rows.step(request, "s2", 1, s -> s.withResponseSchema("DOWN"));
+        var response = rows.flow("RESPONSE", "POST", "/response", f -> f.withSchemas("REQ", "RES").withSchemaValidation("RESPONSE"));
+        rows.step(response, "s3", 1, s -> s.withResponseSchema("DOWN"));
+        var none = rows.flow("NONE", "POST", "/none", f -> f.withSchemas("REQ", "RES").withSchemaValidation("NONE"));
+        rows.step(none, "s4", 1, s -> s.withResponseSchema("DOWN"));
+        // no fileId: fails the step's schema wherever it is checked
+        for (String p : List.of("/s1", "/s2", "/s3", "/s4")) {
+            downstream.ok(p, "{}");
+        }
+
+        assertThat(text(run("POST", "/both", "{}").response(), "errorCode")).isEqualTo("GW-400-SCHEMA");
+        assertThat(text(run("POST", "/request", "{}").response(), "errorCode")).isEqualTo("GW-400-SCHEMA");
+        // REQUEST: a valid request goes through although the step's and the flow's responses do not match
+        assertThat(run("POST", "/request", "{\"amount\":1}").response().status()).isEqualTo(200);
+        // RESPONSE: the request is not checked, the step's response is
+        var r = run("POST", "/response", "{}");
+        assertThat(r.response().status()).isEqualTo(502);
+        assertThat(text(r.response(), "step")).isEqualTo("s3");
+        assertThat(run("POST", "/none", "{}").response().status()).isEqualTo(200);
+    }
+
+    @Test
+    void aStepCanOverrideTheFlowsResponseValidation() {
+        rows.schema("DOWN", "{\"type\":\"object\",\"required\":[\"id\"]}");
+        var flow = rows.flow("F", "POST", "/f", f -> f.withSchemaValidation("REQUEST"));
+        rows.step(flow, "checked", 1, s -> s.withResponseSchema("DOWN").withResponseValidation("ON"));
+        var other = rows.flow("G", "POST", "/g");
+        rows.step(other, "unchecked", 1, s -> s.withResponseSchema("DOWN").withResponseValidation("OFF"));
+        downstream.ok("/checked", "{}").ok("/unchecked", "{}");
+
+        assertThat(text(run("POST", "/f", "{}").response(), "step")).isEqualTo("checked");
+        assertThat(run("POST", "/g", "{}").response().status()).isEqualTo(200);
+    }
+
+    @Test
+    void unknownValidationModesAreReportedOnReload() {
+        var flow = rows.flow("F", "POST", "/f", f -> f.withSchemaValidation("SOMETIMES"));
+        rows.step(flow, "s", 1, s -> s.withResponseValidation("MAYBE"));
+        assertThatThrownBy(this::registry).isInstanceOfSatisfying(ConfigValidationException.class, e -> assertThat(e.errors())
+                .anySatisfy(m -> assertThat(m).contains("schema_validation 'SOMETIMES' is not one of"))
+                .anySatisfy(m -> assertThat(m).contains("response_validation 'MAYBE' must be INHERIT, ON or OFF")));
     }
 
     @Test

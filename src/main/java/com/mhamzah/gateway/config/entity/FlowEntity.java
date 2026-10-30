@@ -26,11 +26,13 @@ public class FlowEntity {
     private String auditMode;
     private boolean enabled;
     private String applicationCode;
+    private String schemaValidation;
 
     protected FlowEntity() {}
 
     public FlowRow toRow() {
         return new FlowRow(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode,
-                requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled, applicationCode);
+                requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled, applicationCode,
+                schemaValidation);
     }
 }

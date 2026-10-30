@@ -98,7 +98,7 @@ public final class TestCaseGenerator {
 
         JsonNode bodySchema = op.has("requestBody")
                 ? resolve(op.path("requestBody").path("content").path("application/json").path("schema")) : null;
-        boolean validated = flow.requestSchema() != null;
+        boolean validated = flow.requestSchema() != null && flow.schemaValidation().request();
         int ok = flow.successStatus();
         List<TestCase> out = new ArrayList<>();
 

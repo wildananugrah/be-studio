@@ -20,7 +20,8 @@ import org.springframework.http.HttpMethod;
  * {@code targetSystemName}), {@code method} PUT (store) or DELETE, and {@code pathTemplate} the object key template.
  * {@code nextOnSuccess} / {@code nextOnFailure} route the flow after this step: null (the next group; on failure
  * {@code onFailure} decides), {@link #END}, {@link #FAIL} (success only), {@link #RESPOND}{@code <name>} or the name
- * of a later step.
+ * of a later step. {@code validateResponse}: whether {@code responseSchema} is checked (the step's response_validation,
+ * else its flow's schema_validation).
  */
 public record StepDefinition(
         String name,
@@ -44,7 +45,8 @@ public record StepDefinition(
         BodyTemplate bodyTemplate,
         String nextOnSuccess,
         String nextOnFailure,
-        List<Case> cases) {
+        List<Case> cases,
+        boolean validateResponse) {
 
     /**
      * One case of a condition step: when {@code when} is true (the first true case wins), the flow goes to
@@ -79,7 +81,18 @@ public record StepDefinition(
             SqlStatement sql, FileStore fileStore, BodyTemplate bodyTemplate, String nextOnSuccess, String nextOnFailure) {
         this(name, order, targetSystemName, targetSystem, method, pathTemplate, condition, success, onFailure, timeout,
                 responseSchema, requestHandler, responseHandler, bodyCodec, bodyCodecName, requestRules, sql, fileStore,
-                bodyTemplate, nextOnSuccess, nextOnFailure, List.of());
+                bodyTemplate, nextOnSuccess, nextOnFailure, List.of(), true);
+    }
+
+    public StepDefinition(String name, int order, String targetSystemName, GatewayProperties.TargetSystem targetSystem,
+            HttpMethod method, String pathTemplate, Condition condition, Condition success, OnFailure onFailure,
+            Duration timeout, CompiledSchema responseSchema, MessageHandler requestHandler,
+            MessageHandler responseHandler, BodyCodec bodyCodec, String bodyCodecName, List<CompiledRule> requestRules,
+            SqlStatement sql, FileStore fileStore, BodyTemplate bodyTemplate, String nextOnSuccess, String nextOnFailure,
+            List<Case> cases) {
+        this(name, order, targetSystemName, targetSystem, method, pathTemplate, condition, success, onFailure, timeout,
+                responseSchema, requestHandler, responseHandler, bodyCodec, bodyCodecName, requestRules, sql, fileStore,
+                bodyTemplate, nextOnSuccess, nextOnFailure, cases, true);
     }
 
     /** A condition step: checks its cases and routes; calls nothing. */
@@ -95,19 +108,25 @@ public record StepDefinition(
             SqlStatement sql, FileStore fileStore, BodyTemplate bodyTemplate) {
         this(name, order, targetSystemName, targetSystem, method, pathTemplate, condition, success, onFailure, timeout,
                 responseSchema, requestHandler, responseHandler, bodyCodec, bodyCodecName, requestRules, sql, fileStore,
-                bodyTemplate, null, null, List.of());
+                bodyTemplate, null, null, List.of(), true);
     }
 
     public StepDefinition withNext(String onSuccess, String onFailureRoute) {
         return new StepDefinition(name, order, targetSystemName, targetSystem, method, pathTemplate, condition, success,
                 onFailure, timeout, responseSchema, requestHandler, responseHandler, bodyCodec, bodyCodecName,
-                requestRules, sql, fileStore, bodyTemplate, onSuccess, onFailureRoute, cases);
+                requestRules, sql, fileStore, bodyTemplate, onSuccess, onFailureRoute, cases, validateResponse);
     }
 
     public StepDefinition withCases(List<Case> value) {
         return new StepDefinition(name, order, targetSystemName, targetSystem, method, pathTemplate, condition, success,
                 onFailure, timeout, responseSchema, requestHandler, responseHandler, bodyCodec, bodyCodecName,
-                requestRules, sql, fileStore, bodyTemplate, nextOnSuccess, nextOnFailure, value);
+                requestRules, sql, fileStore, bodyTemplate, nextOnSuccess, nextOnFailure, value, validateResponse);
+    }
+
+    public StepDefinition withValidateResponse(boolean value) {
+        return new StepDefinition(name, order, targetSystemName, targetSystem, method, pathTemplate, condition, success,
+                onFailure, timeout, responseSchema, requestHandler, responseHandler, bodyCodec, bodyCodecName,
+                requestRules, sql, fileStore, bodyTemplate, nextOnSuccess, nextOnFailure, cases, value);
     }
 
     /** True when the step chooses where the flow goes next (it then runs alone in its step_order group). */

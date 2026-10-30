@@ -519,6 +519,8 @@ public class ConfigCompiler {
             Duration timeout = timeout(f.timeoutMs(), defaultFlowTimeout, where);
             AuditMode auditMode = enumValue(AuditMode.class, f.auditMode() == null ? "INHERIT" : f.auditMode(),
                     where, "audit_mode");
+            SchemaValidation schemaValidation = enumValue(SchemaValidation.class,
+                    f.schemaValidation() == null ? "BOTH" : f.schemaValidation(), where, "schema_validation");
 
             List<StepRow> enabledSteps = stepRows.stream().filter(StepRow::enabled).toList();
             Set<Long> disabledStepIds = stepRows.stream().filter(s -> !s.enabled()).map(StepRow::id)
@@ -574,7 +576,7 @@ public class ConfigCompiler {
                         errors.add(sw + ": a step that chooses the next step (next_on_success / next_on_failure) must"
                                 + " run alone: give it a step_order no other step uses");
                     }
-                    def = def.withNext(onSuccess, onFailure);
+                    def = def.withNext(onSuccess, onFailure).withValidateResponse(validateResponse(s, schemaValidation, sw));
                     groups.computeIfAbsent(s.stepOrder(), k -> new ArrayList<>()).add(def);
                 }
             }
@@ -586,7 +588,22 @@ public class ConfigCompiler {
             }
             return new FlowDefinition(f.code(), method, pattern, requestSchema, responseSchema, requestHandler,
                     responseHandler, errorHandler, errorHandlerName, successStatus, timeout, auditMode,
-                    new ArrayList<>(groups.values()), responseRules, responses(responseStatus, namedRules));
+                    new ArrayList<>(groups.values()), responseRules, responses(responseStatus, namedRules),
+                    schemaValidation == null ? SchemaValidation.BOTH : schemaValidation);
+        }
+
+        /** The step's response_validation (ON / OFF) when set, else what the flow's schema_validation says. */
+        private boolean validateResponse(StepRow s, SchemaValidation flowMode, String where) {
+            String mode = s.responseValidation() == null || s.responseValidation().isBlank() ? "INHERIT" : s.responseValidation().toUpperCase(Locale.ROOT);
+            return switch (mode) {
+                case "ON" -> true;
+                case "OFF" -> false;
+                case "INHERIT" -> flowMode == null || flowMode.response();
+                default -> {
+                    errors.add(where + ": response_validation '" + mode + "' must be INHERIT, ON or OFF");
+                    yield true;
+                }
+            };
         }
 
         /**

@@ -73,6 +73,8 @@ Bottom left: either "Flow valid · ready to save" or a red panel listing the flo
 - *Step policy* (drop on a step card): Run only if… (condition_expr), Success check (success_expr), Continue on failure, Step timeout 3s, Validate · SCHEMA (response_schema_code), request handler beans, body codec beans (wire format).
 - *Client response*: Validate · SCHEMA (response schema), Respond 201 Created, response handler beans.
 - *Errors*: every ErrorHandler bean (e.g. "Map codes via CORE_BANKING_ERRORS").
+
+**Schema validation (which schemas are checked at run time):** the flow inspector's **Schema validation** (`schema_validation`): BOTH (default), REQUEST (only the client request), RESPONSE (only the steps' responses and the reply to the client) or NONE. Each step with a response schema has **Validate response** (`response_validation`): INHERIT (follow the flow), ON (always) or OFF (never). A schema that is not checked is still used for mapping, OpenAPI and the API spec; its chip on the pipeline reads "unchecked schema …". Use this when a target system's response does not match its schema exactly (e.g. a date-time without the format the schema asks for) but the schema is still wanted for mapping.
 - *Flow*: Audit on, Audit off, Flow timeout 8s.
 You can also drag an existing step card to another column to change its order. A chip's × removes that setting.
 

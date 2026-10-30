@@ -103,7 +103,7 @@ public class FlowExecutor implements AutoCloseable {
             List<StepRecord> records) {
         ObjectNode request = ctx.request();
         request.set("body", in.form() != null ? in.form() : parseInbound(in.body()));
-        if (flow.requestSchema() != null) {
+        if (flow.requestSchema() != null && flow.schemaValidation().request()) {
             List<String> errors = flow.requestSchema().validate(request.get("body"));
             if (!errors.isEmpty()) {
                 throw GatewayError.of(ErrorType.REQUEST_SCHEMA_INVALID).details(errors).build();
@@ -174,7 +174,7 @@ public class FlowExecutor implements AutoCloseable {
         }
 
         MappedMessage out = mapping.apply(flow.responseRules(), ctx);
-        if (flow.responseSchema() != null) {
+        if (flow.responseSchema() != null && flow.schemaValidation().response()) {
             List<String> errors = flow.responseSchema().validate(out.body());
             if (!errors.isEmpty()) {
                 throw GatewayError.of(ErrorType.RESPONSE_SCHEMA_INVALID).details(errors).build();

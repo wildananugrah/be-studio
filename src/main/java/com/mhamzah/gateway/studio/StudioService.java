@@ -246,7 +246,8 @@ public class StudioService {
         Flow only = new Flow(flow.code(), flow.name(), flow.method(), flow.path(), flow.requestSchema(),
                 flow.responseSchema(), flow.requestHandler(), flow.responseHandler(), flow.errorHandler(),
                 flow.successStatus(), flow.timeoutMs(), flow.auditMode(), true,
-                flow.steps().stream().map(StudioService::enabled).toList(), flow.response(), null, flow.responses());
+                flow.steps().stream().map(StudioService::enabled).toList(), flow.response(), null, flow.responses(),
+                flow.schemaValidation());
         StudioConfig single = new StudioConfig(null, List.of(only), draft.targets(), draft.lookups(), draft.schemas(),
                 draft.storages());
         FlowRegistry registry;
@@ -301,7 +302,7 @@ public class StudioService {
         return new Step(s.name(), s.order(), s.targetSystem(), s.method(), s.path(), s.condition(), s.success(),
                 s.onFailure(), s.timeoutMs(), s.responseSchema(), s.requestHandler(), s.responseHandler(),
                 s.bodyCodec(), true, s.rules(), s.sql(), s.bodyTemplate(), s.nextOnSuccess(), s.nextOnFailure(),
-                s.responseExample(), s.cases());
+                s.responseExample(), s.cases(), s.responseValidation());
     }
 
     private static ExecutionContext context(String flowCode, FlowRegistry registry, JsonNode sample) {

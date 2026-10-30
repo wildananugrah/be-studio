@@ -262,16 +262,16 @@ final class ApplicationExport {
         rows.steps().forEach(s -> stepById.put(s.id(), s));
         List<Insert> flows = new ArrayList<>();
         for (FlowRow f : rows.flows()) {
-            flows.add(new Insert("flow", List.of(Col.v("code", f.code()), Col.v("name", f.name()),
+            flows.add(new Insert("flow", optional(List.of(Col.v("code", f.code()), Col.v("name", f.name()),
                     Col.v("http_method", f.httpMethod()), Col.v("path_pattern", f.pathPattern()),
                     Col.v("request_schema_code", f.requestSchemaCode()), Col.v("response_schema_code", f.responseSchemaCode()),
                     Col.v("request_handler", f.requestHandler()), Col.v("response_handler", f.responseHandler()),
                     Col.v("error_handler", f.errorHandler()), Col.v("success_status", f.successStatus()),
                     Col.v("timeout_ms", f.timeoutMs()), Col.v("audit_mode", f.auditMode()), Col.v("enabled", f.enabled()),
-                    Col.v("application_code", app))));
+                    Col.v("application_code", app)), "schema_validation", f.schemaValidation())));
         }
         for (StepRow s : rows.steps()) {
-            flows.add(new Insert("flow_step", List.of(Col.expr("flow_id", flowId(flowCode.get(s.flowId()))),
+            flows.add(new Insert("flow_step", optional(List.of(Col.expr("flow_id", flowId(flowCode.get(s.flowId()))),
                     Col.v("name", s.name()), Col.v("step_order", s.stepOrder()), Col.v("target_system", s.targetSystem()),
                     Col.v("http_method", s.httpMethod()), Col.v("path_template", s.pathTemplate()),
                     Col.v("condition_expr", s.conditionExpr()), Col.v("success_expr", s.successExpr()),
@@ -280,7 +280,8 @@ final class ApplicationExport {
                     Col.v("response_handler", s.responseHandler()), Col.v("body_codec", s.bodyCodec()),
                     Col.v("enabled", s.enabled()), Col.v("sql_text", s.sqlText()), Col.v("body_template", s.bodyTemplate()),
                     Col.v("next_on_success", s.nextOnSuccess()), Col.v("next_on_failure", s.nextOnFailure()),
-                    Col.v("response_example", s.responseExample()), Col.v("cases", s.cases()))));
+                    Col.v("response_example", s.responseExample()), Col.v("cases", s.cases())),
+                    "response_validation", s.responseValidation())));
         }
         for (ConfigRows.ResponseRow r : rows.responses()) {
             flows.add(new Insert("flow_response", List.of(Col.expr("flow_id", flowId(flowCode.get(r.flowId()))),
@@ -302,6 +303,16 @@ final class ApplicationExport {
                     Col.v("response_name", r.responseName()))));
         }
         return new Plan(app, rows.flows().stream().map(FlowRow::code).toList(), application, shared, flows);
+    }
+
+    /** The columns plus {@code name} when it is set: an export without overrides still runs on a schema without it. */
+    private static List<Col> optional(List<Col> cols, String name, Object value) {
+        if (value == null) {
+            return cols;
+        }
+        List<Col> out = new ArrayList<>(cols);
+        out.add(Col.v(name, value));
+        return out;
     }
 
     private static String flowId(String code) {
