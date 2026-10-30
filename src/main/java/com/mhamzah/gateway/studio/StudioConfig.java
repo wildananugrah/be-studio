@@ -85,7 +85,16 @@ public record StudioConfig(
             List<Step> steps,
             List<Rule> response,
             String application,
-            List<Response> responses) {
+            List<Response> responses,
+            String schemaValidation) {
+
+        public Flow(String code, String name, String method, String path, String requestSchema, String responseSchema,
+                String requestHandler, String responseHandler, String errorHandler, Integer successStatus,
+                Integer timeoutMs, String auditMode, Boolean enabled, List<Step> steps, List<Rule> response,
+                String application, List<Response> responses) {
+            this(code, name, method, path, requestSchema, responseSchema, requestHandler, responseHandler, errorHandler,
+                    successStatus, timeoutMs, auditMode, enabled, steps, response, application, responses, null);
+        }
 
         public Flow(String code, String name, String method, String path, String requestSchema, String responseSchema,
                 String requestHandler, String responseHandler, String errorHandler, Integer successStatus,
@@ -153,7 +162,18 @@ public record StudioConfig(
             String nextOnSuccess,
             String nextOnFailure,
             String responseExample,
-            List<Case> cases) {
+            List<Case> cases,
+            String responseValidation) {
+
+        public Step(String name, int order, String targetSystem, String method, String path, String condition,
+                String success, String onFailure, Integer timeoutMs, String responseSchema, String requestHandler,
+                String responseHandler, String bodyCodec, Boolean enabled, List<Rule> rules, String sql,
+                String bodyTemplate, String nextOnSuccess, String nextOnFailure, String responseExample,
+                List<Case> cases) {
+            this(name, order, targetSystem, method, path, condition, success, onFailure, timeoutMs, responseSchema,
+                    requestHandler, responseHandler, bodyCodec, enabled, rules, sql, bodyTemplate, nextOnSuccess,
+                    nextOnFailure, responseExample, cases, null);
+        }
 
         public Step(String name, int order, String targetSystem, String method, String path, String condition,
                 String success, String onFailure, Integer timeoutMs, String responseSchema, String requestHandler,

@@ -191,10 +191,12 @@ public final class ApiSpec {
         facts.add(row("Success status", String.valueOf(flow.successStatus())));
         facts.add(row("Timeout", flow.timeout().toMillis() + " ms"));
         if (flow.requestSchema() != null) {
-            facts.add(row("Request schema", flow.requestSchema().code() + " (validated)"));
+            facts.add(row("Request schema", flow.requestSchema().code()
+                    + (flow.schemaValidation().request() ? " (validated)" : " (not validated)")));
         }
         if (flow.responseSchema() != null) {
-            facts.add(row("Response schema", flow.responseSchema().code()));
+            facts.add(row("Response schema", flow.responseSchema().code()
+                    + (flow.schemaValidation().response() ? " (validated)" : "")));
         }
         out.add(new Fields(facts));
 
@@ -455,7 +457,7 @@ public final class ApiSpec {
         if (hasBody) {
             put(out, ErrorType.INVALID_JSON, "The body is not valid JSON");
         }
-        if (flow.requestSchema() != null) {
+        if (flow.requestSchema() != null && flow.schemaValidation().request()) {
             put(out, ErrorType.REQUEST_SCHEMA_INVALID, "The request does not match schema " + flow.requestSchema().code()
                     + "; 'details' lists each problem");
         }

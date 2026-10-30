@@ -64,7 +64,7 @@ An integration is a set of rows. All tables are in the default schema unless `ga
 
 | Table | One row per | Key columns |
 |---|---|---|
-| `gw_flow` | inbound endpoint | `code`, `http_method`, `path_pattern` (e.g. `/v1/accounts/{accountNo}`), optional `request_schema_code` / `response_schema_code`, `request_handler` / `response_handler` / `error_handler`, `success_status`, `timeout_ms`, `audit_mode` (INHERIT/ON/OFF) |
+| `gw_flow` | inbound endpoint | `code`, `http_method`, `path_pattern` (e.g. `/v1/accounts/{accountNo}`), optional `request_schema_code` / `response_schema_code`, `request_handler` / `response_handler` / `error_handler`, `success_status`, `timeout_ms`, `audit_mode` (INHERIT/ON/OFF), `schema_validation` (BOTH/REQUEST/RESPONSE/NONE: which schemas are checked; unchecked ones still serve mapping and docs) |
 | `gw_flow_step` | downstream call | `name`, `step_order` (**same order = run in parallel**), `target_system`, `http_method`, `path_template` (e.g. `/core/accounts/{acc}`), `condition_expr`, `success_expr`, `on_failure` (STOP/CONTINUE), `timeout_ms`, handlers |
 | `gw_mapping_rule` | field | `phase` (STEP_REQUEST/FLOW_RESPONSE), `step_id`, `seq`, `target_type` (BODY/HEADER/QUERY/PATH), `target_path`, `source_path` **or** `constant_value`, `default_value`, `converter`, `lookup_code`, `field_handler`, `required` |
 | `gw_lookup_entry` | value translation | `lookup_code`, `source_value` (`*` = fallback), `target_value` |

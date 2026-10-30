@@ -198,15 +198,24 @@ class StudioIntegrationTest {
         ObjectNode inquiry = flow(changed, "ACCOUNT_INQUIRY");
         ((ArrayNode) inquiry.get("response")).addObject()
                 .put("type", "HEADER").put("target", "X-Studio").put("constant", "yes");
+        // only the request checked, except the first step's response; the defaults are stored as null
+        inquiry.put("schemaValidation", "request");
+        ((ObjectNode) inquiry.get("steps").get(0)).put("responseValidation", "ON");
 
         Response saved = call("PUT", "/studio/api/config", "studio-token", save(original.get("version").asString(), changed));
         assertThat(saved.status()).as(saved.text()).isEqualTo(200);
         assertThat(holder.current().lookups().get("ACCOUNT_STATUS").entries().get("A").asString()).isEqualTo("OPEN");
+        var compiled = holder.current().flows().stream().filter(f -> f.code().equals("ACCOUNT_INQUIRY")).findFirst().orElseThrow();
+        assertThat(compiled.schemaValidation()).isEqualTo(com.mhamzah.gateway.config.SchemaValidation.REQUEST);
+        String first = inquiry.get("steps").get(0).get("name").asString();
+        assertThat(compiled.allSteps()).allSatisfy(st -> assertThat(st.validateResponse()).isEqualTo(st.name().equals(first)));
 
         ObjectNode reread = config();
         assertThat(reread.get("version").asString()).isEqualTo(saved.json().get("version").asString());
         assertThat(lookupEntry(reread, "ACCOUNT_STATUS", "A").get("target").asString()).isEqualTo("OPEN");
         assertThat(flow(reread, "ACCOUNT_INQUIRY").get("response").toString()).contains("X-Studio");
+        assertThat(flow(reread, "ACCOUNT_INQUIRY").get("schemaValidation").asString()).isEqualTo("REQUEST");
+        assertThat(flow(reread, "ACCOUNT_INQUIRY").get("steps").get(0).get("responseValidation").asString()).isEqualTo("ON");
         assertThat(reread.get("flows").size()).isEqualTo(original.get("flows").size());
 
         // put the demo configuration back; the next save must be based on the new version

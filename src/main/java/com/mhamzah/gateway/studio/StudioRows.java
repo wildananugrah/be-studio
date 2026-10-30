@@ -73,10 +73,10 @@ final class StudioRows {
                                         s.responseHandler(), s.bodyCodec(), s.enabled(),
                                         rules(rulesByStep.getOrDefault(s.id(), List.of())), s.sqlText(),
                                         s.bodyTemplate(), s.nextOnSuccess(), s.nextOnFailure(), s.responseExample(),
-                                        cases(s.cases())))
+                                        cases(s.cases()), s.responseValidation()))
                                 .toList(),
                         rules(responseByFlow.getOrDefault(f.id(), List.of())), f.applicationCode(),
-                        responsesByFlow.getOrDefault(f.id(), List.of())))
+                        responsesByFlow.getOrDefault(f.id(), List.of()), f.schemaValidation()))
                 .toList();
 
         Map<String, List<Header>> headers = new TreeMap<>();
@@ -183,7 +183,8 @@ final class StudioRows {
                     text(f.requestSchema()), text(f.responseSchema()), text(f.requestHandler()),
                     text(f.responseHandler()), text(f.errorHandler()),
                     f.successStatus() == null ? 200 : f.successStatus(), f.timeoutMs(),
-                    or(f.auditMode(), "INHERIT"), f.enabled(), or(f.application(), DEFAULT_APPLICATION)));
+                    or(f.auditMode(), "INHERIT"), f.enabled(), or(f.application(), DEFAULT_APPLICATION),
+                    unlessDefault(f.schemaValidation(), "BOTH")));
             for (Step s : f.steps()) {
                 stepId++;
                 // a database query step has no HTTP method, path or wire format
@@ -200,7 +201,7 @@ final class StudioRows {
                         s.enabled(), sql ? s.sql().strip() : null, sql || condition || s.bodyTemplate() == null || s.bodyTemplate().isBlank() ? null : s.bodyTemplate(),
                         text(s.nextOnSuccess()), text(s.nextOnFailure()),
                         s.responseExample() == null || s.responseExample().isBlank() ? null : s.responseExample(),
-                        condition ? casesJson(s.cases()) : null));
+                        condition ? casesJson(s.cases()) : null, condition ? null : unlessDefault(s.responseValidation(), "INHERIT")));
                 addRules(rules, s.rules(), flowId, stepId, STEP_REQUEST);
             }
             addRules(rules, f.response(), flowId, null, FLOW_RESPONSE);
@@ -389,6 +390,12 @@ final class StudioRows {
     /** Blank text is stored as NULL (Oracle cannot tell them apart anyway). */
     private static String text(String s) {
         return s == null || s.isBlank() ? null : s;
+    }
+
+    /** Blank or the default value (BOTH, INHERIT) as null, so the database and exports only carry overrides. */
+    private static String unlessDefault(String s, String defaultValue) {
+        String t = text(s);
+        return t == null || t.equalsIgnoreCase(defaultValue) ? null : t.toUpperCase(java.util.Locale.ROOT);
     }
 
     private static String or(String s, String fallback) {

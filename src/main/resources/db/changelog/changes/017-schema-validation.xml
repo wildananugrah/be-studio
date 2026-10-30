@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Which schemas are checked at run time; the schemas stay in use for mapping, OpenAPI and the API spec.
+        gw_flow.schema_validation: BOTH (null, the default), REQUEST, RESPONSE or NONE.
+        gw_flow_step.response_validation: INHERIT (null: the flow's), ON or OFF, for the step's response schema.
+    -->
+    <changeSet id="017-gw-schema-validation" author="json-gateway">
+        <addColumn tableName="${tbl.flow}">
+            <column name="schema_validation" type="varchar(10)"/>
+        </addColumn>
+        <addColumn tableName="${tbl.flow_step}">
+            <column name="response_validation" type="varchar(10)"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

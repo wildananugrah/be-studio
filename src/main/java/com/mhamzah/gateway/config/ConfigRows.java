@@ -67,7 +67,16 @@ public record ConfigRows(
             Integer timeoutMs,
             String auditMode,
             boolean enabled,
-            String applicationCode) {
+            String applicationCode,
+            String schemaValidation) {
+
+        public FlowRow(long id, String code, String name, String httpMethod, String pathPattern,
+                String requestSchemaCode, String responseSchemaCode, String requestHandler, String responseHandler,
+                String errorHandler, Integer successStatus, Integer timeoutMs, String auditMode, boolean enabled,
+                String applicationCode) {
+            this(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode, requestHandler,
+                    responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled, applicationCode, null);
+        }
 
         public FlowRow(long id, String code, String name, String httpMethod, String pathPattern,
                 String requestSchemaCode, String responseSchemaCode, String requestHandler, String responseHandler,
@@ -78,27 +87,34 @@ public record ConfigRows(
 
         public FlowRow withApplication(String value) {
             return new FlowRow(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode,
-                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled, value);
+                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled, value, schemaValidation);
         }
 
         public FlowRow withHandlers(String request, String response, String error) {
             return new FlowRow(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode,
-                    request, response, error, successStatus, timeoutMs, auditMode, enabled, applicationCode);
+                    request, response, error, successStatus, timeoutMs, auditMode, enabled, applicationCode, schemaValidation);
         }
 
         public FlowRow withSchemas(String request, String response) {
             return new FlowRow(id, code, name, httpMethod, pathPattern, request, response,
-                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled, applicationCode);
+                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled, applicationCode, schemaValidation);
         }
 
         public FlowRow withAuditMode(String mode) {
             return new FlowRow(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode,
-                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, mode, enabled, applicationCode);
+                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, mode, enabled, applicationCode, schemaValidation);
+        }
+
+        /** BOTH (null), REQUEST, RESPONSE or NONE: which of the flow's schemas are checked at run time. */
+        public FlowRow withSchemaValidation(String value) {
+            return new FlowRow(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode,
+                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled,
+                    applicationCode, value);
         }
 
         public FlowRow withEnabled(boolean value) {
             return new FlowRow(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode,
-                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, value, applicationCode);
+                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, value, applicationCode, schemaValidation);
         }
     }
 
@@ -125,7 +141,18 @@ public record ConfigRows(
             String nextOnSuccess,
             String nextOnFailure,
             String responseExample,
-            String cases) {
+            String cases,
+            String responseValidation) {
+
+        public StepRow(long id, long flowId, String name, int stepOrder, String targetSystem, String httpMethod,
+                String pathTemplate, String conditionExpr, String successExpr, String onFailure, Integer timeoutMs,
+                String responseSchemaCode, String requestHandler, String responseHandler, String bodyCodec,
+                boolean enabled, String sqlText, String bodyTemplate, String nextOnSuccess, String nextOnFailure,
+                String responseExample, String cases) {
+            this(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr, successExpr,
+                    onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler, bodyCodec, enabled,
+                    sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases, null);
+        }
 
         public StepRow(long id, long flowId, String name, int stepOrder, String targetSystem, String httpMethod,
                 String pathTemplate, String conditionExpr, String successExpr, String onFailure, Integer timeoutMs,
@@ -140,7 +167,7 @@ public record ConfigRows(
         public StepRow withCases(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, value);
+                    bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, value, responseValidation);
         }
 
         public StepRow(long id, long flowId, String name, int stepOrder, String targetSystem, String httpMethod,
@@ -197,62 +224,76 @@ public record ConfigRows(
         public StepRow withSql(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled, value, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases);
+                    bodyCodec, enabled, value, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases, responseValidation);
         }
 
         public StepRow withBodyTemplate(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled, sqlText, value, nextOnSuccess, nextOnFailure, responseExample, cases);
+                    bodyCodec, enabled, sqlText, value, nextOnSuccess, nextOnFailure, responseExample, cases, responseValidation);
         }
 
         public StepRow withTarget(String value) {
             return new StepRow(id, flowId, name, stepOrder, value, httpMethod, pathTemplate, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases);
+                    bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases, responseValidation);
         }
 
         public StepRow withMethod(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, value, pathTemplate, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases);
+                    bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases, responseValidation);
         }
 
         public StepRow withPathTemplate(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, value, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases);
+                    bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases, responseValidation);
         }
 
         public StepRow withCondition(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, value,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases);
+                    bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases, responseValidation);
         }
 
         public StepRow withSuccess(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                     value, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases);
+                    bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases, responseValidation);
         }
 
         public StepRow withBodyCodec(String value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    value, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases);
+                    value, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases, responseValidation);
         }
 
         /** Where the flow goes after this step: on success (null = next step, END, FAIL or a step name) and on failure (null = on_failure, END or a step name). */
         public StepRow withNext(String onSuccess, String onFailure) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                     successExpr, this.onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, enabled, sqlText, bodyTemplate, onSuccess, onFailure, responseExample, cases);
+                    bodyCodec, enabled, sqlText, bodyTemplate, onSuccess, onFailure, responseExample, cases, responseValidation);
+        }
+
+        public StepRow withResponseSchema(String value) {
+            return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
+                    successExpr, onFailure, timeoutMs, value, requestHandler, responseHandler,
+                    bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases,
+                    responseValidation);
+        }
+
+        /** INHERIT (null: the flow's schema_validation), ON or OFF: whether the step's response schema is checked. */
+        public StepRow withResponseValidation(String value) {
+            return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
+                    successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
+                    bodyCodec, enabled, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases, value);
         }
 
         public StepRow withEnabled(boolean value) {
             return new StepRow(id, flowId, name, stepOrder, targetSystem, httpMethod, pathTemplate, conditionExpr,
                     successExpr, onFailure, timeoutMs, responseSchemaCode, requestHandler, responseHandler,
-                    bodyCodec, value, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases);
+                    bodyCodec, value, sqlText, bodyTemplate, nextOnSuccess, nextOnFailure, responseExample, cases, responseValidation);
         }
     }
 
