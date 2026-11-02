@@ -1,0 +1,264 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        The SNAP response code catalog (lookup SNAP_RESPONSE_CODE), loaded in every environment: source_value is
+        "<HTTP status>.<case code>", target_value the responseMessage, with {field name} / [reason] placeholders that
+        snapErrorHandler fills in. Edit the messages in Gateway Studio > Lookups.
+
+        SNAP_GATEWAY_ERROR maps the gateway's own errors (by error type) to a SNAP code. The same defaults are built
+        into snapErrorHandler; the rows are here so that they can be seen and changed.
+    -->
+    <changeSet id="020-snap-response-codes" author="json-gateway">
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="200.00"/><column name="target_value" value="Successful"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="202.00"/><column name="target_value" value="Request In Progress"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="400.00"/><column name="target_value" value="Bad Request"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="400.01"/><column name="target_value" value="Invalid Field Format {field name}"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="400.02"/><column name="target_value" value="Invalid Mandatory Field {field name}"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="401.00"/><column name="target_value" value="Unauthorized. [reason]"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="401.01"/><column name="target_value" value="Invalid Token (B2B)"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="401.02"/><column name="target_value" value="Invalid Customer Token"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="401.03"/><column name="target_value" value="Token Not Found (B2B)"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="401.04"/><column name="target_value" value="Customer Token Not Found"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.00"/><column name="target_value" value="Transaction Expired"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.01"/><column name="target_value" value="Feature Not Allowed [Reason]"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.02"/><column name="target_value" value="Exceeds Transaction Amount Limit"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.03"/><column name="target_value" value="Suspected Fraud"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.04"/><column name="target_value" value="Activity Count Limit Exceeded"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.05"/><column name="target_value" value="Do Not Honor"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.06"/><column name="target_value" value="Feature Not Allowed At This Time. [reason]"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.07"/><column name="target_value" value="Card Blocked"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.08"/><column name="target_value" value="Card Expired"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.09"/><column name="target_value" value="Dormant Account"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.10"/><column name="target_value" value="Need To Set Token Limit"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.11"/><column name="target_value" value="OTP Blocked"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.12"/><column name="target_value" value="OTP Lifetime Expired"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.13"/><column name="target_value" value="OTP Sent To Cardholer"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.14"/><column name="target_value" value="Insufficient Funds"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.15"/><column name="target_value" value="Transaction Not Permitted.[reason]"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.16"/><column name="target_value" value="Suspend Transaction"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.17"/><column name="target_value" value="Token Limit Exceeded"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.18"/><column name="target_value" value="Inactive Card/Account/Customer"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.19"/><column name="target_value" value="Merchant Blacklisted"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.20"/><column name="target_value" value="Merchant Limit Exceed"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.21"/><column name="target_value" value="Set Limit Not Allowed"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.22"/><column name="target_value" value="Token Limit Invalid"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="403.23"/><column name="target_value" value="Account Limit Exceed"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.00"/><column name="target_value" value="Invalid Transaction Status"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.01"/><column name="target_value" value="Transaction Not Found"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.02"/><column name="target_value" value="Invalid Routing"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.03"/><column name="target_value" value="Bank Not Supported By Switch"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.04"/><column name="target_value" value="Transaction Cancelled"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.05"/><column name="target_value" value="Merchant Is Not Registered For Card Registration Services"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.06"/><column name="target_value" value="Need To Request OTP"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.07"/><column name="target_value" value="Journey Not Found"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.08"/><column name="target_value" value="Invalid Merchant"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.09"/><column name="target_value" value="No Issuer"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.10"/><column name="target_value" value="Invalid API Transition"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.11"/><column name="target_value" value="Invalid Card/Account/Customer [info]/Virtual Account"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.12"/><column name="target_value" value="Invalid Bill/Virtual Account [Reason]"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.13"/><column name="target_value" value="Invalid Amount"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.14"/><column name="target_value" value="Paid Bill"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.15"/><column name="target_value" value="Invalid OTP"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.16"/><column name="target_value" value="Partner Not Found"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.17"/><column name="target_value" value="Invalid Terminal"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.18"/><column name="target_value" value="Inconsistent Request"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="404.19"/><column name="target_value" value="Invalid Bill/Virtual Account"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="405.00"/><column name="target_value" value="Requested Function Is Not Supported"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="405.01"/><column name="target_value" value="Requested Opearation Is Not Allowed"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="409.00"/><column name="target_value" value="Conflict"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="409.01"/><column name="target_value" value="Duplicate partnerReferenceNo"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="429.00"/><column name="target_value" value="Too Many Requests"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="500.00"/><column name="target_value" value="General Error"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="500.01"/><column name="target_value" value="Internal Server Error"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="500.02"/><column name="target_value" value="External Server Error"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_RESPONSE_CODE"/><column name="source_value" value="504.00"/><column name="target_value" value="Timeout"/>
+        </insert>
+    </changeSet>
+
+    <changeSet id="020-snap-gateway-errors" author="json-gateway">
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="INVALID_JSON"/><column name="target_value" value="400.00"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="REQUEST_SCHEMA_INVALID"/><column name="target_value" value="400.01"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="REQUEST_SCHEMA_MISSING"/><column name="target_value" value="400.02"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="MAPPING_ERROR_CLIENT"/><column name="target_value" value="400.02"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="MAPPING_ERROR"/><column name="target_value" value="500.00"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="FILE_TOO_LARGE"/><column name="target_value" value="400.01"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="FILE_REJECTED"/><column name="target_value" value="400.01"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="DOWNSTREAM_HTTP_ERROR"/><column name="target_value" value="500.02"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="DOWNSTREAM_BUSINESS_ERROR"/><column name="target_value" value="500.02"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="DOWNSTREAM_CONNECTION"/><column name="target_value" value="500.02"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="DOWNSTREAM_INVALID_RESPONSE"/><column name="target_value" value="500.02"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="DOWNSTREAM_TIMEOUT"/><column name="target_value" value="504.00"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="FLOW_TIMEOUT"/><column name="target_value" value="504.00"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="DATABASE_ERROR"/><column name="target_value" value="500.02"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="STORAGE_ERROR"/><column name="target_value" value="500.02"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="HANDLER_ERROR"/><column name="target_value" value="500.01"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="RESPONSE_SCHEMA_INVALID"/><column name="target_value" value="500.01"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_GATEWAY_ERROR"/><column name="source_value" value="INTERNAL"/><column name="target_value" value="500.01"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

@@ -21,7 +21,8 @@ public record GatewayProperties(
         @DefaultValue Db db,
         @DefaultValue Sql sql,
         @DefaultValue Files files,
-        Map<String, FileStorage> storages) {
+        Map<String, FileStorage> storages,
+        @DefaultValue Snap snap) {
 
     public GatewayProperties {
         targetSystems = targetSystems == null ? Map.of() : Map.copyOf(targetSystems);
@@ -32,6 +33,15 @@ public record GatewayProperties(
      * Uploads: {@code maxSize} limits a raw (non-multipart) request body such as {@code application/pdf}; multipart
      * uploads are limited by {@code spring.servlet.multipart.*}, which application.yml sets from the same value.
      */
+    /**
+     * SNAP (Bank Indonesia) responses. {@code serviceCodePattern}: what {@code gw_flow.service_code} may be, checked
+     * on every reload; the default, two digits, keeps {@code responseCode} numeric as SNAP defines it
+     * ({@code [0-9A-Z]{2}} allows 1,296 codes instead of 100). {@code noBodyStatus}: the status a SNAP response is
+     * sent with when it would be 1xx, 204, 205 or 304, which cannot carry a body; its {@code responseCode} keeps the
+     * original status (e.g. {@code 204G000}).
+     */
+    public record Snap(@DefaultValue("[0-9]{2}") String serviceCodePattern, @DefaultValue("200") int noBodyStatus) {}
+
     public record Files(@DefaultValue("20MB") org.springframework.util.unit.DataSize maxSize) {}
 
     /**

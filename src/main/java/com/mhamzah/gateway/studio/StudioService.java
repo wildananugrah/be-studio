@@ -247,7 +247,7 @@ public class StudioService {
                 flow.responseSchema(), flow.requestHandler(), flow.responseHandler(), flow.errorHandler(),
                 flow.successStatus(), flow.timeoutMs(), flow.auditMode(), true,
                 flow.steps().stream().map(StudioService::enabled).toList(), flow.response(), null, flow.responses(),
-                flow.schemaValidation());
+                flow.schemaValidation(), flow.serviceCode());
         StudioConfig single = new StudioConfig(null, List.of(only), draft.targets(), draft.lookups(), draft.schemas(),
                 draft.storages());
         FlowRegistry registry;
@@ -275,6 +275,7 @@ public class StudioService {
         }
 
         ExecutionContext ctx = context(flow.code(), registry, sample);
+        ctx.putServiceCode(def.serviceCode());
         List<RuleResult> results = new ArrayList<>();
         for (CompiledRule rule : rules) {
             try {

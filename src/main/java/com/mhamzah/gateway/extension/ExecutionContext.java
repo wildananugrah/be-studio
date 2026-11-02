@@ -30,6 +30,7 @@ public final class ExecutionContext {
     private final ObjectNode steps;
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     private final Map<String, InboundFile> files;
+    private volatile String serviceCode;
 
     public ExecutionContext(String flowCode, String correlationId, Map<String, LookupTable> lookups, ObjectNode request) {
         this(flowCode, correlationId, lookups, request, Map.of());
@@ -66,6 +67,27 @@ public final class ExecutionContext {
 
     public String correlationId() {
         return correlationId;
+    }
+
+    /** The flow's SNAP service code ({@code gw_flow.service_code}); null when no flow matched. */
+    public String serviceCode() {
+        return serviceCode;
+    }
+
+    /**
+     * Sets the flow's service code; mappings then read {@code $.flow.code} and {@code $.flow.serviceCode}. Engine
+     * use only, before steps run.
+     */
+    public void putServiceCode(String serviceCode) {
+        lock.writeLock().lock();
+        try {
+            this.serviceCode = serviceCode;
+            ObjectNode flow = root.putObject("flow");
+            flow.put("code", flowCode);
+            flow.put("serviceCode", serviceCode);
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
     /** Reads a context path such as {@code $.request.body.amount}; null when missing. */
@@ -130,6 +152,11 @@ public final class ExecutionContext {
         } finally {
             lock.writeLock().unlock();
         }
+    }
+
+    /** The whole lookup table {@code lookupCode}, for handlers that look up several keys in order. */
+    public Optional<LookupTable> lookupTable(String lookupCode) {
+        return Optional.ofNullable(lookups.get(lookupCode));
     }
 
     /** Translates {@code value} through the lookup table {@code lookupCode} (matching entry or {@code *} fallback). */

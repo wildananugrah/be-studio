@@ -67,7 +67,10 @@ public record StudioConfig(
     /** {@code gw_application}: a named group of flows, exported and imported as a unit. */
     public record Application(String code, String name, String description) {}
 
-    /** {@code gw_flow} plus its steps and its {@code FLOW_RESPONSE} rules; {@code application} is its group. */
+    /**
+     * {@code gw_flow} plus its steps and its {@code FLOW_RESPONSE} rules; {@code application} is its group and
+     * {@code serviceCode} its SNAP service code.
+     */
     public record Flow(
             String code,
             String name,
@@ -86,7 +89,17 @@ public record StudioConfig(
             List<Rule> response,
             String application,
             List<Response> responses,
-            String schemaValidation) {
+            String schemaValidation,
+            String serviceCode) {
+
+        public Flow(String code, String name, String method, String path, String requestSchema, String responseSchema,
+                String requestHandler, String responseHandler, String errorHandler, Integer successStatus,
+                Integer timeoutMs, String auditMode, Boolean enabled, List<Step> steps, List<Rule> response,
+                String application, List<Response> responses, String schemaValidation) {
+            this(code, name, method, path, requestSchema, responseSchema, requestHandler, responseHandler, errorHandler,
+                    successStatus, timeoutMs, auditMode, enabled, steps, response, application, responses,
+                    schemaValidation, null);
+        }
 
         public Flow(String code, String name, String method, String path, String requestSchema, String responseSchema,
                 String requestHandler, String responseHandler, String errorHandler, Integer successStatus,

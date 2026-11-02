@@ -101,12 +101,13 @@ class StudioWriter {
             flowIds.put(r.id(), insert("INSERT INTO " + db.qualify(t.flow())
                             + " (code, name, http_method, path_pattern, request_schema_code, response_schema_code,"
                             + " request_handler, response_handler, error_handler, success_status, timeout_ms,"
-                            + " audit_mode, enabled, application_code, schema_validation)"
-                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            + " audit_mode, enabled, application_code, schema_validation, service_code)"
+                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     r.code(), r.name(), r.httpMethod(), r.pathPattern(), r.requestSchemaCode(),
                     r.responseSchemaCode(), r.requestHandler(), r.responseHandler(), r.errorHandler(),
                     r.successStatus(), r.timeoutMs(), r.auditMode(), r.enabled(),
-                    r.applicationCode() == null ? "DEFAULT" : r.applicationCode(), r.schemaValidation()));
+                    r.applicationCode() == null ? "DEFAULT" : r.applicationCode(), r.schemaValidation(),
+                    r.serviceCode()));
         }
         Map<Long, Long> stepIds = new HashMap<>();
         for (StepRow r : rows.steps()) {

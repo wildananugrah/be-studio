@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        gw_flow.service_code: the flow's SNAP service code (responseCode = HTTP status + service code + case code).
+        Required on every flow: the reload rejects a flow without one, and 019 makes the column NOT NULL once every
+        existing row has a value. Added nullable here so that existing rows can be filled in first.
+    -->
+    <changeSet id="018-gw-flow-service-code" author="json-gateway">
+        <addColumn tableName="${tbl.flow}">
+            <column name="service_code" type="varchar(2)"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

@@ -32,6 +32,8 @@ function statusFrom(rules) {
   return m ? { step: m[1], rule: r } : { custom: true, rule: r };
 }
 /** "200", "← profile" (the step's status passed through) or "STATUS rule". */
+/** The reserved response "additionalInfo": its rules build SNAP additionalInfo; it is never answered, so it has no status. */
+const isInfoResp = r => r.name === 'additionalInfo';
 const statusText = (rules, fixed) => { const x = statusFrom(rules); return x ? (x.step ? '← ' + x.step : 'STATUS rule') : String(fixed || 200); };
 /** Passes {@code step}'s HTTP status through (its STATUS rule is created or re-pointed), or with '' uses the fixed status. */
 function setStatusFrom(rules, step) {
@@ -50,7 +52,7 @@ function fromApi(c) {
     flows: c.flows.map(f => ({
       code: str(f.code), name: str(f.name), method: f.method || 'GET', path: str(f.path), reqSchema: str(f.requestSchema), respSchema: str(f.responseSchema),
       reqHandler: str(f.requestHandler), respHandler: str(f.responseHandler), errorHandler: str(f.errorHandler), successStatus: str(f.successStatus || 200),
-      timeout: str(f.timeoutMs), audit: f.auditMode || 'INHERIT', validation: f.schemaValidation || 'BOTH', enabled: f.enabled, application: str(f.application) || 'DEFAULT',
+      timeout: str(f.timeoutMs), audit: f.auditMode || 'INHERIT', validation: f.schemaValidation || 'BOTH', enabled: f.enabled, application: str(f.application) || 'DEFAULT', serviceCode: str(f.serviceCode),
       steps: f.steps.map(s => ({ id: uid('s'), name: str(s.name), order: s.order, target: str(s.targetSystem), method: s.method || 'GET', path: str(s.path), onFailure: s.onFailure || 'STOP',
         timeout: str(s.timeoutMs), condition: str(s.condition), success: str(s.success), reqHandler: str(s.requestHandler), respHandler: str(s.responseHandler),
         respSchema: str(s.responseSchema), respValidation: s.responseValidation || 'INHERIT', bodyCodec: str(s.bodyCodec), enabled: s.enabled, rules: s.rules.map(ruleIn), sql: s.sql == null ? null : String(s.sql), bodyTemplate: str(s.bodyTemplate), nextOk: str(s.nextOnSuccess), nextFail: str(s.nextOnFailure), example: str(s.responseExample), cases: (s.cases || []).map(c => ({ id: uid('c'), when: str(c.when), then: str(c.then), label: str(c.label), builder: c.builder || null })) })),
@@ -208,7 +210,7 @@ function toApi(cfg) {
   return {
     flows: cfg.flows.map(f => ({
       code: f.code, name: nn(f.name), method: f.method, path: f.path, requestSchema: nn(f.reqSchema), responseSchema: nn(f.respSchema), requestHandler: nn(f.reqHandler),
-      responseHandler: nn(f.respHandler), errorHandler: nn(f.errorHandler), successStatus: int(f.successStatus) || 200, timeoutMs: int(f.timeout), auditMode: f.audit, schemaValidation: f.validation && f.validation !== 'BOTH' ? f.validation : null, enabled: f.enabled, application: nn(f.application),
+      responseHandler: nn(f.respHandler), errorHandler: nn(f.errorHandler), successStatus: int(f.successStatus) || 200, timeoutMs: int(f.timeout), auditMode: f.audit, schemaValidation: f.validation && f.validation !== 'BOTH' ? f.validation : null, enabled: f.enabled, application: nn(f.application), serviceCode: nn(f.serviceCode),
       steps: [...f.steps].sort((a, b) => a.order - b.order).map(s => ({ name: s.name, order: s.order, targetSystem: s.target, method: isSql(s) || isLocal(s) ? null : s.method, path: isSql(s) || isLocal(s) ? null : s.path, sql: isSql(s) ? s.sql : null, bodyTemplate: isSql(s) || isStore(s) || isCondition(s) ? null : nn(s.bodyTemplate), condition: nn(s.condition), success: nn(s.success),
         onFailure: s.onFailure, timeoutMs: int(s.timeout), responseSchema: nn(s.respSchema), responseValidation: s.respValidation && s.respValidation !== 'INHERIT' && !isCondition(s) ? s.respValidation : null, requestHandler: nn(s.reqHandler), responseHandler: nn(s.respHandler), bodyCodec: nn(s.bodyCodec),
         enabled: s.enabled, rules: s.rules.map(ruleOut), nextOnSuccess: nn(s.nextOk), nextOnFailure: nn(s.nextFail), responseExample: isSql(s) || isStore(s) || isLocal(s) ? null : nn(s.example), cases: isCondition(s) ? (s.cases || []).map(c => ({ when: c.when, then: c.then, label: nn(c.label), builder: c.builder || null })) : [] })),
@@ -407,7 +409,7 @@ function flowSql(f, lookupsUsed) {
   const opt = (c, v, num, cols, vals) => { if (v !== '' && v != null) { cols.push(c); vals.push(num ? v : q(v)); } };
   const fc = ['code', 'name', 'http_method', 'path_pattern'], fv = [q(f.code), q(f.name || f.code), q(f.method), q(f.path)];
   opt('request_schema_code', f.reqSchema, 0, fc, fv); opt('response_schema_code', f.respSchema, 0, fc, fv); opt('request_handler', f.reqHandler, 0, fc, fv); opt('response_handler', f.respHandler, 0, fc, fv); opt('error_handler', f.errorHandler, 0, fc, fv);
-  if (String(f.successStatus) !== '200') opt('success_status', f.successStatus, 1, fc, fv); opt('timeout_ms', f.timeout, 1, fc, fv); if (f.audit !== 'INHERIT') opt('audit_mode', f.audit, 0, fc, fv); if (f.validation && f.validation !== 'BOTH') opt('schema_validation', f.validation, 0, fc, fv); if (!f.enabled) opt('enabled', 'false', 1, fc, fv); opt('application_code', f.application, 0, fc, fv);
+  if (String(f.successStatus) !== '200') opt('success_status', f.successStatus, 1, fc, fv); opt('timeout_ms', f.timeout, 1, fc, fv); if (f.audit !== 'INHERIT') opt('audit_mode', f.audit, 0, fc, fv); if (f.validation && f.validation !== 'BOTH') opt('schema_validation', f.validation, 0, fc, fv); if (!f.enabled) opt('enabled', 'false', 1, fc, fv); opt('application_code', f.application, 0, fc, fv); opt('service_code', f.serviceCode, 0, fc, fv);
   out.push('-- ' + (f.name || f.code) + '\nINSERT INTO gw_flow (' + fc.join(', ') + ')\nVALUES (' + fv.join(', ') + ');');
   const steps = [...f.steps].sort((a, b) => a.order - b.order);
   steps.forEach(st => {
@@ -426,7 +428,7 @@ function flowSql(f, lookupsUsed) {
   };
   steps.forEach(st => { if (st.rules.length) out.push('-- ' + st.name + ': what the call sends\n' + st.rules.map((r, i) => ruleSql(r, i, st)).join('\n')); });
   if (f.response.length) out.push('-- what the client gets\n' + f.response.map((r, i) => ruleSql(r, i, null)).join('\n'));
-  (f.responses || []).forEach(r => out.push('-- response ' + r.name + ' (HTTP ' + (r.status || 200) + '), answered by a branch\nINSERT INTO gw_flow_response (flow_id, name, status_code' + (r.description ? ', description' : '') + ')\nSELECT id, ' + q(r.name) + ', ' + (parseInt(r.status, 10) || 200) + (r.description ? ', ' + q(r.description) : '') + '\nFROM gw_flow WHERE code = ' + q(f.code) + ';' + (r.rules.length ? '\n' + r.rules.map((x, i) => ruleSql(x, i, null, r.name)).join('\n') : '')));
+  (f.responses || []).forEach(r => out.push('-- response ' + r.name + (isInfoResp(r) ? ': builds additionalInfo of SNAP responses (status_code unused)' : ' (HTTP ' + (r.status || 200) + '), answered by a branch') + '\nINSERT INTO gw_flow_response (flow_id, name, status_code' + (r.description ? ', description' : '') + ')\nSELECT id, ' + q(r.name) + ', ' + (parseInt(r.status, 10) || 200) + (r.description ? ', ' + q(r.description) : '') + '\nFROM gw_flow WHERE code = ' + q(f.code) + ';' + (r.rules.length ? '\n' + r.rules.map((x, i) => ruleSql(x, i, null, r.name)).join('\n') : '')));
   if (lookupsUsed.length) out.push('-- lookups the rules use (skip the ones the target database already has)\n' + lookupsUsed.map(([code, rows]) => rows.map(r => 'INSERT INTO gw_lookup_entry (lookup_code, source_value, target_value) VALUES (' + q(code) + ', ' + q(r.src) + ', ' + q(r.tgt) + ');').join('\n')).join('\n'));
   return out.join('\n\n');
 }
@@ -1156,7 +1158,10 @@ class App extends Component {
   addFlow(code) {
     this.mutCfg(cfg => {
       let k = 1; while (cfg.flows.some(x => x.code === 'NEW_FLOW_' + k || x.path === '/v1/new-' + k)) k++;
-      cfg.flows.push({ code: 'NEW_FLOW_' + k, name: 'New flow', method: 'GET', path: '/v1/new-' + k, reqSchema: '', respSchema: '', reqHandler: '', respHandler: '', errorHandler: '', successStatus: '200', timeout: '', audit: 'INHERIT', enabled: true, steps: [], response: [], responses: [], application: code });
+      // service_code is required and unique within the application: take the first free two-digit code
+      const used = new Set(cfg.flows.filter(x => x.application === code).map(x => x.serviceCode));
+      let n = 1; while (n < 100 && used.has(String(n).padStart(2, '0'))) n++;
+      cfg.flows.push({ code: 'NEW_FLOW_' + k, name: 'New flow', method: 'GET', path: '/v1/new-' + k, reqSchema: '', respSchema: '', reqHandler: '', respHandler: '', errorHandler: '', successStatus: '200', timeout: '', audit: 'INHERIT', enabled: true, steps: [], response: [], responses: [], application: code, serviceCode: n < 100 ? String(n).padStart(2, '0') : '' });
       setTimeout(() => this.setState({ cur: cfg.flows.length - 1, screen: 'flow', tab: 'pipeline', sel: { kind: 'flow' }, scope: 'resp' }), 0);
     });
   }
@@ -2050,6 +2055,7 @@ class App extends Component {
               <div onClick=${select({ kind: 'flow' })} ...${zoneProps(flowZone)} style=${`position:relative;align-self:flex-start;display:flex;align-items:center;gap:14px;padding:9px 14px;background:#fff;border:1px solid ${selBorder(sel.kind === 'flow')};border-radius:9px;cursor:pointer`}>
                 <span style=${`font:600 10px ${MONO};letter-spacing:.08em;color:#6A6D75`}>FLOW</span>
                 <span style="font-weight:600">${f.name || f.code}</span>
+                <span style=${`font:11.5px ${MONO};color:${f.serviceCode ? '#6A6D75' : C.err}`} title="service_code: the SNAP service code">service ${f.serviceCode || 'missing'}</span>
                 <span style=${`font:11.5px ${MONO};color:#6A6D75`}>timeout ${f.timeout ? f.timeout + 'ms' : 'default'}</span>
                 <span style=${`font:11.5px ${MONO};color:#6A6D75`}>audit ${f.audit}</span>
                 ${f.validation && f.validation !== 'BOTH' && html`<span style=${`font:11.5px ${MONO};color:#6A6D75`} title="schema_validation: which schemas are checked at run time">validate ${f.validation}</span>`}
@@ -2129,8 +2135,8 @@ class App extends Component {
                 </div>
                 ${(f.responses || []).map(r => html`
                   <div data-resp=${r.name} onClick=${select({ kind: 'resp', id: r.id })} style=${card(sel.kind === 'resp' && sel.id === r.id, 'width:216px')}>
-                    <div style="display:flex;align-items:center;gap:7px"><span style=${`width:7px;height:7px;border-radius:2px;background:${C.out}`}></span><span style="font-weight:600">${r.name}</span><span style="flex:1"></span><span style=${`font:600 10.5px ${MONO};color:${parseInt(r.status, 10) >= 400 ? C.err : '#6A6D75'};white-space:nowrap`}>HTTP ${statusText(r.rules, r.status)}</span></div>
-                    <div style=${`margin-top:4px;font:11px ${MONO};color:#6A6D75`}>${r.rules.length} FLOW_RESPONSE rules · ${f.errorHandler === 'RESPOND:' + r.name ? 'answers every failure' : f.steps.some(x => x.nextOk === 'RESPOND:' + r.name || x.nextFail === 'RESPOND:' + r.name || (x.cases || []).some(c => c.then === 'RESPOND:' + r.name)) ? 'answered by a branch' : 'no step responds with it'}</div>
+                    <div style="display:flex;align-items:center;gap:7px"><span style=${`width:7px;height:7px;border-radius:2px;background:${C.out}`}></span><span style="font-weight:600">${r.name}</span><span style="flex:1"></span><span style=${`font:600 10.5px ${MONO};color:${!isInfoResp(r) && parseInt(r.status, 10) >= 400 ? C.err : '#6A6D75'};white-space:nowrap`}>${isInfoResp(r) ? 'SNAP' : 'HTTP ' + statusText(r.rules, r.status)}</span></div>
+                    <div style=${`margin-top:4px;font:11px ${MONO};color:#6A6D75`}>${r.rules.length} FLOW_RESPONSE rules · ${isInfoResp(r) ? 'builds additionalInfo of SNAP responses' : f.errorHandler === 'RESPOND:' + r.name ? 'answers every failure' : f.steps.some(x => x.nextOk === 'RESPOND:' + r.name || x.nextFail === 'RESPOND:' + r.name || (x.cases || []).some(c => c.then === 'RESPOND:' + r.name)) ? 'answered by a branch' : 'no step responds with it'}</div>
                     <button class="btn-line" onClick=${toMap('resp:' + r.id)} style="margin-top:9px;width:100%;border:1px solid #E4E1D8;background:#FAF9F6;border-radius:6px;padding:6px 8px;cursor:pointer;font-size:12px;font-weight:500;text-align:left;display:flex;justify-content:space-between">Edit response mapping<span>→</span></button>
                   </div>`)}
                 <button data-ob="1" class="btn-line ro-hide" title="Another response a branch can answer with (its own status and mapping)" onClick=${e => { e.stopPropagation(); this.mut(fl => { fl.responses = fl.responses || []; let k = 1; while (fl.responses.some(x => x.name === 'response' + k)) k++; const r = { id: uid('o'), name: 'response' + k, status: '200', description: '', rules: [] }; fl.responses.push(r); return { sel: { kind: 'resp', id: r.id } }; }); }} style="width:216px;border:1.5px dashed #C9C6BC;background:transparent;border-radius:9px;padding:8px;cursor:pointer;font-size:12px;color:#6A6D75">+ Response</button>
@@ -2305,7 +2311,7 @@ class App extends Component {
   routeTargets(f, st) {
     const later = f.steps.filter(x => x.order > st.order).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
     return [...later.map(x => ({ v: x.name, l: 'Go to ' + x.name + ' · step_order ' + x.order })),
-      ...(f.responses || []).map(r => ({ v: 'RESPOND:' + r.name, l: 'Respond · ' + r.name + ' · HTTP ' + statusText(r.rules, r.status) }))];
+      ...(f.responses || []).filter(r => !isInfoResp(r)).map(r => ({ v: 'RESPOND:' + r.name, l: 'Respond · ' + r.name + ' · HTTP ' + statusText(r.rules, r.status) }))];
   }
 
   /** The cases of a condition step: when (expression) → then (route), with a label; first true wins. */
@@ -2444,7 +2450,7 @@ class App extends Component {
     const routeFields = (st, f, S2) => {
       const later = f.steps.filter(x => x.order > st.order).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
       const go = [...later.map(x => ({ v: x.name, l: 'Go to ' + x.name + ' · step_order ' + x.order })),
-        ...(f.responses || []).map(r => ({ v: 'RESPOND:' + r.name, l: 'Respond · ' + r.name + ' · HTTP ' + statusText(r.rules, r.status) }))];
+        ...(f.responses || []).filter(r => !isInfoResp(r)).map(r => ({ v: 'RESPOND:' + r.name, l: 'Respond · ' + r.name + ' · HTTP ' + statusText(r.rules, r.status) }))];
       const failV = st.nextFail || st.onFailure;
       const alone = f.steps.filter(x => x.order === st.order).length === 1;
       const warn = (st.nextOk || st.nextFail) && !alone ? 'This step branches, so it must run alone: give it a step_order no other step uses. ' : '';
@@ -2575,10 +2581,10 @@ class App extends Component {
       const r = f.responses.find(x => x.id === sel.id);
       const R = fl => fl.responses.find(x => x.id === r.id);
       const used = [...f.steps.filter(x => x.nextOk === 'RESPOND:' + r.name || x.nextFail === 'RESPOND:' + r.name || (x.cases || []).some(c => c.then === 'RESPOND:' + r.name)).map(x => x.name), ...(f.errorHandler === 'RESPOND:' + r.name ? ['On failure (error_handler)'] : [])];
-      insp = { kind: 'Client response', color: C.out, title: r.name + ' · HTTP ' + statusText(r.rules, r.status), table: 'gw_flow_response', fields: [
+      insp = { kind: 'Client response', color: C.out, title: r.name + (isInfoResp(r) ? ' · SNAP' : ' · HTTP ' + statusText(r.rules, r.status)), table: 'gw_flow_response', fields: [
         fld('Name', 'name', r.name, 'text', (fl, v) => { const x = R(fl); const old = 'RESPOND:' + x.name; x.name = v.replace(/[^A-Za-z0-9_-]/g, '_'); fl.steps.forEach(y => { if (y.nextOk === old) y.nextOk = 'RESPOND:' + x.name; if (y.nextFail === old) y.nextFail = 'RESPOND:' + x.name; (y.cases || []).forEach(c => { if (c.then === old) c.then = 'RESPOND:' + x.name; }); }); if (fl.errorHandler === old) fl.errorHandler = 'RESPOND:' + x.name; }, { hint: used.length ? 'Answered by: ' + used.join(', ') + ' (their routes follow a rename)' : 'No step responds with it yet: set a step\'s If it succeeds / If it fails to Respond · ' + r.name }),
-        this.statusSource(f, statusFrom(r.rules), fl => R(fl).rules),
-        fld(statusFrom(r.rules) ? 'Fallback status' : 'Status', 'status_code', r.status, 'select', (fl, v) => { R(fl).status = v; }, { options: withCurrent(plain(['200', '201', '202', '204', '400', '404', '409', '422', '500', '502', '503']), String(r.status)), hint: statusFrom(r.rules) ? 'Used when the STATUS rule gives nothing (e.g. no status after a timeout or a connection error)' : 'The HTTP status the client gets with this response' }),
+        ...(isInfoResp(r) ? [] : [this.statusSource(f, statusFrom(r.rules), fl => R(fl).rules),
+        fld(statusFrom(r.rules) ? 'Fallback status' : 'Status', 'status_code', r.status, 'select', (fl, v) => { R(fl).status = v; }, { options: withCurrent(plain(['200', '201', '202', '204', '400', '404', '409', '422', '500', '502', '503']), String(r.status)), hint: statusFrom(r.rules) ? 'Used when the STATUS rule gives nothing (e.g. no status after a timeout or a connection error)' : 'The HTTP status the client gets with this response' })]),
         fld('Description', 'description', r.description, 'area', (fl, v) => { R(fl).description = v; })
       ], mapping: { label: 'Edit response mapping · ' + r.rules.length + ' rules', go: toMap('resp:' + r.id) },
         del: { label: 'Delete response', body: `Response ${r.name} and its ${r.rules.length} rule(s) are removed; steps that respond with it go back to their default route. Nothing changes in the database until Save & reload.`, go: () => this.mut(fl => { fl.responses = fl.responses.filter(x => x.id !== r.id); this.norm(fl); return { sel: { kind: 'out' } }; }) } };
@@ -2586,7 +2592,7 @@ class App extends Component {
       const er = /^RESPOND:/.test(f.errorHandler || '') ? (f.responses || []).find(x => 'RESPOND:' + x.name === f.errorHandler) : null;
       insp = { kind: 'On failure', color: C.err, title: er ? 'Respond · ' + er.name : f.errorHandler || 'defaultErrorHandler', table: 'gw_flow.error_handler', fields: [
         fld('Error handler', 'error_handler', f.errorHandler, 'select', (fl, v) => { fl.errorHandler = v; }, { options: withCurrent([{ v: '', l: 'defaultErrorHandler' }, ...plain(cat.errorHandlers.map(h => h.name).filter(n => n !== 'defaultErrorHandler')),
-          ...(f.responses || []).map(x => ({ v: 'RESPOND:' + x.name, l: 'Respond · ' + x.name + ' (map the error)' }))], f.errorHandler),
+          ...(f.responses || []).filter(x => !isInfoResp(x)).map(x => ({ v: 'RESPOND:' + x.name, l: 'Respond · ' + x.name + ' (map the error)' }))], f.errorHandler),
           hint: er ? 'Every failure no step routes itself (a STOP step fails, a schema check fails, a mapping or handler throws) is answered by response ' + er.name + '. Its rules read $.error: type, code (e.g. GW-502-DOWNSTREAM), status (what the standard response would use), message, reason, step, details; plus $.steps.<step>.status/body of a failed call. If its rules fail, the standard error is sent.'
             : 'New error codes are new lookup rows plus a save. No code change. Or pick Respond · <response> to map error responses like any other response (add one with + Response).' })
       ], mapping: er ? { label: 'Edit error mapping · ' + er.rules.length + ' rules', go: toMap('resp:' + er.id) } : undefined };
@@ -2595,6 +2601,7 @@ class App extends Component {
         fld('Code', 'code', f.code, 'text', (fl, v) => { fl.code = v.toUpperCase().replace(/[^A-Z0-9_]/g, '_'); }, { hint: 'Appears in logs and audit' }),
         fld('Name', 'name', f.name, 'text', (fl, v) => { fl.name = v; }),
         fld('Application', 'application_code', f.application, 'select', (fl, v) => { fl.application = v; }, { options: withCurrent((s.cfg.applications || []).map(a => ({ v: a.code, l: a.code + (a.name ? ' · ' + a.name : '') })), f.application), hint: 'The group this flow is exported with (Flows page → Export).' }),
+        fld('Service code', 'service_code', f.serviceCode, 'text', (fl, v) => { fl.serviceCode = v.toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 2); }, { hint: 'Required, unique within the application. SNAP responseCode = HTTP status + this + case code (e.g. 403' + (f.serviceCode || '24') + '14). Two digits unless gateway.snap.service-code-pattern allows more.' }),
         fld('Method', 'http_method', f.method, 'select', (fl, v) => { fl.method = v; }, { options: plain(METHODS) }),
         fld('Path', 'path_pattern', f.path, 'text', (fl, v) => { fl.path = v; }, { hint: 'Relative to ' + cat.apiBasePath + '. {name} → $.request.path.name' }),
         fld('Flow timeout (ms)', 'timeout_ms', f.timeout, 'text', (fl, v) => { fl.timeout = v.replace(/\D/g, ''); }, { hint: 'Empty = ' + cat.defaultFlowTimeoutMs + '. Exceeded → 504' }),
@@ -2661,7 +2668,7 @@ class App extends Component {
     }
     const sorted = [...f.steps].sort((a, b) => a.order - b.order);
     const scopes = [...sorted.filter(st => !isCondition(st)).map(st => ({ id: st.id, label: st.name, sub: st.order + ' ·' })), { id: 'resp', label: 'Client response', sub: '→' },
-      ...(f.responses || []).map(r => ({ id: 'resp:' + r.id, label: r.name + ' · ' + statusText(r.rules, r.status), sub: '⇒' }))];
+      ...(f.responses || []).map(r => ({ id: 'resp:' + r.id, label: r.name + (isInfoResp(r) ? ' · SNAP' : ' · ' + statusText(r.rules, r.status)), sub: '⇒' }))];
     /** A field the client sends, typed in the CONTEXT tree: a new rule reading it, into the current scope. */
     const addField = (section, raw) => {
       const sec = ADDABLE[section]; const name = String(raw || '').trim();
@@ -2687,7 +2694,7 @@ class App extends Component {
       });
     };
     const ruleAccept = d => ['src', 'conv', 'lookup', 'fh'].includes(d.kind);
-    const types = scopeStep ? (isSql(scopeStep) || isTransform(scopeStep) ? ['BODY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes.filter(t => t !== 'STATUS')) : ['BODY', 'HEADER', 'STATUS'];
+    const types = scopeStep ? (isSql(scopeStep) || isTransform(scopeStep) ? ['BODY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes.filter(t => t !== 'STATUS')) : respSel && isInfoResp(respSel) ? ['BODY'] : ['BODY', 'HEADER', 'STATUS'];
 
     const pv = s.preview && s.preview.key === f.code + '/' + (scopeStep ? scopeStep.name : respSel ? '@' + respSel.name : '') ? s.preview : null;
     const resText = (r, i) => {

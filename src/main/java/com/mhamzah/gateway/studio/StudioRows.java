@@ -76,7 +76,7 @@ final class StudioRows {
                                         cases(s.cases()), s.responseValidation()))
                                 .toList(),
                         rules(responseByFlow.getOrDefault(f.id(), List.of())), f.applicationCode(),
-                        responsesByFlow.getOrDefault(f.id(), List.of()), f.schemaValidation()))
+                        responsesByFlow.getOrDefault(f.id(), List.of()), f.schemaValidation(), f.serviceCode()))
                 .toList();
 
         Map<String, List<Header>> headers = new TreeMap<>();
@@ -184,7 +184,7 @@ final class StudioRows {
                     text(f.responseHandler()), text(f.errorHandler()),
                     f.successStatus() == null ? 200 : f.successStatus(), f.timeoutMs(),
                     or(f.auditMode(), "INHERIT"), f.enabled(), or(f.application(), DEFAULT_APPLICATION),
-                    unlessDefault(f.schemaValidation(), "BOTH")));
+                    unlessDefault(f.schemaValidation(), "BOTH"), text(f.serviceCode())));
             for (Step s : f.steps()) {
                 stepId++;
                 // a database query step has no HTTP method, path or wire format
