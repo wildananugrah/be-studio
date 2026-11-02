@@ -188,6 +188,9 @@ public final class ApiSpec {
         facts.add(row("Method", flow.method().name()));
         facts.add(row("URL", baseUrl + e.path()));
         facts.add(row("Flow", flow.code()));
+        if (flow.serviceCode() != null) {
+            facts.add(row("Service code", flow.serviceCode()));
+        }
         facts.add(row("Success status", String.valueOf(flow.successStatus())));
         facts.add(row("Timeout", flow.timeout().toMillis() + " ms"));
         if (flow.requestSchema() != null) {

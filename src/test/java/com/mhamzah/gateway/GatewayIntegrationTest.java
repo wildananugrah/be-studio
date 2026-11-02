@@ -266,9 +266,13 @@ class GatewayIntegrationTest {
         return r.status() + " " + r.body();
     }
 
+    /** Service codes of the flows the tests insert: 90 and up, clear of the demo flows' 01, 02, ... */
+    private static final java.util.concurrent.atomic.AtomicInteger SERVICE_CODES = new java.util.concurrent.atomic.AtomicInteger(90);
+
     private void insertConstantFlow(String code, String path, String auditMode) {
-        jdbc.update("INSERT INTO gw_flow (code, name, http_method, path_pattern, success_status, audit_mode, enabled)"
-                + " VALUES (?, ?, 'GET', ?, 200, ?, ?)", code, code, path, auditMode, true);
+        jdbc.update("INSERT INTO gw_flow (code, name, http_method, path_pattern, success_status, audit_mode, enabled,"
+                + " service_code) VALUES (?, ?, 'GET', ?, 200, ?, ?, ?)", code, code, path, auditMode, true,
+                String.valueOf(SERVICE_CODES.getAndIncrement()));
         Long flowId = jdbc.queryForObject("SELECT id FROM gw_flow WHERE code = ?", Long.class, code);
         jdbc.update("INSERT INTO gw_mapping_rule (flow_id, phase, seq, target_type, target_path, constant_value, required)"
                 + " VALUES (?, 'FLOW_RESPONSE', 1, 'BODY', '$.hello', 'world', ?)", flowId, false);
@@ -421,8 +425,9 @@ class GatewayIntegrationTest {
                         + "<ns2:balance>100.10</ns2:balance></ns2:InquiryResponse></S:Body></S:Envelope>")));
         jdbc.update("INSERT INTO gw_target_system (code, base_url, body_codec, enabled) VALUES ('IT_SOAP', ?, 'soapCodec', ?)",
                 wireMock.baseUrl(), true);
-        jdbc.update("INSERT INTO gw_flow (code, name, http_method, path_pattern, success_status, audit_mode, enabled)"
-                + " VALUES ('IT_SOAP', 'IT_SOAP', 'POST', '/it/soap', 200, 'INHERIT', ?)", true);
+        jdbc.update("INSERT INTO gw_flow (code, name, http_method, path_pattern, success_status, audit_mode, enabled,"
+                + " service_code) VALUES ('IT_SOAP', 'IT_SOAP', 'POST', '/it/soap', 200, 'INHERIT', ?, ?)", true,
+                String.valueOf(SERVICE_CODES.getAndIncrement()));
         Long flowId = jdbc.queryForObject("SELECT id FROM gw_flow WHERE code = 'IT_SOAP'", Long.class);
         jdbc.update("INSERT INTO gw_flow_step (flow_id, name, step_order, target_system, http_method, path_template,"
                 + " on_failure, enabled) VALUES (?, 'inquiry', 1, 'IT_SOAP', 'POST', '/it/soap/bank', 'STOP', ?)", flowId, true);

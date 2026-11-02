@@ -380,3 +380,31 @@ GET {{baseUrl}}/api/v1/accounts/3003/profile
 
 ### 5005 → 502 (the core's 503, translated by lookup DEMO_HTTP_STATUS)
 GET {{baseUrl}}/api/v1/accounts/5005/profile
+
+### ---------------------------------------------------------------------------------------------------------------
+### SNAP responses (SNAP_TRANSFER, service code 24): responseCode = HTTP status + service code + case code
+### ---------------------------------------------------------------------------------------------------------------
+
+### success → 200 {"responseCode":"2002400","responseMessage":"Successful","referenceNo":"TRX20261008001",...,"additionalInfo":{"deviceId":"D-1","partnerReferenceNo":"P-1"}}
+POST {{baseUrl}}/api/v1/snap/transfers
+Content-Type: application/json
+
+{"partnerReferenceNo": "P-1", "sourceAccountNo": "1001", "beneficiaryAccountNo": "2002", "amount": {"value": "10000.00", "currency": "IDR"}, "additionalInfo": {"deviceId": "D-1"}}
+
+### core answers "51" → 403 {"responseCode":"4032414","responseMessage":"Insufficient Funds","additionalInfo":{"failedStep":"debit","partnerReferenceNo":"P-2"}}
+POST {{baseUrl}}/api/v1/snap/transfers
+Content-Type: application/json
+
+{"partnerReferenceNo": "P-2", "sourceAccountNo": "1001", "beneficiaryAccountNo": "2002", "amount": {"value": "999999999", "currency": "IDR"}}
+
+### core answers 404 "14" → 404 {"responseCode":"4042411","responseMessage":"Invalid Card/Account/Customer/Virtual Account",...}
+POST {{baseUrl}}/api/v1/snap/transfers
+Content-Type: application/json
+
+{"partnerReferenceNo": "P-3", "sourceAccountNo": "9999", "beneficiaryAccountNo": "2002", "amount": {"value": "10.00", "currency": "IDR"}}
+
+### missing partnerReferenceNo → 400 {"responseCode":"4002402","responseMessage":"Invalid Mandatory Field partnerReferenceNo","additionalInfo":{}}
+POST {{baseUrl}}/api/v1/snap/transfers
+Content-Type: application/json
+
+{"sourceAccountNo": "1001", "beneficiaryAccountNo": "2002", "amount": {"value": "10.00", "currency": "IDR"}}

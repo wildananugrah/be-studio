@@ -268,7 +268,8 @@ final class ApplicationExport {
                     Col.v("request_handler", f.requestHandler()), Col.v("response_handler", f.responseHandler()),
                     Col.v("error_handler", f.errorHandler()), Col.v("success_status", f.successStatus()),
                     Col.v("timeout_ms", f.timeoutMs()), Col.v("audit_mode", f.auditMode()), Col.v("enabled", f.enabled()),
-                    Col.v("application_code", app)), "schema_validation", f.schemaValidation())));
+                    Col.v("application_code", app), Col.v("service_code", f.serviceCode())),
+                    "schema_validation", f.schemaValidation())));
         }
         for (StepRow s : rows.steps()) {
             flows.add(new Insert("flow_step", optional(List.of(Col.expr("flow_id", flowId(flowCode.get(s.flowId()))),

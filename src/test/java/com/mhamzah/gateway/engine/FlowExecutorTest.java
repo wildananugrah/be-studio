@@ -209,7 +209,8 @@ class FlowExecutorTest {
     @Test
     void flowTimeoutIs504() {
         var flow = rows.flow("F", "POST", "/f", f -> new com.mhamzah.gateway.config.ConfigRows.FlowRow(f.id(), f.code(),
-                f.name(), f.httpMethod(), f.pathPattern(), null, null, null, null, null, null, 300, "INHERIT", true));
+                f.name(), f.httpMethod(), f.pathPattern(), null, null, null, null, null, null, 300, "INHERIT", true)
+                .withServiceCode(f.serviceCode()));
         rows.step(flow, "s", 1);
         downstream.slow("/s", Duration.ofSeconds(2), "{}");
         long start = System.nanoTime();

@@ -1,3 +1,4 @@
+
 # Local development against PostgreSQL. Demo flows are seeded (Liquibase context "dev").
 spring:
   datasource:
@@ -9,8 +10,12 @@ spring:
       leak-detection-threshold: 20000
   liquibase:
     contexts: default,dev
-
 gateway:
+  snap:
+    # two characters, each a digit or an upper-case letter: 00-99 and 0A-ZZ (1,296 codes per application)
+    service-code-pattern: ${GATEWAY_SNAP_SERVICE_CODE_PATTERN:[0-9A-Z]{2}}
+    # 204 / 205 / 304 cannot carry a body: such a SNAP response is sent with this status, responseCode keeps 204G000
+    no-body-status: ${GATEWAY_SNAP_NO_BODY_STATUS:200}
   admin:
     token: ${GATEWAY_ADMIN_TOKEN:dev-admin-token}
   studio:

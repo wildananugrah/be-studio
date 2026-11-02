@@ -82,8 +82,8 @@ class CustomDbNamesIntegrationTest {
     @Test
     void configLoadsAndAuditIsWrittenThroughRenamedTables() throws Exception {
         String s = schema();
-        jdbc.update("INSERT INTO " + s + ".MW_ROUTE (code, name, http_method, path_pattern, success_status, audit_mode, enabled)"
-                + " VALUES ('PING', 'ping', 'GET', '/ping', 200, 'ON', ?)", true);
+        jdbc.update("INSERT INTO " + s + ".MW_ROUTE (code, name, http_method, path_pattern, success_status, audit_mode, enabled,"
+                + " service_code) VALUES ('PING', 'ping', 'GET', '/ping', 200, 'ON', ?, '01')", true);
         Long flowId = jdbc.queryForObject("SELECT id FROM " + s + ".MW_ROUTE WHERE code = 'PING'", Long.class);
         jdbc.update("INSERT INTO " + s + ".MW_RULE (flow_id, phase, seq, target_type, target_path, constant_value, required)"
                 + " VALUES (?, 'FLOW_RESPONSE', 1, 'BODY', '$.pong', 'true', ?)", flowId, false);

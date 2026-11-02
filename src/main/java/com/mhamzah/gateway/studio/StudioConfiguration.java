@@ -16,6 +16,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProp
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
+import org.springframework.http.CacheControl;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.ViewControllerRegistry;
@@ -69,6 +70,8 @@ public class StudioConfiguration implements WebMvcConfigurer {
 
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
-        registry.addResourceHandler("/studio/**").addResourceLocations("classpath:/studio/");
+        // no-cache: the browser revalidates on every load, so it never runs a studio.js older than the server
+        registry.addResourceHandler("/studio/**").addResourceLocations("classpath:/studio/")
+                .setCacheControl(CacheControl.noCache());
     }
 }
