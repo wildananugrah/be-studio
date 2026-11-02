@@ -94,7 +94,7 @@ public class SnapResponseHandler implements MessageHandler {
     }
 
     private static String serviceCode(ExecutionContext ctx) {
-        return ctx.serviceCode() == null || ctx.serviceCode().isBlank() ? "00" : ctx.serviceCode();
+        return SnapCodes.responseServiceCode(ctx.serviceCode());
     }
 
     private static String message(int status, SnapCodes.Code code) {

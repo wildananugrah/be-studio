@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        gw_flow.service_code holds up to four characters (e.g. 2401); a SNAP responseCode carries only the first two.
+        Included after 019 in db.changelog-master.xml; PostgreSQL and Oracle keep the NOT NULL constraint.
+    -->
+    <changeSet id="021-gw-flow-service-code-length" author="json-gateway">
+        <modifyDataType tableName="${tbl.flow}" columnName="service_code" newDataType="varchar(4)"/>
+    </changeSet>
+</databaseChangeLog>

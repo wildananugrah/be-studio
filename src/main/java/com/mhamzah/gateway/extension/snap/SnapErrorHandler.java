@@ -154,7 +154,7 @@ public class SnapErrorHandler implements ErrorHandler {
         } catch (RuntimeException e) {
             log.error("SNAP error response could not be built; answering 500", e);
             ObjectNode body = F.objectNode();
-            body.put("responseCode", "500" + (ctx.serviceCode() == null ? "00" : ctx.serviceCode()) + "01");
+            body.put("responseCode", "500" + SnapCodes.responseServiceCode(ctx.serviceCode()) + "01");
             body.put("responseMessage", "Internal Server Error");
             return GatewayResponse.of(500, body);
         }

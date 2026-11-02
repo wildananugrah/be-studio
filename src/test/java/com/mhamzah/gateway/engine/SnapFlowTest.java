@@ -395,7 +395,7 @@ class SnapFlowTest {
         assertThatThrownBy(this::compile).isInstanceOf(ConfigValidationException.class)
                 .satisfies(e -> assertThat(((ConfigValidationException) e).errors())
                         .contains("flow 'NO_CODE': service_code is required",
-                                "flow 'LETTERS': service_code '4A' must match [0-9]{2}",
+                                "flow 'LETTERS': service_code '4A' must match [0-9]{2}([0-9]{2})?",
                                 "flow 'SECOND': service_code '11' is already used by flow 'FIRST' in application 'A'")
                         .noneMatch(m -> m.contains("OTHER_APP")));
     }
@@ -408,6 +408,35 @@ class SnapFlowTest {
         debitAnswers(200, "{\"responseCode\":\"00\",\"refNo\":\"TRX1\"}");
 
         assertThat(text(post("{\"amount\":\"100\"}"), "responseCode")).isEqualTo("2002400");
+    }
+
+    @Test
+    void fourCharacterServiceCodesAreUniqueAsAWhole() {
+        rows.flow("FIRST", "GET", "/a", f -> f.withServiceCode("2401"));
+        rows.flow("SIBLING", "GET", "/b", f -> f.withServiceCode("2402"));
+        rows.flow("SIBLING_TWIN", "GET", "/c", f -> f.withServiceCode("2402"));
+
+        assertThatThrownBy(this::compile).isInstanceOf(ConfigValidationException.class)
+                .satisfies(e -> assertThat(((ConfigValidationException) e).errors())
+                        .containsExactly("flow 'SIBLING_TWIN': service_code '2402' is already used by flow 'SIBLING'"));
+    }
+
+    @Test
+    void fourCharacterServiceCodeGivesASevenCharacterResponseCode() {
+        Rows other = new Rows();
+        other.flow("SNAP_TRANSFER", "POST", "/snap/transfers", f -> f.withSchemas("SNAP_REQ", null)
+                .withHandlers(null, SnapResponseHandler.BEAN_NAME, SnapErrorHandler.BEAN_NAME).withServiceCode("2401"));
+        other.schema("SNAP_REQ", "{\"type\":\"object\",\"properties\":{\"amount\":{\"type\":\"object\"}}}");
+        FlowRegistry reg = compileOther(other);
+        var match = reg.match(HttpMethod.POST, "/snap/transfers").orElseThrow();
+
+        GatewayResponse ok = executor.execute(reg, match,
+                new InboundRequest(HttpMethod.POST, "/snap/transfers", Map.of(), Map.of(), "{}"), "c").response();
+        GatewayResponse bad = executor.execute(reg, match,
+                new InboundRequest(HttpMethod.POST, "/snap/transfers", Map.of(), Map.of(), "{\"amount\":5}"), "c").response();
+
+        assertThat(text(ok, "responseCode")).isEqualTo("2002400");
+        assertThat(text(bad, "responseCode")).isEqualTo("4002401");
     }
 
     private FlowRegistry compileOther(Rows other) {
