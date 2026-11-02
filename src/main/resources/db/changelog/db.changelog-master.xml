@@ -40,6 +40,8 @@
     <include file="changes/015-audit-partitioning.xml" relativeToChangelogFile="true"/>
     <include file="changes/016-audit-step-error.xml" relativeToChangelogFile="true"/>
     <include file="changes/017-schema-validation.xml" relativeToChangelogFile="true"/>
+    <include file="changes/018-flow-service-code.xml" relativeToChangelogFile="true"/>
+    <include file="changes/020-snap-response-codes.xml" relativeToChangelogFile="true"/>
     <include file="changes/100-dev-demo-flows.xml" relativeToChangelogFile="true"/>
     <include file="changes/101-dev-demo-target-systems.xml" relativeToChangelogFile="true"/>
     <include file="changes/102-dev-demo-ms-user.xml" relativeToChangelogFile="true"/>
@@ -55,4 +57,8 @@
     <include file="changes/112-dev-demo-document-forward.xml" relativeToChangelogFile="true"/>
     <include file="changes/113-dev-demo-status-passthrough.xml" relativeToChangelogFile="true"/>
     <include file="changes/114-dev-demo-error-response.xml" relativeToChangelogFile="true"/>
+    <include file="changes/115-dev-demo-snap.xml" relativeToChangelogFile="true"/>
+    <!-- after the dev data, which fills in the demo flows' service codes first -->
+    <include file="changes/019-flow-service-code-not-null.xml" relativeToChangelogFile="true"/>
+    <include file="changes/021-flow-service-code-length.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

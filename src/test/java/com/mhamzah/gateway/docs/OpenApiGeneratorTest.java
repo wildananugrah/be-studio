@@ -210,7 +210,7 @@ class OpenApiGeneratorTest {
     @Test
     void successStatusIsUsed() {
         rows.flow("CREATE", "POST", "/c", f -> new com.mhamzah.gateway.config.ConfigRows.FlowRow(f.id(), f.code(), f.name(),
-                f.httpMethod(), f.pathPattern(), null, null, null, null, null, 201, null, "INHERIT", true));
+                f.httpMethod(), f.pathPattern(), null, null, null, null, null, 201, null, "INHERIT", true).withServiceCode(f.serviceCode()));
 
         JsonNode responses = generate().get("paths").get("/api/c").get("post").get("responses");
 

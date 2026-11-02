@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Dev data: SNAP_TRANSFER (POST /v1/snap/transfers, service code 24, a demo value) answers in the SNAP format:
+        error_handler snapErrorHandler, response_handler snapResponseHandler.
+
+          source (1, GET /core/accounts/{acc})   9999 → 404 {"responseCode":"14"} → 404 4042411 Invalid Card/Account/Customer
+          debit  (2, POST /core/transfers)       success_expr responseCode == '00'; amount 999999999 → "51"
+                                                 → 403 4032414 Insufficient Funds
+          success                                → 200 {"responseCode":"2002400","responseMessage":"Successful", ...}
+
+        SNAP_ERR_CORE_BANKING translates CORE_BANKING's codes ($.body.responseCode); the named response
+        "additionalInfo" builds additionalInfo of the success and error responses.
+    -->
+    <changeSet id="115-demo-snap" author="json-gateway" context="dev">
+        <insert tableName="${tbl.application}">
+            <column name="code" value="SNAP_DEMO"/>
+            <column name="name" value="SNAP demo"/>
+            <column name="description" value="Bank Indonesia SNAP responses: responseCode, responseMessage, additionalInfo"/>
+        </insert>
+        <insert tableName="${tbl.json_schema}">
+            <column name="code" value="SNAP_TRANSFER_REQUEST"/>
+            <column name="description" value="SNAP transfer request"/>
+            <column name="schema_text" value='{"type":"object","required":["partnerReferenceNo","sourceAccountNo","beneficiaryAccountNo","amount"],"properties":{"partnerReferenceNo":{"type":"string","maxLength":64},"sourceAccountNo":{"type":"string","minLength":1},"beneficiaryAccountNo":{"type":"string","minLength":1},"amount":{"type":"object","required":["value","currency"],"properties":{"value":{"type":"string","pattern":"^[0-9]+(\\.[0-9]{2})?$"},"currency":{"type":"string","minLength":3,"maxLength":3}}},"additionalInfo":{"type":"object"}}}'/>
+        </insert>
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="SNAP_TRANSFER"/>
+            <column name="name" value="SNAP transfer"/>
+            <column name="http_method" value="POST"/>
+            <column name="path_pattern" value="/v1/snap/transfers"/>
+            <column name="request_schema_code" value="SNAP_TRANSFER_REQUEST"/>
+            <column name="response_handler" value="snapResponseHandler"/>
+            <column name="error_handler" value="snapErrorHandler"/>
+            <column name="application_code" value="SNAP_DEMO"/>
+            <column name="service_code" value="24"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SNAP_TRANSFER')"/>
+            <column name="name" value="source"/><column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="CORE_BANKING"/><column name="http_method" value="GET"/>
+            <column name="path_template" value="/core/accounts/{acc}"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SNAP_TRANSFER')"/>
+            <column name="name" value="debit"/><column name="step_order" valueNumeric="2"/>
+            <column name="target_system" value="CORE_BANKING"/><column name="http_method" value="POST"/>
+            <column name="path_template" value="/core/transfers"/>
+            <column name="success_expr" value="${steps.debit.body.responseCode} == '00'"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SNAP_TRANSFER')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'SNAP_TRANSFER' AND s.name = 'source')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="PATH"/><column name="target_path" value="acc"/>
+            <column name="source_path" value="$.request.body.sourceAccountNo"/>
+            <column name="required" valueBoolean="true"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SNAP_TRANSFER')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'SNAP_TRANSFER' AND s.name = 'debit')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_path" value="$.fromAcct"/><column name="source_path" value="$.request.body.sourceAccountNo"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SNAP_TRANSFER')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'SNAP_TRANSFER' AND s.name = 'debit')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="2"/>
+            <column name="target_path" value="$.toAcct"/><column name="source_path" value="$.request.body.beneficiaryAccountNo"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SNAP_TRANSFER')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'SNAP_TRANSFER' AND s.name = 'debit')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="3"/>
+            <column name="target_path" value="$.amount"/><column name="source_path" value="$.request.body.amount.value"/>
+            <column name="converter" value="PAD_LEFT:15:0"/>
+        </insert>
+
+        <!-- the success response: snapResponseHandler adds responseCode / responseMessage first, additionalInfo last -->
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SNAP_TRANSFER')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_path" value="$.referenceNo"/><column name="source_path" value="$.steps.debit.body.refNo"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SNAP_TRANSFER')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_path" value="$.partnerReferenceNo"/><column name="source_path" value="$.request.body.partnerReferenceNo"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SNAP_TRANSFER')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="3"/>
+            <column name="target_path" value="$.amount"/><column name="source_path" value="$.request.body.amount"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SNAP_TRANSFER')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="4"/>
+            <column name="target_path" value="$.additionalInfo"/><column name="source_path" value="$.request.body.additionalInfo"/>
+        </insert>
+
+        <!-- additionalInfo (success and error): $.error.* exists on errors only, so failedStep is left out of a success -->
+        <insert tableName="${tbl.flow_response}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SNAP_TRANSFER')"/>
+            <column name="name" value="additionalInfo"/>
+            <column name="status_code" valueNumeric="200"/>
+            <column name="description" value="additionalInfo of SNAP error responses"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SNAP_TRANSFER')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="response_name" value="additionalInfo"/>
+            <column name="target_path" value="$.failedStep"/><column name="source_path" value="$.error.step"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'SNAP_TRANSFER')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="response_name" value="additionalInfo"/>
+            <column name="target_path" value="$.partnerReferenceNo"/><column name="source_path" value="$.request.body.partnerReferenceNo"/>
+        </insert>
+
+        <!-- CORE_BANKING's error codes in SNAP terms -->
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_ERR_CORE_BANKING"/><column name="source_value" value="@codePath"/><column name="target_value" value='["$.body.responseCode"]'/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_ERR_CORE_BANKING"/><column name="source_value" value="51"/><column name="target_value" value="403.14"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_ERR_CORE_BANKING"/><column name="source_value" value="14"/><column name="target_value" value="404.11"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_ERR_CORE_BANKING"/><column name="source_value" value="HTTP_404"/><column name="target_value" value="404.01"/>
+        </insert>
+        <insert tableName="${tbl.lookup_entry}">
+            <column name="lookup_code" value="SNAP_ERR_CORE_BANKING"/><column name="source_value" value="*"/><column name="target_value" value="500.02"/>
+        </insert>
+    </changeSet>
+
+    <!--
+        Every flow needs a service code (019 makes the column NOT NULL): the other demo flows get 01, 02, ... in id
+        order, unique across all of them and so within every application.
+    -->
+    <changeSet id="115-demo-service-codes" author="json-gateway" context="dev">
+        <sql>
+            UPDATE ${tbl.flow} SET service_code = (
+                SELECT LPAD(CAST(n.rn AS VARCHAR(2)), 2, '0')
+                FROM (SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn FROM ${tbl.flow} WHERE service_code IS NULL) n
+                WHERE n.id = ${tbl.flow}.id)
+            WHERE service_code IS NULL
+        </sql>
+    </changeSet>
+</databaseChangeLog>

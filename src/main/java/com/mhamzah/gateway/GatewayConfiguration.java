@@ -66,7 +66,7 @@ public class GatewayConfiguration {
         // ${...} in gw_target_system(_header) values resolve from environment variables and application config
         return new ConfigCompiler(lookup, properties.targetSystems(), environment::resolveRequiredPlaceholders,
                 Duration.ofMillis(properties.defaultFlowTimeoutMs()), Duration.ofMillis(properties.defaultStepTimeoutMs()),
-                sqlDatasources, fileStores);
+                sqlDatasources, fileStores).serviceCodePattern(properties.snap().serviceCodePattern());
     }
 
     /** Built-in body codecs, referenced by bean name from gw_target_system.body_codec / gw_flow_step.body_codec. */

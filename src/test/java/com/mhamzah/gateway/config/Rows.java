@@ -49,8 +49,10 @@ public final class Rows {
     }
 
     public FlowRow flow(String code, String method, String path, UnaryOperator<FlowRow> customize) {
+        // every flow needs a service code, unique within its application: 01, 02, ... in creation order
+        String serviceCode = String.format("%02d", (flows.size() + 1) % 100);
         FlowRow f = customize.apply(new FlowRow(ids.getAndIncrement(), code, code, method, path,
-                null, null, null, null, null, null, null, "INHERIT", true));
+                null, null, null, null, null, null, null, "INHERIT", true).withServiceCode(serviceCode));
         flows.add(f);
         return f;
     }

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Makes gw_flow.service_code NOT NULL. Included after the dev data in db.changelog-master.xml, so that the demo
+        flows have their codes first. On a database with flows that have none, the migration stops here: set them
+        first, e.g. UPDATE gw_flow SET service_code = '01' WHERE code = '...'; (unique within an application).
+    -->
+    <changeSet id="019-gw-flow-service-code-not-null" author="json-gateway">
+        <preConditions onFail="HALT"
+                       onFailMessage="gw_flow.service_code is empty on some flows: set a service code on every flow (unique within its application), then start again">
+            <sqlCheck expectedResult="0">SELECT COUNT(*) FROM ${tbl.flow} WHERE service_code IS NULL</sqlCheck>
+        </preConditions>
+        <addNotNullConstraint tableName="${tbl.flow}" columnName="service_code" columnDataType="varchar(2)"/>
+    </changeSet>
+</databaseChangeLog>

@@ -69,6 +69,7 @@ public class FlowExecutor implements AutoCloseable {
         long deadline = start + flow.timeout().toNanos();
         ExecutionContext ctx = new ExecutionContext(flow.code(), correlationId, registry.lookups(),
                 requestNode(in, match.pathVariables()), in.files());
+        ctx.putServiceCode(flow.serviceCode());
         List<StepRecord> records = Collections.synchronizedList(new ArrayList<>());
 
         GatewayResponse response;
@@ -165,12 +166,13 @@ public class FlowExecutor implements AutoCloseable {
         if (respond != null) {
             // a named response: its own rules and status; the response schema describes the default one only
             MappedMessage named = mapping.apply(respond.rules(), ctx);
-            MessageView view = new MessageView(named.headers(), named.body());
+            // a STATUS rule (e.g. the backend's own status) wins over the response's fixed status
+            int status = named.status() != null ? named.status() : respond.status();
+            MessageView view = new MessageView(named.headers(), named.body(), status);
             if (flow.responseHandler() != null) {
                 invoke(flow.responseHandler(), view, ctx, "response_handler of flow", false);
             }
-            // a STATUS rule (e.g. the backend's own status) wins over the response's fixed status
-            return new GatewayResponse(named.status() != null ? named.status() : respond.status(), view.headers(), view.body());
+            return new GatewayResponse(finalStatus(view, status), view.headers(), view.body());
         }
 
         MappedMessage out = mapping.apply(flow.responseRules(), ctx);
@@ -180,11 +182,17 @@ public class FlowExecutor implements AutoCloseable {
                 throw GatewayError.of(ErrorType.RESPONSE_SCHEMA_INVALID).details(errors).build();
             }
         }
-        MessageView view = new MessageView(out.headers(), out.body());
+        int status = out.status() != null ? out.status() : flow.successStatus();
+        MessageView view = new MessageView(out.headers(), out.body(), status);
         if (flow.responseHandler() != null) {
             invoke(flow.responseHandler(), view, ctx, "response_handler of flow", false);
         }
-        return new GatewayResponse(out.status() != null ? out.status() : flow.successStatus(), view.headers(), view.body());
+        return new GatewayResponse(finalStatus(view, status), view.headers(), view.body());
+    }
+
+    /** The status after the flow response_handler, which may change it (e.g. a SNAP 204 sent as 200). */
+    private static int finalStatus(MessageView view, int status) {
+        return view.status() == null ? status : view.status();
     }
 
     private static void skip(StepDefinition step, ExecutionContext ctx, List<StepRecord> records) {

@@ -183,7 +183,7 @@ final class StepRunner {
                     .message(message)
                     .downstream(resp.status(), resp.headers(), a.responsePayload).build();
         }
-        MessageView response = new MessageView(resp.headers(), respBody);
+        MessageView response = new MessageView(resp.headers(), respBody, resp.status());
         if (step.responseHandler() != null) {
             FlowExecutor.invoke(step.responseHandler(), response, ctx, "response_handler of step '" + step.name() + "'", false);
         }

@@ -95,6 +95,14 @@ gateway:
       premake: 3                                              # future partitions kept ready (PostgreSQL)
       retention: ${GATEWAY_AUDIT_RETENTION:}                  # e.g. 6m, 90d, 1y; empty = keep everything
       maintenance-cron: "${GATEWAY_AUDIT_MAINTENANCE_CRON:0 1 0 1 * *}"  # 00:01 on the 1st of each month; also at startup
+  # SNAP responses (response_handler snapResponseHandler, error_handler snapErrorHandler). service-code-pattern: what
+  # gw_flow.service_code may be, checked on every reload; default "[0-9]{2}" (two digits, as SNAP defines it),
+  # "[0-9A-Z]{2}" also allows letters. Env: GATEWAY_SNAP_SERVICE_CODE_PATTERN.
+  # no-body-status: the status a SNAP response is sent with instead of 204 / 205 / 304 / 1xx, which cannot carry a
+  # body; responseCode keeps the original (204G000). Env: GATEWAY_SNAP_NO_BODY_STATUS.
+  #snap:
+  #  service-code-pattern: ${GATEWAY_SNAP_SERVICE_CODE_PATTERN:[0-9]{2}}
+  #  no-body-status: ${GATEWAY_SNAP_NO_BODY_STATUS:200}
   masking:
     # comma-separated; GATEWAY_MASKING_FIELDS replaces the whole list, so repeat the defaults you still want
     fields: ${GATEWAY_MASKING_FIELDS:pin,password,cardNo,cvv,authorization,x-admin-token}

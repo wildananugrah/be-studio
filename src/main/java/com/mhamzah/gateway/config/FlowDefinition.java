@@ -14,7 +14,8 @@ import org.springframework.web.util.pattern.PathPattern;
  * steps in one group run in parallel. {@code responseRules} build the default response ({@code successStatus});
  * {@code responses} are the named ones a branch can answer with ({@code RESPOND:<name>}). {@code schemaValidation}
  * says whether {@code requestSchema} / {@code responseSchema} are checked; each step resolves its own
- * ({@link StepDefinition#validateResponse()}).
+ * ({@link StepDefinition#validateResponse()}). {@code serviceCode} is the flow's SNAP service code
+ * ({@code gw_flow.service_code}).
  */
 public record FlowDefinition(
         String code,
@@ -32,7 +33,15 @@ public record FlowDefinition(
         List<List<StepDefinition>> groups,
         List<CompiledRule> responseRules,
         java.util.Map<String, Response> responses,
-        SchemaValidation schemaValidation) {
+        SchemaValidation schemaValidation,
+        String serviceCode) {
+
+    /**
+     * Reserved named response: its BODY rules build the optional {@code additionalInfo} of SNAP responses
+     * ({@code snapResponseHandler}, {@code snapErrorHandler}); it is never a client response itself, so nothing routes
+     * to it.
+     */
+    public static final String ADDITIONAL_INFO_RESPONSE = "additionalInfo";
 
     /** A named client response ({@code gw_flow_response}) with its own status and FLOW_RESPONSE rules. */
     public record Response(String name, int status, List<CompiledRule> rules) {
@@ -46,7 +55,7 @@ public record FlowDefinition(
             ErrorHandler errorHandler, String errorHandlerName, int successStatus, Duration timeout,
             AuditMode auditMode, List<List<StepDefinition>> groups, List<CompiledRule> responseRules) {
         this(code, method, pathPattern, requestSchema, responseSchema, requestHandler, responseHandler, errorHandler,
-                errorHandlerName, successStatus, timeout, auditMode, groups, responseRules, java.util.Map.of(), null);
+                errorHandlerName, successStatus, timeout, auditMode, groups, responseRules, java.util.Map.of(), null, null);
     }
 
     public FlowDefinition {

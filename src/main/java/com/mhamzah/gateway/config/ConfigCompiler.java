@@ -65,13 +65,18 @@ public class ConfigCompiler {
     private static final Pattern STEP_NAME = Pattern.compile("[A-Za-z0-9_\\-]+");
     private static final Pattern TEMPLATE_VAR = Pattern.compile("\\{([^}/]+)}");
     private static final Set<String> METHODS = Set.of("GET", "POST", "PUT", "PATCH", "DELETE");
-    private static final Set<String> CONTEXT_ROOTS = Set.of("request", "steps", "correlationId", "error");
+    private static final Set<String> CONTEXT_ROOTS = Set.of("request", "steps", "correlationId", "error", "flow");
     private static final String STEP_REQUEST = "STEP_REQUEST";
     private static final String FLOW_RESPONSE = "FLOW_RESPONSE";
 
     /** RFC 7230 token characters, so a header name can never smuggle in other headers. */
     private static final Pattern HEADER_NAME = Pattern.compile("[!#$%&'*+.^_`|~0-9A-Za-z\\-]+");
     private static final int DEFAULT_CONNECT_TIMEOUT_MS = 3000;
+    /**
+     * {@code gw_flow.service_code} unless {@code gateway.snap.service-code-pattern} says otherwise: two or four digits
+     * (only the first two go into a SNAP responseCode).
+     */
+    public static final String DEFAULT_SERVICE_CODE_PATTERN = "[0-9]{2}([0-9]{2})?";
 
     private final HandlerLookup handlers;
     private final Map<String, GatewayProperties.TargetSystem> configTargets;
@@ -80,6 +85,7 @@ public class ConfigCompiler {
     private final Duration defaultStepTimeout;
     private final SqlDatasources sqlDatasources;
     private final FileStores fileStores;
+    private Pattern serviceCodePattern = Pattern.compile(DEFAULT_SERVICE_CODE_PATTERN);
 
     /**
      * @param configTargets target systems from application.yml ({@code gateway.target-systems}); database rows win
@@ -103,6 +109,12 @@ public class ConfigCompiler {
         this.placeholders = placeholders;
         this.defaultFlowTimeout = defaultFlowTimeout;
         this.defaultStepTimeout = defaultStepTimeout;
+    }
+
+    /** What {@code gw_flow.service_code} must match (the whole value), e.g. {@code [0-9A-Z]{2}}. */
+    public ConfigCompiler serviceCodePattern(String regex) {
+        this.serviceCodePattern = Pattern.compile(regex == null || regex.isBlank() ? DEFAULT_SERVICE_CODE_PATTERN : regex);
+        return this;
     }
 
     public FlowRegistry compile(ConfigRows rows) {
@@ -460,6 +472,7 @@ public class ConfigCompiler {
                 }
             }
             Set<String> seen = new HashSet<>();
+            Map<String, String> serviceCodes = new HashMap<>();
             for (FlowRow f : rows.flows()) {
                 if (f.code() == null || f.code().isBlank()) {
                     errors.add("flow id " + f.id() + ": code is required");
@@ -469,6 +482,27 @@ public class ConfigCompiler {
                 if (f.applicationCode() != null && !apps.contains(f.applicationCode())) {
                     errors.add("flow '" + f.code() + "': application '" + f.applicationCode() + "' does not exist");
                 }
+                checkServiceCode(f, serviceCodes);
+            }
+        }
+
+        /** service_code is required, matches the configured pattern and is unique within the flow's application. */
+        private void checkServiceCode(FlowRow f, Map<String, String> seen) {
+            String where = "flow '" + f.code() + "'";
+            String code = f.serviceCode();
+            if (code == null || code.isBlank()) {
+                errors.add(where + ": service_code is required");
+                return;
+            }
+            if (!serviceCodePattern.matcher(code).matches()) {
+                errors.add(where + ": service_code '" + code + "' must match " + serviceCodePattern.pattern());
+                return;
+            }
+            String app = f.applicationCode() == null ? "" : f.applicationCode();
+            String other = seen.putIfAbsent(app + ":" + code, f.code());
+            if (other != null) {
+                errors.add(where + ": service_code '" + code + "' is already used by flow '" + other + "'"
+                        + (app.isEmpty() ? "" : " in application '" + app + "'"));
             }
         }
 
@@ -553,6 +587,10 @@ public class ConfigCompiler {
                     CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.HEADER, TargetType.STATUS), FLOW_RESPONSE);
                     if (r.responseName() != null && !namedRules.containsKey(r.responseName())) {
                         errors.add(rw + ": response '" + r.responseName() + "' is not a response of this flow");
+                    } else if (rule != null && FlowDefinition.ADDITIONAL_INFO_RESPONSE.equals(r.responseName())
+                            && rule.targetType() != TargetType.BODY) {
+                        errors.add(rw + ": the response '" + FlowDefinition.ADDITIONAL_INFO_RESPONSE
+                                + "' builds additionalInfo of SNAP responses and takes BODY rules only");
                     } else if (rule != null) {
                         checkStepRefs(rule.source(), stepOrders, Integer.MAX_VALUE, null, rw);
                         (r.responseName() == null ? responseRules : namedRules.get(r.responseName())).add(rule);
@@ -580,8 +618,12 @@ public class ConfigCompiler {
                     groups.computeIfAbsent(s.stepOrder(), k -> new ArrayList<>()).add(def);
                 }
             }
-            if (mappedErrors && !flowResponses.containsKey(errorHandlerName.substring(StepDefinition.RESPOND.length()))) {
+            String errorResponse = mappedErrors ? errorHandlerName.substring(StepDefinition.RESPOND.length()) : null;
+            if (mappedErrors && !flowResponses.containsKey(errorResponse)) {
                 errors.add(where + ": error_handler '" + errorHandlerName + "' is not a response of this flow");
+            } else if (FlowDefinition.ADDITIONAL_INFO_RESPONSE.equals(errorResponse)) {
+                errors.add(where + ": error_handler cannot answer with '" + errorResponse
+                        + "', which builds additionalInfo of SNAP responses");
             }
             if (method == null || pattern == null) {
                 return null;
@@ -589,7 +631,7 @@ public class ConfigCompiler {
             return new FlowDefinition(f.code(), method, pattern, requestSchema, responseSchema, requestHandler,
                     responseHandler, errorHandler, errorHandlerName, successStatus, timeout, auditMode,
                     new ArrayList<>(groups.values()), responseRules, responses(responseStatus, namedRules),
-                    schemaValidation == null ? SchemaValidation.BOTH : schemaValidation);
+                    schemaValidation == null ? SchemaValidation.BOTH : schemaValidation, f.serviceCode());
         }
 
         /** The step's response_validation (ON / OFF) when set, else what the flow's schema_validation says. */
@@ -627,6 +669,10 @@ public class ConfigCompiler {
             String v = value.strip();
             if (v.regionMatches(true, 0, StepDefinition.RESPOND, 0, StepDefinition.RESPOND.length())) {
                 String name = v.substring(StepDefinition.RESPOND.length()).strip();
+                if (FlowDefinition.ADDITIONAL_INFO_RESPONSE.equals(name)) {
+                    errors.add(where + ": '" + name + "' builds additionalInfo of SNAP responses and cannot be answered with");
+                    return null;
+                }
                 if (!flowResponses.containsKey(name)) {
                     errors.add(where + ": '" + name + "' is not a response of this flow (" + (flowResponses.isEmpty()
                             ? "it has none" : String.join(", ", flowResponses.keySet())) + ")");
