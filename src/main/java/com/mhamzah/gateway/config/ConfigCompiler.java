@@ -72,8 +72,11 @@ public class ConfigCompiler {
     /** RFC 7230 token characters, so a header name can never smuggle in other headers. */
     private static final Pattern HEADER_NAME = Pattern.compile("[!#$%&'*+.^_`|~0-9A-Za-z\\-]+");
     private static final int DEFAULT_CONNECT_TIMEOUT_MS = 3000;
-    /** {@code gw_flow.service_code} unless {@code gateway.snap.service-code-pattern} says otherwise: two digits. */
-    public static final String DEFAULT_SERVICE_CODE_PATTERN = "[0-9]{2}";
+    /**
+     * {@code gw_flow.service_code} unless {@code gateway.snap.service-code-pattern} says otherwise: two or four digits
+     * (only the first two go into a SNAP responseCode).
+     */
+    public static final String DEFAULT_SERVICE_CODE_PATTERN = "[0-9]{2}([0-9]{2})?";
 
     private final HandlerLookup handlers;
     private final Map<String, GatewayProperties.TargetSystem> configTargets;

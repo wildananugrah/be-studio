@@ -11,7 +11,8 @@ import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 
 /**
- * The SNAP response code catalog: {@code responseCode = <HTTP status, 3><service code, 2><case code, 2>}.
+ * The SNAP response code catalog: {@code responseCode = <HTTP status, 3><service code, 2><case code, 2>}, where the
+ * service code is the first two characters of {@code gw_flow.service_code} (which may hold up to four).
  *
  * <p>A SNAP code is written {@code "403.14"} (HTTP status, dot, case code). The catalog is the lookup table
  * {@value #CATALOG} in {@code gw_lookup_entry}: {@code source_value} {@code 403.14}, {@code target_value}
@@ -52,11 +53,20 @@ public final class SnapCodes {
 
         /** {@code responseCode} for a flow's service code ({@code 00} when the flow has none). */
         public String responseCode(String serviceCode) {
-            return status + (serviceCode == null || serviceCode.isBlank() ? "00" : serviceCode) + caseCode;
+            return status + responseServiceCode(serviceCode) + caseCode;
         }
     }
 
     private SnapCodes() {}
+
+    /** The two characters a responseCode carries: the first two of the flow's service code, {@code 00} when it has none. */
+    public static String responseServiceCode(String serviceCode) {
+        if (blank(serviceCode)) {
+            return "00";
+        }
+        String code = serviceCode.strip();
+        return code.length() <= 2 ? code : code.substring(0, 2);
+    }
 
     /** HTTP statuses whose response cannot carry a body (1xx, 204, 205, 304): a SNAP body sent with them is lost. */
     public static boolean hasNoBody(int status) {
