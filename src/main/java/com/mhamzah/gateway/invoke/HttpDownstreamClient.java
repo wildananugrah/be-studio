@@ -53,14 +53,15 @@ public class HttpDownstreamClient implements DownstreamClient {
             return b.build();
         });
         try {
-            HttpResponse<String> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            // bytes, not text: a file download must arrive unchanged (the text is decoded from them)
+            HttpResponse<byte[]> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofByteArray());
             Map<String, String> headers = new LinkedHashMap<>();
             response.headers().map().forEach((k, v) -> {
                 if (!k.startsWith(":") && !v.isEmpty()) {
                     headers.put(k.toLowerCase(Locale.ROOT), v.getFirst());
                 }
             });
-            return new DownstreamResponse(response.statusCode(), headers, response.body());
+            return DownstreamResponse.of(response.statusCode(), headers, response.body());
         } catch (HttpConnectTimeoutException e) {
             throw new DownstreamException(DownstreamException.Kind.CONNECTION, "Connect timed out: " + request.url(), e);
         } catch (HttpTimeoutException e) {

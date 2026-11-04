@@ -1,0 +1,9 @@
+<settings>
+    <mirrors>
+        <mirror>
+            <id>nexus</id>
+            <mirrorOf>*</mirrorOf>
+            <url>https://nexus-dev.bni.co.id/repository/maven-wdl-cts/</url>
+        </mirror>
+    </mirrors>
+</settings>

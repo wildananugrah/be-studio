@@ -16,8 +16,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -46,8 +44,6 @@ import tools.jackson.databind.node.ObjectNode;
 public class GatewayController {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayController.class);
-    private static final Pattern DISPOSITION_FILENAME = Pattern.compile("filename\\*?=(?:UTF-8'')?\"?([^\";]+)\"?",
-            Pattern.CASE_INSENSITIVE);
 
     private final GatewayService service;
     private final String basePath;
@@ -60,13 +56,13 @@ public class GatewayController {
     }
 
     @RequestMapping("${gateway.api-base-path:/api}/**")
-    public ResponseEntity<String> handle(HttpServletRequest request, @RequestBody(required = false) String body) {
+    public ResponseEntity<byte[]> handle(HttpServletRequest request, @RequestBody(required = false) String body) {
         return route(request, body, null, Map.of());
     }
 
     /** File uploads: text parts are the body fields, parts with a file name are files. */
     @RequestMapping(path = "${gateway.api-base-path:/api}/**", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<String> handleMultipart(HttpServletRequest request) throws IOException, ServletException {
+    public ResponseEntity<byte[]> handleMultipart(HttpServletRequest request) throws IOException, ServletException {
         ObjectNode form = JsonNodeFactory.instance.objectNode();
         Map<String, InboundFile> files = new LinkedHashMap<>();
         for (Part part : request.getParts()) {
@@ -101,7 +97,7 @@ public class GatewayController {
 
     /** HTML-style forms: the fields (not the query string's) are the body. */
     @RequestMapping(path = "${gateway.api-base-path:/api}/**", consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
-    public ResponseEntity<String> handleForm(HttpServletRequest request) {
+    public ResponseEntity<byte[]> handleForm(HttpServletRequest request) {
         Map<String, String> query = parseQuery(request.getQueryString());
         ObjectNode form = JsonNodeFactory.instance.objectNode();
         request.getParameterMap().forEach((name, values) -> {
@@ -119,7 +115,7 @@ public class GatewayController {
             "text/csv", "application/msword", "application/vnd.ms-excel",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
-    public ResponseEntity<String> handleBinary(HttpServletRequest request) throws IOException {
+    public ResponseEntity<byte[]> handleBinary(HttpServletRequest request) throws IOException {
         byte[] bytes = request.getInputStream().readNBytes((int) Math.min(Integer.MAX_VALUE - 8, maxRawBytes + 1));
         if (bytes.length > maxRawBytes) {
             throw new MaxUploadSizeExceededException(maxRawBytes);
@@ -128,20 +124,16 @@ public class GatewayController {
             // no body at all: Spring matches a request without Content-Type (a plain GET) as octet-stream; not a file
             return route(request, "", null, Map.of());
         }
-        String name = request.getHeader("X-File-Name");
-        String disposition = request.getHeader(HttpHeaders.CONTENT_DISPOSITION);
-        if (disposition != null) {
-            Matcher m = DISPOSITION_FILENAME.matcher(disposition);
-            if (m.find()) {
-                name = URLDecoder.decode(m.group(1), StandardCharsets.UTF_8);
-            }
+        String name = InboundFile.filenameOf(request.getHeader(HttpHeaders.CONTENT_DISPOSITION));
+        if (name == null) {
+            name = request.getHeader("X-File-Name");
         }
         InboundFile file = new InboundFile("body", name, request.getContentType(), bytes);
         log.info("upload field=body filename={} contentType={} size={}", file.filename(), file.contentType(), file.size());
         return route(request, null, JsonNodeFactory.instance.objectNode(), Map.of("body", file));
     }
 
-    private ResponseEntity<String> route(HttpServletRequest request, String body, ObjectNode form,
+    private ResponseEntity<byte[]> route(HttpServletRequest request, String body, ObjectNode form,
             Map<String, InboundFile> files) {
         Map<String, String> headers = new LinkedHashMap<>();
         for (String name : Collections.list(request.getHeaderNames())) {
@@ -174,12 +166,16 @@ public class GatewayController {
         return query;
     }
 
-    private static ResponseEntity<String> toResponseEntity(GatewayResponse response) {
+    /** JSON, or the file a FILE rule sends (as received, with its own Content-Type). */
+    private static ResponseEntity<byte[]> toResponseEntity(GatewayResponse response) {
         HttpHeaders headers = new HttpHeaders();
         response.headers().forEach(headers::set);
+        if (response.file() != null) {
+            return ResponseEntity.status(response.status()).headers(headers).body(response.file().bytes());
+        }
         headers.setContentType(MediaType.APPLICATION_JSON);
         return ResponseEntity.status(response.status())
                 .headers(headers)
-                .body(response.body() == null ? null : response.body().toString());
+                .body(response.body() == null ? null : response.body().toString().getBytes(StandardCharsets.UTF_8));
     }
 }

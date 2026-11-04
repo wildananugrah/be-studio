@@ -1,6 +1,7 @@
 package com.mhamzah.gateway.engine;
 
 import com.mhamzah.gateway.audit.AuditRecord.StepRecord;
+import com.mhamzah.gateway.codec.FileCodec;
 import com.mhamzah.gateway.codec.JsonCodec;
 import com.mhamzah.gateway.config.GatewayProperties;
 import com.mhamzah.gateway.config.OnFailure;
@@ -66,10 +67,13 @@ final class StepRunner {
 
     private final DownstreamClient client;
     private final MappingEngine mapping;
+    /** The largest file a {@code fileCodec} step accepts ({@code gateway.files.max-size}). */
+    private final long maxFileBytes;
 
-    StepRunner(DownstreamClient client, MappingEngine mapping) {
+    StepRunner(DownstreamClient client, MappingEngine mapping, long maxFileBytes) {
         this.client = client;
         this.mapping = mapping;
+        this.maxFileBytes = maxFileBytes;
     }
 
     StepOutcome run(StepDefinition step, ExecutionContext ctx, long deadlineNanos) {
@@ -162,7 +166,11 @@ final class StepRunner {
             a.finishCall();
         }
         a.status = resp.status();
-        if (codec != JsonCodec.INSTANCE && resp.body() != null && !resp.body().isEmpty()) {
+        if (codec == FileCodec.INSTANCE && resp.is2xx() && FileCodec.isFile(resp.headers().get("content-type"))) {
+            download(step, ctx, resp, a);
+            return;
+        }
+        if (codec != JsonCodec.INSTANCE && codec != FileCodec.INSTANCE && resp.body() != null && !resp.body().isEmpty()) {
             a.wireResponse = resp.body(); // likewise the XML / SOAP that came back, not the JSON it was decoded to
         }
         Decoded decoded = decode(codec, resp);
@@ -449,6 +457,45 @@ final class StepRunner {
             a.outcome = "FAILED";
             throw GatewayError.of(ErrorType.DOWNSTREAM_BUSINESS_ERROR).step(step.name())
                     .message("success_expr of step '" + step.name() + "' is false").build();
+        }
+    }
+
+    /**
+     * A file a {@code fileCodec} step downloaded: kept as received in the context ({@link ExecutionContext#stepFile});
+     * its description is the step's result body, so success_expr, mappings and the audit never see the bytes.
+     */
+    private void download(StepDefinition step, ExecutionContext ctx, DownstreamResponse resp, Attempt a) {
+        a.headers = resp.headers();
+        if (resp.bytes().length > maxFileBytes) {
+            ObjectNode detail = F.objectNode();
+            detail.put("size", resp.bytes().length);
+            detail.put("contentType", resp.headers().get("content-type"));
+            a.responsePayload = detail;
+            throw GatewayError.of(ErrorType.DOWNSTREAM_INVALID_RESPONSE).step(step.name())
+                    .message("Downstream file of " + resp.bytes().length + " bytes is larger than gateway.files.max-size ("
+                            + maxFileBytes + " bytes)")
+                    .downstream(resp.status(), resp.headers(), detail).build();
+        }
+        InboundFile file = new InboundFile(step.name(), InboundFile.filenameOf(resp.headers().get("content-disposition")),
+                resp.headers().get("content-type"), resp.bytes());
+        ObjectNode description = file.describe();
+        a.responsePayload = description;
+        if (step.responseSchema() != null && step.validateResponse()) {
+            List<String> errors = step.responseSchema().validate(description);
+            if (!errors.isEmpty()) {
+                throw GatewayError.of(ErrorType.DOWNSTREAM_INVALID_RESPONSE).step(step.name())
+                        .message("Downstream file failed schema " + step.responseSchema().code())
+                        .details(errors).downstream(resp.status(), a.headers, description).build();
+            }
+        }
+        ctx.putStepFile(step.name(), file);
+        a.outcome = "SUCCESS";
+        ctx.putStepResult(step.name(), a.result(null));
+        if (step.success() != null && !withStep(step, () -> step.success().evaluate(ctx))) {
+            a.outcome = "FAILED";
+            throw GatewayError.of(ErrorType.DOWNSTREAM_BUSINESS_ERROR).step(step.name())
+                    .message("success_expr of step '" + step.name() + "' is false")
+                    .downstream(resp.status(), a.headers, description).build();
         }
     }
 

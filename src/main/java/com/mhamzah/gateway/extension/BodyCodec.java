@@ -9,7 +9,8 @@ import tools.jackson.databind.JsonNode;
  * HTTP call uses the encoded form. Implement as a Spring bean and reference its bean name from
  * {@code gw_target_system.body_codec} (default for every step calling that system) or
  * {@code gw_flow_step.body_codec} (wins over the system's). Built in: {@code xmlCodec}, {@code soapCodec},
- * {@code soap12Codec}. Implementations must be thread-safe.
+ * {@code soap12Codec}, {@code fileCodec} (a file download, see {@link com.mhamzah.gateway.codec.FileCodec}).
+ * Implementations must be thread-safe.
  */
 public interface BodyCodec {
 

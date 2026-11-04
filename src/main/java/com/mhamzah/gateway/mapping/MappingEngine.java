@@ -22,8 +22,12 @@ public class MappingEngine {
         Map<String, String> query = new LinkedHashMap<>();
         Map<String, String> pathVars = new LinkedHashMap<>();
         Integer[] status = {null};
+        String fileStep = null;
         for (CompiledRule rule : rules) {
-            if (rule.source() != null && rule.source().wildcardCount() > 0) {
+            if (rule.targetType() == TargetType.FILE) {
+                // names the step whose downloaded file is the response; the engine takes the file from the context
+                fileStep = rule.source().secondField();
+            } else if (rule.source() != null && rule.source().wildcardCount() > 0) {
                 applyWildcard(rule, ctx, body);
             } else {
                 JsonNode value = rule.constant() != null ? rule.constant() : rule.source() != null ? ctx.read(rule.source()) : null;
@@ -33,7 +37,7 @@ public class MappingEngine {
                 }
             }
         }
-        return new MappedMessage(body[0], headers, query, pathVars, status[0]);
+        return new MappedMessage(body[0], headers, query, pathVars, status[0], fileStep);
     }
 
     private void applyWildcard(CompiledRule rule, ExecutionContext ctx, JsonNode[] body) {
@@ -120,6 +124,7 @@ public class MappingEngine {
             case QUERY -> putText(query, rule.targetName(), value);
             case PATH -> putText(pathVars, rule.targetName(), value);
             case STATUS -> status[0] = httpStatus(rule, value);
+            case FILE -> { } // handled in apply
         }
     }
 

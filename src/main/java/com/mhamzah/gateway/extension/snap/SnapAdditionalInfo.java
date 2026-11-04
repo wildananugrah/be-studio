@@ -8,13 +8,18 @@ import com.mhamzah.gateway.mapping.MappingEngine;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * {@code additionalInfo} of SNAP responses, success and error alike. It is optional: only a flow with the named
- * response {@value FlowDefinition#ADDITIONAL_INFO_RESPONSE} (or, on success, rules on {@code $.additionalInfo.*})
- * sends it. The response's BODY rules build the object; on an error they can also read {@code $.error.*}.
+ * {@code additionalInfo} of SNAP responses, success and error alike. It is
+ * optional: only a flow with the named
+ * response {@value FlowDefinition#ADDITIONAL_INFO_RESPONSE} (or, on success,
+ * rules on {@code $.additionalInfo.*})
+ * sends it, and only when its rules produce at least one field. The response's
+ * BODY rules build the object; on an
+ * error they can also read {@code $.error.} and the failed call at
+ * {@code $.steps.<step>.}, so rules that read only
+ * those leave it out of a success.
  */
 final class SnapAdditionalInfo {
 
@@ -22,7 +27,8 @@ final class SnapAdditionalInfo {
 
     private static final Logger log = LoggerFactory.getLogger(SnapAdditionalInfo.class);
 
-    private SnapAdditionalInfo() {}
+    private SnapAdditionalInfo() {
+    }
 
     static FlowDefinition flow(Supplier<FlowRegistry> registry, String code) {
         if (code == null) {
@@ -33,7 +39,10 @@ final class SnapAdditionalInfo {
                 : current.flows().stream().filter(f -> f.code().equals(code)).findFirst().orElse(null);
     }
 
-    /** The object the flow's {@value #FIELD} response builds; null when the flow has none. */
+    /**
+     * The object the flow's {@value #FIELD} response builds; null (not sent) when
+     * the flow has none or it is empty.
+     */
     static ObjectNode build(FlowDefinition flow, MappingEngine mapping, ExecutionContext ctx) {
         FlowDefinition.Response rules = flow == null ? null : flow.responses().get(FIELD);
         if (rules == null) {
@@ -42,15 +51,14 @@ final class SnapAdditionalInfo {
         try {
             MappedMessage out = mapping.apply(rules.rules(), ctx);
             if (out.body() instanceof ObjectNode o) {
-                return o;
+                return o.isEmpty() ? null : o;
             }
-            if (out.body() == null || out.body().isNull() || out.body().isMissingNode()) {
-                return JsonNodeFactory.instance.objectNode();
+            if (out.body() != null && !out.body().isNull() && !out.body().isMissingNode()) {
+                log.warn("additionalInfo of flow {} is not a JSON object; leaving it out", flow.code());
             }
-            log.warn("additionalInfo of flow {} is not a JSON object; sending an empty one", flow.code());
         } catch (RuntimeException ex) {
-            log.warn("additionalInfo of flow {} could not be built; sending an empty one: {}", flow.code(), ex.getMessage());
+            log.warn("additionalInfo of flow {} could not be built; leaving it out: {}", flow.code(), ex.getMessage());
         }
-        return JsonNodeFactory.instance.objectNode();
+        return null;
     }
 }

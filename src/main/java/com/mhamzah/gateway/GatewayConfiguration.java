@@ -3,6 +3,7 @@ package com.mhamzah.gateway;
 import com.mhamzah.gateway.audit.AuditPartitions;
 import com.mhamzah.gateway.audit.AuditService;
 import com.mhamzah.gateway.audit.AuditWriter;
+import com.mhamzah.gateway.codec.FileCodec;
 import com.mhamzah.gateway.codec.JsonCodec;
 import com.mhamzah.gateway.codec.SoapCodec;
 import com.mhamzah.gateway.codec.XmlCodec;
@@ -75,6 +76,11 @@ public class GatewayConfiguration {
         return JsonCodec.INSTANCE;
     }
 
+    @Bean(FileCodec.BEAN_NAME)
+    FileCodec fileCodec() {
+        return FileCodec.INSTANCE;
+    }
+
     @Bean(XmlCodec.BEAN_NAME)
     XmlCodec xmlCodec() {
         return new XmlCodec();
@@ -96,8 +102,9 @@ public class GatewayConfiguration {
     }
 
     @Bean(destroyMethod = "close")
-    FlowExecutor flowExecutor(DownstreamClient client, MappingEngine mapping, DefaultErrorHandler defaultErrorHandler) {
-        return new FlowExecutor(client, mapping, defaultErrorHandler);
+    FlowExecutor flowExecutor(DownstreamClient client, MappingEngine mapping, DefaultErrorHandler defaultErrorHandler,
+            GatewayProperties properties) {
+        return new FlowExecutor(client, mapping, defaultErrorHandler, properties.files().maxSize().toBytes());
     }
 
     /** Time partitions of the audit tables (gateway.audit.partition.*), maintained by AuditPartitionMaintenance. */
