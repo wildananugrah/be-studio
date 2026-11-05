@@ -71,9 +71,7 @@ objects:
       namespace: ${NS_NAME}
     data:
       TZ: "Asia/Jakarta"
-
       SPRING_PROFILES_ACTIVE: "oracle"
-
       DB_URL: "jdbc:oracle:thin:@//192.168.218.186:1530/TBAPIGWDEVPDB"
       DB_USERNAME: "TBAPIGW"
       DB_PASSWORD: "AE4ApjsrKjnq"
@@ -82,7 +80,6 @@ objects:
       DB_POOL_CONNECTION_TIMEOUT_MS: "30000"
       DB_POOL_LEAK_DETECTION_MS: "0"
       LIQUIBASE_ENABLED: "false"
-
       GATEWAY_ADMIN_TOKEN: "supersecretpassword!"
       GATEWAY_AUDIT_ENABLED: "true"
       GATEWAY_STUDIO_ENABLED: "false"
@@ -93,10 +90,8 @@ objects:
       GATEWAY_AUDIT_PARTITION_INTERVAL: "MONTH"
       GATEWAY_AUDIT_RETENTION: ""
       GATEWAY_MASKING_FIELDS: "pin,password,cardNo,cvv,authorization,x-admin-token"
-
       GATEWAY_SNAP_SERVICE_CODE_PATTERN: "[0-9A-Z]{2}[a-z]?"
       GATEWAY_SNAP_NO_BODY_STATUS: "200"
-
   - apiVersion: route.openshift.io/v1
     kind: Route
     metadata:
@@ -120,6 +115,25 @@ objects:
       tls:
         termination: edge
         insecureEdgeTerminationPolicy: Redirect
+  - apiVersion: autoscaling/v2
+    kind: HorizontalPodAutoscaler
+    metadata:
+      name: ${APP_NAME}
+      namespace: ${NS_NAME}
+    spec:
+      scaleTargetRef:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: ${APP_NAME}
+      minReplicas: 1
+      maxReplicas: 5
+      metrics:
+        - type: Resource
+          resource:
+            name: cpu
+            target:
+              averageUtilization: 85
+              type: Utilization
   - apiVersion: v1
     kind: Service
     metadata:
@@ -141,14 +155,15 @@ objects:
           targetPort: 8080
 parameters:
   - name: NS_NAME
-    description: OpenShift namespace
-    value: tb-api-gw-engine-dev
+    description: namespace name
+    required: true
   - name: IMAGE_NAME
     description: image name
-    value: jtl-tkgiharbor.hq.bni.co.id/tb-platform/bni-tb-gateway:file-handler
+    required: true
   - name: APP_NAME
-    description: Application name
-    value: bni-tb-gateway-handler
+    description: application name
+    required: true
   - name: GROUP_APP_NAME
-    description: Application group
-    value: tb-api-gw-engine-dev
+    description: group application name
+    value: ""
+    required: true

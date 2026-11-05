@@ -25,7 +25,6 @@ COPY src ./src
 
 # Build application
 RUN mvn -s /root/.m2/settings.xml \
-    -Dspring-boot.run.arguments=--server.port=8080 \
     -Dmaven.test.skip=true \
     clean package
 
