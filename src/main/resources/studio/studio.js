@@ -1590,10 +1590,11 @@ class App extends Component {
     if (this.auditState().auto && this.state.screen === 'audit') this.timers.audit = setTimeout(() => { if (this.state.screen === 'audit') this.loadAudit(); }, 5000);
   }
 
-  async openAuditDetail(id) {
+  /** One transaction by its row id: a flow calling the gateway's own flows records several under one correlation ID. */
+  async openAuditDetail(correlationId, id) {
     this.setAudit(x => { x.sel = id; x.detail = null; x.detailError = ''; });
     try {
-      const r = await this.api('GET', 'audit/' + encodeURIComponent(id));
+      const r = await this.api('GET', 'audit/' + encodeURIComponent(correlationId) + '?id=' + encodeURIComponent(id));
       this.setAudit(x => { if (x.sel !== id) return; if (r.status === 200) x.detail = r.json; else x.detailError = (r.json.errors || ['HTTP ' + r.status]).join('; '); });
     } catch (e) { /* api() */ }
   }
@@ -1668,8 +1669,8 @@ class App extends Component {
           <div style=${`min-height:0;display:${a.wide ? 'none' : 'flex'};flex-direction:column;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:hidden`}>
             <div style="flex:1;min-height:0;overflow:auto">
               ${a.data && rows.length === 0 && html`<div style="padding:24px;text-align:center;color:#6A6D75;font-size:12.5px">No calls match. Call an endpoint (e.g. ${mono('make demo')} or the Tests tab of a flow), then Refresh.</div>`}
-              ${rows.map(r => { const on = a.sel === r.correlation_id; return html`
-                <div class="row" onClick=${() => this.openAuditDetail(r.correlation_id)} style=${`display:flex;flex-direction:column;gap:4px;padding:9px 12px;border-bottom:1px solid #F3F1EC;cursor:pointer;background:${on ? 'oklch(0.97 0.03 50)' : ''};box-shadow:${on ? 'inset 3px 0 0 ' + C.call : 'none'}`}>
+              ${rows.map(r => { const on = a.sel === r.id; return html`
+                <div class="row" onClick=${() => this.openAuditDetail(r.correlation_id, r.id)} style=${`display:flex;flex-direction:column;gap:4px;padding:9px 12px;border-bottom:1px solid #F3F1EC;cursor:pointer;background:${on ? 'oklch(0.97 0.03 50)' : ''};box-shadow:${on ? 'inset 3px 0 0 ' + C.call : 'none'}`}>
                   <div style="display:flex;align-items:center;gap:8px;min-width:0">
                     ${statusChip(r.client_status)}
                     <span style=${`font:600 10px ${MONO};color:#fff;background:${MC[r.http_method] || '#555'};padding:2px 5px;border-radius:4px;flex:none`}>${r.http_method}</span>
@@ -1711,6 +1712,21 @@ class App extends Component {
                   <span style="color:#9A9CA2">started</span><span>${tx.started_at} · ${tx.duration_ms} ms</span>
                   ${(tx.error_type || tx.error_code) && html`<span style="color:#9A9CA2">error</span><span style="color:oklch(0.5 0.17 25)">${[tx.error_type, tx.error_code].filter(Boolean).join(' · ')}</span>`}
                 </div>
+                ${d.related && d.related.length > 1 && html`
+                  <div style="display:flex;flex-direction:column;gap:4px">
+                    <div style=${`font:600 10px ${MONO};letter-spacing:.06em;color:#6A6D75;text-transform:uppercase`}>${d.related.length} calls share this correlation ID <span style="color:#9A9CA2;font-weight:400;text-transform:none;letter-spacing:0">· a flow calling the gateway's own flows · in start order</span></div>
+                    <div style="border:1px solid #E4E1D8;border-radius:7px;overflow:hidden">
+                      ${d.related.map((r, i) => { const on = r.id === tx.id; return html`
+                        <div class="row" onClick=${() => { if (!on) this.openAuditDetail(r.correlation_id, r.id); }} style=${`display:flex;align-items:center;gap:8px;padding:5px 9px;font:11px ${MONO};cursor:${on ? 'default' : 'pointer'};border-top:${i ? '1px solid #F3F1EC' : '0'};background:${on ? 'oklch(0.97 0.03 50)' : ''};box-shadow:${on ? 'inset 3px 0 0 ' + C.call : 'none'}`}>
+                          <span style="color:#9A9CA2;flex:none">${i + 1}</span>
+                          ${statusChip(r.client_status)}
+                          <span style=${`font:600 10px ${MONO};color:#fff;background:${MC[r.http_method] || '#555'};padding:2px 5px;border-radius:4px;flex:none`}>${r.http_method}</span>
+                          <span class="hscroll" style="flex:1;min-width:0">${r.path}</span>
+                          <span style="flex:none;color:#3E4047">${r.flow_code || '(no flow)'}</span>
+                          <span style="flex:none;color:#9A9CA2">${r.started_at} · ${r.duration_ms} ms</span>
+                        </div>`; })}
+                    </div>
+                  </div>`}
 
                 <div style="display:flex;flex-direction:column;gap:12px;border-left:2px solid #E4E1D8;padding-left:14px;margin-left:4px">
                   <div style="display:flex;flex-direction:column;gap:6px">

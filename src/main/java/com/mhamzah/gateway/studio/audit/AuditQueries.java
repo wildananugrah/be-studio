@@ -5,6 +5,7 @@ import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -87,19 +88,34 @@ public class AuditQueries {
         return out;
     }
 
-    /** The transaction, its steps (in call order) and the buffered log lines; null when there is no such row. */
-    public Map<String, Object> detail(String correlationId) {
+    /**
+     * The transaction, its steps (in call order) and the buffered log lines; null when there is no such row. A flow that
+     * calls the gateway's own flows records one transaction per call under the same correlation ID: {@code id} picks one
+     * of them (null = the newest), and {@code related} lists them all (by start time) so the screen can switch.
+     */
+    public Map<String, Object> detail(String correlationId, Long id) {
         List<Map<String, Object>> tx = jdbc.sql("SELECT * FROM " + transactions + " WHERE correlation_id = ? ORDER BY id DESC")
                 .param(correlationId).query().listOfRows();
-        if (tx.isEmpty()) {
+        Map<String, Object> raw = id == null ? tx.stream().findFirst().orElse(null)
+                : tx.stream().filter(r -> AuditRows.column(r, "id") instanceof Number n && n.longValue() == id).findFirst().orElse(null);
+        if (raw == null) {
             return null;
         }
-        Map<String, Object> transaction = AuditRows.row(tx.getFirst());
+        Map<String, Object> transaction = AuditRows.row(raw);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("transaction", transaction);
         // the transaction's start time names the partition holding its steps
         out.put("steps", jdbc.sql("SELECT * FROM " + steps + " WHERE transaction_id = ? AND transaction_started_at = ? ORDER BY id")
-                .params(transaction.get("id"), AuditRows.column(tx.getFirst(), "started_at")).query().listOfRows().stream().map(AuditRows::row).toList());
+                .params(transaction.get("id"), AuditRows.column(raw, "started_at")).query().listOfRows().stream().map(AuditRows::row).toList());
+        // in call order: a row is written when its call ends, so a nested flow's id comes before its caller's
+        out.put("related", tx.stream().sorted(Comparator.comparing((Map<String, Object> r) -> String.valueOf(AuditRows.value(AuditRows.column(r, "started_at"))))
+                .thenComparing(r -> ((Number) AuditRows.column(r, "id")).longValue())).map(r -> {
+            Map<String, Object> summary = new LinkedHashMap<>();
+            for (String column : LIST_COLUMNS.split(",\\s*")) {
+                summary.put(column, AuditRows.value(AuditRows.column(r, column)));
+            }
+            return summary;
+        }).toList());
         out.put("logs", logs.lines(correlationId));
         return out;
     }
