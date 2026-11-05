@@ -452,6 +452,28 @@ Validation messages are returned to the client in `details`, e.g. `"$.amount: mu
 
 **Referencing another schema.** Inside `schema_text`, `{"$ref": "gw:CODE"}` stands for the whole schema with that `code`, and `{"$ref": "gw:CODE#/$defs/money"}` for a part of it. Codes are case-sensitive. Every `gw:` reference is checked when config is loaded: a code without a `gw_json_schema` row, or a fragment that points to nothing, is a config error. Schemas may reference each other in a cycle (a tree of `children`, for example). When a schema is validated (see `schema_validation`), references follow the standard JSON Schema rules; with `oneOf` the body must match **exactly one** option, with `anyOf` at least one.
 
+**A router's request: one of its sub-routes' bodies.** A flow whose steps call other flows of this gateway (sub-routes) can document its body as "one of" theirs, reusing their schemas instead of copying them:
+
+```sql
+-- the sub-routes' own schemas (already used by their flows)
+INSERT INTO gw_json_schema (code, schema_text) VALUES ('TRANSFER_REQUEST',
+ '{"type":"object","required":["fromAccount","amount"],
+   "properties":{"fromAccount":{"type":"string"},"amount":{"type":"number"}}}');
+INSERT INTO gw_json_schema (code, schema_text) VALUES ('TOPUP_REQUEST',
+ '{"type":"object","required":["phoneNo","amount"],
+   "properties":{"phoneNo":{"type":"string"},"amount":{"type":"number"}}}');
+
+-- the router's schema: one of them
+INSERT INTO gw_json_schema (code, schema_text) VALUES ('PAYMENT_REQUEST',
+ '{"oneOf":[{"$ref":"gw:TRANSFER_REQUEST"},{"$ref":"gw:TOPUP_REQUEST"}]}');
+
+-- validation stays with the sub-routes; the router's schema documents it
+INSERT INTO gw_flow (code, name, http_method, path_pattern, request_schema_code, schema_validation)
+VALUES ('PAYMENT', 'Payment router', 'POST', '/v1/payments', 'PAYMENT_REQUEST', 'NONE');
+```
+
+Swagger (`/docs`) shows the body as one of `TRANSFER_REQUEST` / `TOPUP_REQUEST` (each a named schema under `components`), and Studio's API specification lists every option with its fields and an example.
+
 ### 3.6 Expressions (`condition_expr`, `success_expr`)
 
 Write `${path}` to read from the context; the path is written without the leading `$.`:

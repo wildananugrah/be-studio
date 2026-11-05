@@ -161,6 +161,63 @@ class OpenApiGeneratorTest {
                 .isEqualTo("#/components/schemas/TRANSFER_REQ/$defs/money");
     }
 
+    static final String TRANSFER = """
+            {"type":"object","required":["fromAccount","amount"],
+             "properties":{"fromAccount":{"type":"string"},"amount":{"type":"number"}}}""";
+    static final String TOPUP = """
+            {"type":"object","required":["phoneNo","amount"],
+             "properties":{"phoneNo":{"type":"string"},"amount":{"type":"number"}}}""";
+    static final String PAYMENT = """
+            {"oneOf":[{"$ref":"gw:TRANSFER_REQUEST"},{"$ref":"gw:TOPUP_REQUEST"}]}""";
+
+    @Test
+    void routerRequestIsOneOfNamedComponents() {
+        rows.schema("TRANSFER_REQUEST", TRANSFER);
+        rows.schema("TOPUP_REQUEST", TOPUP);
+        rows.schema("PAYMENT_REQUEST", PAYMENT);
+        rows.flow("TRANSFER", "POST", "/transfers", f -> f.withSchemas("TRANSFER_REQUEST", null));
+        rows.flow("PAYMENT", "POST", "/payments", f -> f.withSchemas("PAYMENT_REQUEST", null).withSchemaValidation("NONE"));
+
+        JsonNode doc = generate();
+
+        JsonNode schemas = doc.get("components").get("schemas");
+        assertThat(schemas.get("PAYMENT_REQUEST").get("oneOf").get(0).get("$ref").asString())
+                .isEqualTo("#/components/schemas/TRANSFER_REQUEST");
+        assertThat(schemas.get("PAYMENT_REQUEST").get("oneOf").get(1).get("$ref").asString())
+                .isEqualTo("#/components/schemas/TOPUP_REQUEST");
+        // only referenced, by no flow directly
+        assertThat(schemas.get("TOPUP_REQUEST").get("required").toString()).isEqualTo("[\"phoneNo\",\"amount\"]");
+        assertThat(doc.get("paths").get("/api/transfers").get("post").get("requestBody").get("content")
+                .get("application/json").get("schema").get("$ref").asString()).isEqualTo("#/components/schemas/TRANSFER_REQUEST");
+        assertThat(doc.get("paths").get("/api/payments").get("post").get("requestBody").get("content")
+                .get("application/json").get("schema").get("$ref").asString()).isEqualTo("#/components/schemas/PAYMENT_REQUEST");
+    }
+
+    @Test
+    void referencedSchemasKeepTheirOwnLocalRefsAndFragments() {
+        rows.schema("SHARED", "{\"$defs\":{\"money\":{\"type\":\"number\"},\"amount\":{\"$ref\":\"#/$defs/money\"}}}");
+        rows.schema("R", "{\"type\":\"object\",\"properties\":{\"a\":{\"$ref\":\"gw:SHARED#/$defs/amount\"}}}");
+        rows.flow("F", "POST", "/f", f -> f.withSchemas("R", null));
+
+        JsonNode schemas = generate().get("components").get("schemas");
+
+        assertThat(schemas.get("R").get("properties").get("a").get("$ref").asString())
+                .isEqualTo("#/components/schemas/SHARED/$defs/amount");
+        assertThat(schemas.get("SHARED").get("$defs").get("amount").get("$ref").asString())
+                .isEqualTo("#/components/schemas/SHARED/$defs/money");
+    }
+
+    @Test
+    void cyclicReferencesTerminate() {
+        rows.schema("NODE", "{\"type\":\"object\",\"properties\":{\"child\":{\"$ref\":\"gw:NODE\"}}}");
+        rows.flow("F", "POST", "/f", f -> f.withSchemas("NODE", null));
+
+        JsonNode schemas = generate().get("components").get("schemas");
+
+        assertThat(schemas.get("NODE").get("properties").get("child").get("$ref").asString())
+                .isEqualTo("#/components/schemas/NODE");
+    }
+
     @Test
     void withoutSchemaTheBodyIsDerivedFromMappingRules() {
         var flow = rows.flow("TRANSFER", "POST", "/transfers");
