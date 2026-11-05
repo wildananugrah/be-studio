@@ -3239,6 +3239,12 @@ class App extends Component {
       if (src.scope) return html`<button class="btn-line" title="Open this mapping" onClick=${() => toMap(src.scope)} style=${style + ';cursor:pointer'}>${src.label} →</button>`;
       return html`<span style=${style}>${src.label}</span>`;
     };
+    // why a column lists no fields, in its own terms
+    const empty = col => (col.params.length ? 'No body fields.'
+      : col.source.schema ? 'The schema declares no fields (e.g. a single value, a list of values or a free-form object).'
+      : col.source.label === 'response example' ? 'The example has no fields.'
+      : col.source.label === 'mapping rules' ? 'No rules write body fields (or one rule passes a whole body through).'
+      : 'Nothing in the flow reads a field of it.');
     const rows = (fields, depth) => fields.map(fd => html`
       <div title=${fd.notes} style=${`display:grid;grid-template-columns:minmax(0,1fr) auto 18px;gap:10px;padding:2px 0 2px ${depth * 14}px;font:11.5px ${MONO};border-bottom:1px dashed #EFEDE6`}>
         <span style=${`overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${fd.name === '…' ? '#9A9CA2' : '#17181C'}`}>${fd.name}${fd.notes && fd.name !== '…' ? html`<span style="color:#B5B3AB"> ⓘ</span>` : ''}</span>
@@ -3253,13 +3259,16 @@ class App extends Component {
           ${source(col.source)}
         </div>
         ${col.params.map(p => html`<div style=${`font:11px ${MONO};color:#6A6D75`}><b style="font-weight:600;color:#3E4047">${p.type}</b> ${p.names.join(', ')}</div>`)}
-        ${col.shape.problem ? html`<div style="font-size:12px;color:oklch(0.5 0.18 25)">${col.shape.problem}</div>`
-          : col.shape.options.every(o => !o.fields.length) ? html`<div style="font-size:12px;color:#9A9CA2">No fields known: no schema, example or rules.</div>`
+        ${col.shape.problem && html`<div style="font-size:12px;color:oklch(0.5 0.18 25)">${col.shape.problem}</div>`}
+        ${col.shape.note && html`<div style="font-size:12px;color:#6A6D75">${col.shape.note}</div>`}
+        ${!col.shape.problem && !col.shape.note && (col.shape.options.every(o => !o.fields.length && !o.problem)
+          ? html`<div style="font-size:12px;color:#9A9CA2">${empty(col)}</div>`
           : html`<div style="display:flex;gap:14px;flex-wrap:wrap">${col.shape.options.map((o, i) => html`
               <div style="flex:1;min-width:220px">
-                ${o.label && html`<div style=${`font:600 11px ${MONO};color:${C.in};margin-bottom:3px`}>${col.shape.options.length > 1 ? 'option ' + (i + 1) + ' · ' : ''}${o.label}</div>`}
+                ${o.label && html`<div style=${`font:600 11px ${MONO};color:${C.in};margin-bottom:3px`}>${col.shape.options.length > 1 && !/^Option \d+$/.test(o.label) ? 'option ' + (i + 1) + ' · ' : ''}${o.label}</div>`}
+                ${o.problem && html`<div style="font-size:12px;color:oklch(0.5 0.18 25)">${o.problem}</div>`}
                 ${rows(o.fields, 0)}
-              </div>`)}</div>`}
+              </div>`)}</div>`)}
       </div>`;
     return html`
       <div style="flex:1;min-height:0;overflow:auto;padding:22px 28px 60px">

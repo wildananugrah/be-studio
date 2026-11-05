@@ -139,8 +139,8 @@ test('body template keys with unquoted placeholders', () => {
   assert.deepEqual(receives.shape.options[0].fields, []);
 });
 
-test('an unparsable body template is a problem', () => {
-  const steps = [{ ...flow.steps[1], bodyTemplate: '<xml>${request.body.x}</xml>' }];
+test('an unparsable JSON body template is a problem', () => {
+  const steps = [{ ...flow.steps[1], bodyTemplate: '{"a": ${request.body.x} "b"}' }];
   assert.equal(flowOverview({ ...flow, steps }, { texts, isExternal: external })[1].columns[0].shape.problem, 'Body template is not valid JSON');
 });
 
@@ -158,4 +158,71 @@ test('client response ignores STATUS rules', () => {
   assert.deepEqual(col.params, [{ type: 'HEADER', names: ['X-Ref'] }]);
   assert.equal(blocks()[4].title, "Response 'refused' · 422");
   assert.deepEqual(blocks()[4].columns[0].source, { label: 'mapping rules', scope: 'resp:o1' });
+});
+
+// ---- review findings
+
+const count = fields => fields.reduce((n, f) => n + 1 + count(f.children), 0);
+
+test('self-referencing arrays do not overflow the stack', () => {
+  const t = { ROOTARR: '{"type":"array","items":{"$ref":"#"}}', ARR: '{"type":"array","items":{"$ref":"gw:ARR"}}',
+    PROP: '{"properties":{"m":{"type":"array","items":{"$ref":"#/properties/m"}}}}' };
+  for (const code of Object.keys(t)) assert.doesNotThrow(() => schemaShape(code, t), code);
+});
+
+test('several self-references stay small: a cycle stops where it repeats', () => {
+  const t = { TREE: '{"type":"object","properties":{"name":{"type":"string"},"parent":{"$ref":"gw:TREE"},"left":{"$ref":"gw:TREE"},"right":{"$ref":"#"},"children":{"type":"array","items":{"$ref":"gw:TREE"}}}}' };
+  const fields = schemaShape('TREE', t).options[0].fields;
+  assert.ok(count(fields) < 60, 'rows: ' + count(fields));
+  assert.equal(fields.find(f => f.name === 'parent').children[0].name, '…');
+});
+
+test('root properties next to a root oneOf belong to every option', () => {
+  const t = { ...texts, ROUTER: '{"properties":{"kind":{"type":"string"}},"required":["kind"],"oneOf":[{"$ref":"gw:TRANSFER_REQUEST"},{"$ref":"gw:TOPUP_REQUEST"}]}' };
+  const s = schemaShape('ROUTER', t);
+  assert.deepEqual(s.options.map(o => names(o.fields)), [['kind', 'fromAccount', 'amount'], ['kind', 'phoneNo', 'amount']]);
+  assert.equal(s.options[1].fields[0].required, true);
+});
+
+test('allOf is merged at every level, and $ref siblings count', () => {
+  const t = { CORE: '{"required":["id"],"properties":{"id":{"type":"string"}}}', BASE: '{"allOf":[{"$ref":"gw:CORE"}],"properties":{"name":{"type":"string"}}}',
+    CHILD: '{"allOf":[{"$ref":"gw:BASE"}],"properties":{"extra":{"type":"number"}}}', SIB: '{"$ref":"gw:CORE","properties":{"sib":{"type":"string"}}}' };
+  assert.deepEqual(schemaShape('CHILD', t).options[0].fields.map(f => [f.name, f.required]), [['id', true], ['name', false], ['extra', false]]);
+  assert.deepEqual(names(schemaShape('SIB', t).options[0].fields), ['id', 'sib']);
+});
+
+test('a nested oneOf keeps its own properties; M only when every option requires it', () => {
+  const t = { N: '{"properties":{"pay":{"properties":{"ref":{"type":"string"}},"oneOf":[{"required":["a"],"properties":{"a":{"type":"string"}}},{"required":["a","b"],"properties":{"a":{"type":"string"},"b":{"type":"string"}}}]}}}' };
+  const pay = schemaShape('N', t).options[0].fields[0];
+  assert.deepEqual(pay.children.map(f => [f.name, f.required]), [['ref', false], ['a', true], ['b', false]]);
+});
+
+test('missing references below the top level are visible', () => {
+  const t = { ...texts, P: '{"properties":{"x":{"$ref":"gw:NOPE"}}}', R: '{"oneOf":[{"$ref":"gw:TOPUP_REQUEST"},{"$ref":"gw:NOPE"}]}',
+    A: '{"$ref":"gw:B"}', B: '{"$ref":"gw:A"}' };
+  assert.match(schemaShape('P', t).options[0].fields[0].type, /NOPE/);
+  assert.match(schemaShape('R', t).options[1].problem, /NOPE/);
+  assert.match(schemaShape('A', t).problem, /cycle/);
+});
+
+test('example arrays merge the fields of all their items', () => {
+  const s = exampleShape({ items: [{ a: 1 }, { b: 'x' }] });
+  assert.deepEqual(names(s.options[0].fields[0].children[0].children), ['a', 'b']);
+});
+
+test('an XML or text body template gets a note, not a problem', () => {
+  const steps = [{ ...flow.steps[1], bodyTemplate: '<soapenv:Envelope>${request.body.x}</soapenv:Envelope>' }];
+  const shape = flowOverview({ ...flow, steps }, { texts, isExternal: external })[1].columns[0].shape;
+  assert.equal(shape.problem, undefined);
+  assert.match(shape.note, /XML or text/);
+});
+
+test('condition cases count as fields the flow reads', () => {
+  const steps = [...flow.steps, { id: 'c', order: 0, name: 'route', target: 'CONDITION', rules: [], cases: [{ when: '${request.body.kind} == \'A\'', then: 'x' }] }];
+  assert.ok(names(flowOverview({ ...flow, steps }, { texts, isExternal: external })[0].columns[0].shape.options[0].fields).includes('kind'));
+});
+
+test('the reserved additionalInfo response is not shown', () => {
+  const responses = [...flow.responses, { id: 'o2', name: 'additionalInfo', status: '200', rules: [] }];
+  assert.ok(!flowOverview({ ...flow, responses }, { texts, isExternal: external }).some(b => b.key === 'resp:o2'));
 });
