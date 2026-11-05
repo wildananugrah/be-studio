@@ -71,10 +71,28 @@ function fromApi(c) {
 
 /** JSON schema texts by code (from the draft), so sample data can follow a flow's request schema. */
 let SCHEMA_TEXT = {};
-/** A sample value per field of a JSON schema, placed under {@code base} (e.g. $.request.body); depth-limited. */
+/** {code, frag} of a reference to another gateway schema ({"$ref": "gw:CODE#/$defs/x"}), else null. */
+const gwRef = ref => typeof ref === 'string' && ref.startsWith('gw:') ? { code: ref.slice(3).split('#')[0], frag: ref.includes('#') ? ref.slice(ref.indexOf('#') + 1) : '' } : null;
+/** The parsed schema of a code (SCHEMA_TEXT), undefined when missing or invalid. */
+const gwDoc = code => { try { return JSON.parse(SCHEMA_TEXT[code]); } catch (e) { return undefined; } };
+/** The node a JSON pointer (/$defs/x) points to in doc. */
+const atPointer = (doc, frag) => frag.split('/').filter(Boolean).map(k => k.replace(/~1/g, '/').replace(/~0/g, '~')).reduce((n, k) => (n == null ? n : n[k]), doc);
+/** Whether a schema text references code with gw:code. */
+const refsTo = (text, code) => String(text || '').includes('"gw:' + code + '"') || String(text || '').includes('"gw:' + code + '#');
+/**
+ * A sample value per field of a JSON schema, placed under {@code base} (e.g. $.request.body); depth-limited (which also
+ * ends reference cycles). gw:CODE references are followed; oneOf / anyOf / allOf merge every option's fields.
+ */
 function schemaSample(ctx, schema, base, lookups, depth = 0, root = schema) {
   if (!schema || typeof schema !== 'object' || depth > 6) return;
   if (schema.$ref && /^#\/(\$defs|definitions)\//.test(schema.$ref)) { const k = schema.$ref.split('/'); return schemaSample(ctx, (root[k[1]] || {})[k[2]], base, lookups, depth + 1, root); }
+  const gw = gwRef(schema.$ref);
+  if (gw) { const doc = gwDoc(gw.code); return schemaSample(ctx, atPointer(doc, gw.frag), base, lookups, depth + 1, doc); }
+  const options = ['oneOf', 'anyOf', 'allOf'].flatMap(x => (Array.isArray(schema[x]) ? schema[x] : []));
+  if (options.length) {
+    options.forEach(o => schemaSample(ctx, o, base, lookups, depth + 1, root));
+    if (!schema.properties && !schema.type) return;
+  }
   const type = Array.isArray(schema.type) ? schema.type.find(x => x !== 'null') : schema.type;
   if (type === 'object' || schema.properties) {
     Object.entries(schema.properties || {}).forEach(([k, sub]) => schemaSample(ctx, sub, base + (/^[A-Za-z0-9_]+$/.test(k) ? '.' + k : "['" + k + "']"), lookups, depth + 1, root));
@@ -398,10 +416,11 @@ function inferSchema(v) {
 }
 const schemaDoc = v => pretty({ $schema: 'https://json-schema.org/draft/2020-12/schema', ...inferSchema(v) });
 const jsonError = t => { try { JSON.parse(t); return ''; } catch (e) { return e.message; } };
-/** Where a schema code is referenced: ['TRANSFER request', 'TRANSFER step debit', ...]. */
-const schemaUses = (cfg, code) => cfg.flows.flatMap(f => [
+/** Where a schema code is referenced: ['TRANSFER request', 'TRANSFER step debit', 'schema PAYMENT_REQUEST', ...]. */
+const schemaUses = (cfg, code) => [...cfg.flows.flatMap(f => [
   ...(f.reqSchema === code ? [f.code + ' request'] : []), ...(f.respSchema === code ? [f.code + ' response'] : []),
-  ...f.steps.filter(st => st.respSchema === code).map(st => f.code + ' step ' + st.name)]);
+  ...f.steps.filter(st => st.respSchema === code).map(st => f.code + ' step ' + st.name)]),
+  ...cfg.schemas.filter(x => x.code !== code && refsTo(x.text, code)).map(x => 'schema ' + x.code)];
 
 // ---------- generated SQL (Rows tab) ----------
 function flowSql(f, lookupsUsed) {
@@ -1869,13 +1888,16 @@ class App extends Component {
       if (!v || (v !== old && cfg.schemas.some(x => x.code === v))) return;
       cfg.schemas[i].code = v;
       cfg.flows.forEach(f => { if (f.reqSchema === old) f.reqSchema = v; if (f.respSchema === old) f.respSchema = v; f.steps.forEach(st => { if (st.respSchema === old) st.respSchema = v; }); });
+      // gw:OLD references in schema texts, as text (keeps their formatting; gw:OLD_X is another code and stays)
+      cfg.schemas.forEach(x => { x.text = String(x.text || '').split('"gw:' + old + '"').join('"gw:' + v + '"').split('"gw:' + old + '#').join('"gw:' + v + '#'); });
       setTimeout(() => this.setState({ focusSchema: v }), 0);
     });
     const ex = s.example || {};
     const q = (s.schQ || '').trim().toLowerCase();
     const has = v => String(v == null ? '' : v).toLowerCase().includes(q);
     // every property name in a schema (nested ones too), for the FIELDS column and the search
-    const fieldsOf = text => { const out = []; const walk = (n, d) => { if (!n || typeof n !== 'object' || d > 8) return; if (n.properties) Object.keys(n.properties).forEach(k => { out.push({ k, d }); walk(n.properties[k], d + 1); }); if (n.items) walk(n.items, d); ['$defs', 'definitions'].forEach(x => n[x] && Object.values(n[x]).forEach(v => walk(v, d))); }; try { walk(JSON.parse(text), 0); } catch (e) { /* invalid: shown in its editor */ } return out; };
+    // (also of the options of oneOf / anyOf / allOf and of the schemas it references with gw:CODE, each once)
+    const fieldsOf = text => { const out = []; const seen = new Set(); const walk = (n, d) => { if (!n || typeof n !== 'object' || d > 8) return; if (n.properties) Object.keys(n.properties).forEach(k => { out.push({ k, d }); walk(n.properties[k], d + 1); }); if (n.items) walk(n.items, d); ['$defs', 'definitions'].forEach(x => n[x] && Object.values(n[x]).forEach(v => walk(v, d))); ['oneOf', 'anyOf', 'allOf'].forEach(x => Array.isArray(n[x]) && n[x].forEach(v => walk(v, d))); const g = gwRef(n.$ref); if (g && !seen.has(n.$ref)) { seen.add(n.$ref); walk(atPointer(gwDoc(g.code), g.frag), d); } }; try { walk(JSON.parse(text), 0); } catch (e) { /* invalid: shown in its editor */ } return out; };
     const rows = s.cfg.schemas.map((x, i) => ({ x, i, fields: fieldsOf(x.text), uses: schemaUses(s.cfg, x.code) }))
       .filter(r => !q || has(r.x.code) || has(r.x.desc) || r.uses.some(has) || r.fields.some(f => has(f.k)));
     const grid = 'display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1.6fr) minmax(0,2fr) minmax(0,1.6fr);gap:12px;align-items:center';
@@ -1898,7 +1920,7 @@ class App extends Component {
               const errs = s.problems.filter(m => m.includes(`json schema '${x.code}'`) || m.includes(`Schema '${x.code}'`));
               const parseErr = jsonError(x.text);
               const focused = s.focusSchema === x.code; const exOpen = ex.i === i; const open = focused;
-              const top = fields.filter(f => f.d === 0).map(f => f.k); const hitFields = q ? fields.filter(f => has(f.k)).map(f => f.k) : [];
+              const top = [...new Set(fields.filter(f => f.d === 0).map(f => f.k))]; const hitFields = q ? [...new Set(fields.filter(f => has(f.k)).map(f => f.k))] : [];
               const shownFields = hitFields.length ? hitFields : top;
               return html`
               <div id=${'schema-' + x.code} class="row" onClick=${() => this.setState({ focusSchema: open ? null : x.code })} style=${`${grid};min-width:860px;padding:11px 16px;border-bottom:1px solid #F3F1EC;cursor:pointer;scroll-margin-top:16px;background:${open ? '#FAF9F6' : ''}`}>
@@ -1933,7 +1955,7 @@ class App extends Component {
                   <button class="ro-hide" disabled=${!!parseErr} onClick=${() => upd(i, y => { y.text = pretty(JSON.parse(y.text)); })} style="border:1px solid #E4E1D8;background:#fff;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#3E4047">Format</button>
                   ${!exOpen && html`<button class="ro-hide" onClick=${() => this.setState({ example: { i, text: '' } })} style="border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">Generate from example JSON…</button>`}
                   <span style="flex:1"></span>
-                  <button class="del" onClick=${() => this.ask(`Delete schema ${x.code || '(unnamed)'}?`, (uses.length ? `Still used by ${uses.join(', ')}: the save will be rejected until those references are removed.` : 'No flow or step uses it.') + ` Nothing changes in the database until Save & reload.`, () => this.mutCfg(cfg => { cfg.schemas.splice(i, 1); }))} title=${uses.length ? 'Still used: the save will be rejected until the references are removed' : ''} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px">Delete schema</button>
+                  <button class="del" onClick=${() => this.ask(`Delete schema ${x.code || '(unnamed)'}?`, (uses.length ? `Still used by ${uses.join(', ')}: the save will be rejected until those references are removed.` : 'Nothing uses it.') + ` Nothing changes in the database until Save & reload.`, () => this.mutCfg(cfg => { cfg.schemas.splice(i, 1); }))} title=${uses.length ? 'Still used: the save will be rejected until the references are removed' : ''} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px">Delete schema</button>
                 </div>
               </div>`}`;
             })}
