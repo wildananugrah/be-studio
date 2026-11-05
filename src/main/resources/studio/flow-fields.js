@@ -148,3 +148,92 @@ export function pathsShape(paths, required = new Set()) {
   });
   return { options: [{ label: null, fields: root }] };
 }
+
+/**
+ * @typedef {{ heading: string, source: { label: string, schema?: string, scope?: string },
+ *   params: { type: 'PATH'|'QUERY'|'HEADER', names: string[] }[], shape: Shape }} Column
+ *   source.schema: the schema to open; source.scope: the Mapping tab scope to open ('resp', 'resp:<id>' or a step id)
+ * @typedef {{ key: string, title: string, detail: string, columns: Column[] }} Block
+ */
+
+const PARAMS = ['PATH', 'QUERY', 'HEADER'];
+/** A JSON path from tokens: ['a', '*', 'x-y'] → $.a[*].x-y (names other than letters, digits, _ and - in ['...']). */
+const pathOf = t => '$' + t.map(k => (typeof k === 'number' ? '[' + k + ']' : k === '*' ? '[*]'
+  : /^[A-Za-z0-9_-]+$/.test(k) ? '.' + k : "['" + k + "']")).join('');
+const unique = list => [...new Set(list)];
+const params = byType => PARAMS.filter(t => byType[t] && byType[t].length).map(type => ({ type, names: unique(byType[type]) }));
+
+/** Every path the flow reads: rule sources, body template placeholders, and ${...} in conditions and success checks. */
+function reads(f) {
+  const out = [];
+  [...f.steps.flatMap(s => s.rules || []), ...(f.response || []), ...(f.responses || []).flatMap(r => r.rules || [])]
+    .forEach(r => { if (r.source) out.push(r.source); });
+  f.steps.forEach(s => (String(s.bodyTemplate || '').match(/\$\{[^}]*\}/g) || []).forEach(x => {
+    const p = x.slice(2, -1).split(':')[0].trim();
+    if (/^(request|steps)\./.test(p)) out.push('$.' + p);
+  }));
+  f.steps.forEach(s => [s.condition, s.success].forEach(e => (String(e || '').match(/\$\{([^}]+)\}/g) || [])
+    .forEach(x => out.push('$.' + x.slice(2, -1).trim()))));
+  return out;
+}
+
+/** The read paths under a prefix (['request', 'body']), relative to it. */
+const under = (paths, prefix) => paths.map(toks)
+  .filter(t => t.length >= prefix.length && prefix.every((k, i) => t[i] === k)).map(t => t.slice(prefix.length));
+
+const schemaColumn = (heading, code, texts) => ({ heading, source: { label: code, schema: code }, params: [], shape: schemaShape(code, texts) });
+
+/** A body written by rules: BODY targets as a tree (required from the rule), other types as parameter lines. */
+function rulesColumn(heading, rules, scope) {
+  const body = rules.filter(r => r.type === 'BODY' && r.target);
+  const byType = {};
+  rules.filter(r => PARAMS.includes(r.type) && r.target).forEach(r => (byType[r.type] = byType[r.type] || []).push(r.target));
+  return { heading, source: { label: 'mapping rules', scope }, params: params(byType),
+    shape: pathsShape(body.map(r => r.target), new Set(body.filter(r => r.required).map(r => r.target))) };
+}
+
+/**
+ * The blocks of a flow's Schemas tab, in pipeline order: the client request, one per external call (isExternal(step))
+ * with what it sends and receives, the client response and each named response.
+ * @param f a Studio draft flow; texts: schema text by code
+ * @returns {Block[]}
+ */
+export function flowOverview(f, { texts, isExternal }) {
+  const read = reads(f);
+  const blocks = [];
+
+  const pathVars = (String(f.path || '').match(/\{([^}]+)\}/g) || []).map(v => v.slice(1, -1).split(':')[0].replace(/^\*/, ''));
+  const requestParams = params({
+    PATH: [...pathVars, ...under(read, ['request', 'path']).filter(t => t.length).map(t => String(t[0]))],
+    QUERY: under(read, ['request', 'query']).filter(t => t.length).map(t => String(t[0])),
+    HEADER: under(read, ['request', 'headers']).filter(t => t.length).map(t => String(t[0])),
+  });
+  const request = f.reqSchema ? schemaColumn('Body', f.reqSchema, texts)
+    : { heading: 'Body', source: { label: 'fields the flow reads' }, params: [], shape: pathsShape(under(read, ['request', 'body']).map(pathOf)) };
+  blocks.push({ key: 'request', title: 'Client request', detail: '', columns: [{ ...request, params: requestParams }] });
+
+  [...f.steps].filter(isExternal).sort((a, b) => Number(a.order || 0) - Number(b.order || 0)).forEach(s => {
+    let sends;
+    if (String(s.bodyTemplate || '').trim()) {
+      let value;
+      try { value = JSON.parse(s.bodyTemplate.replace(/\$\{[^}]*\}/g, 'null')); } catch (e) { value = undefined; }
+      sends = { ...rulesColumn('Sends', (s.rules || []).filter(r => r.type !== 'BODY'), s.id), source: { label: 'body template', scope: s.id },
+        shape: value === undefined ? { options: [], problem: 'Body template is not valid JSON' } : exampleShape(value) };
+    } else {
+      sends = rulesColumn('Sends', s.rules || [], s.id);
+    }
+    let receives;
+    const example = s.example ? (() => { try { return JSON.parse(s.example); } catch (e) { return undefined; } })() : undefined;
+    if (s.respSchema) receives = schemaColumn('Receives', s.respSchema, texts);
+    else if (example !== undefined) receives = { heading: 'Receives', source: { label: 'response example' }, params: [], shape: exampleShape(example) };
+    else receives = { heading: 'Receives', source: { label: 'fields the flow reads' }, params: [], shape: pathsShape(under(read, ['steps', s.name, 'body']).map(pathOf)) };
+    blocks.push({ key: s.id, title: s.order + ' · ' + s.name + ' → ' + s.target, detail: s.method + ' ' + s.path, columns: [sends, receives] });
+  });
+
+  const response = f.respSchema ? schemaColumn('Body', f.respSchema, texts) : rulesColumn('Body', (f.response || []).filter(r => r.type !== 'HEADER'), 'resp');
+  response.params = rulesColumn('Body', (f.response || []).filter(r => r.type === 'HEADER'), 'resp').params;
+  blocks.push({ key: 'response', title: 'Client response', detail: '', columns: [response] });
+  (f.responses || []).forEach(r => blocks.push({ key: 'resp:' + r.id, title: "Response '" + r.name + "' · " + r.status, detail: r.description || '',
+    columns: [rulesColumn('Body', r.rules || [], 'resp:' + r.id)] }));
+  return blocks;
+}
