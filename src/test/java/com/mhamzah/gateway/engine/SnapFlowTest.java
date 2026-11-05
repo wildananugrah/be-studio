@@ -24,7 +24,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
 import tools.jackson.databind.JsonNode;
 
-/** SNAP responses end to end through the engine: snapResponseHandler, snapErrorHandler and their lookups. */
+/**
+ * SNAP responses end to end through the engine: snapResponseHandler,
+ * snapErrorHandler and their lookups.
+ */
 class SnapFlowTest {
 
     private final FakeDownstream downstream = new FakeDownstream();
@@ -66,7 +69,9 @@ class SnapFlowTest {
         return executor.execute(reg, match, in, "corr-1").response();
     }
 
-    /** A SNAP flow (service code 24) with one CORE step and the CORE error table. */
+    /**
+     * A SNAP flow (service code 24) with one CORE step and the CORE error table.
+     */
     private com.mhamzah.gateway.config.ConfigRows.FlowRow snapFlow() {
         var flow = rows.flow("SNAP_TRANSFER", "POST", "/snap/transfers", f -> f
                 .withHandlers(null, SnapResponseHandler.BEAN_NAME, SnapErrorHandler.BEAN_NAME).withServiceCode("24"));
@@ -74,9 +79,10 @@ class SnapFlowTest {
                 .withSuccess("${steps.debit.body.responseCode} == '00'"));
         rows.stepRule(debit, "$.amount", "$.request.body.amount");
         rows.responseRule(flow, "$.referenceNo", "$.steps.debit.body.refNo");
-        rows.lookup("SNAP_ERR_CORE", "@codePath", "[\"$.body.responseCode\", \"$.body.code\"]");
+        rows.lookup("SNAP_ERR_CORE", "@codePath", "[\"$.body.responseCode\", \"$.body.code\", \"$.body.errorCode\"]");
         rows.lookup("SNAP_ERR_CORE", "51", "403.14");
-        rows.lookup("SNAP_ERR_CORE", "INSUFFICIENT_FUNDS", "{\"snap\": \"403.14\", \"message\": \"Saldo tidak cukup\"}");
+        rows.lookup("SNAP_ERR_CORE", "INSUFFICIENT_FUNDS",
+                "{\"snap\": \"403.14\", \"message\": \"Saldo tidak cukup\"}");
         rows.lookup("SNAP_ERR_CORE", "30", "400.01");
         rows.lookup("SNAP_ERR_CORE", "409:30", "409.01");
         rows.lookup("SNAP_ERR_CORE", "HTTP_401", "401.00");
@@ -92,7 +98,8 @@ class SnapFlowTest {
     }
 
     private void debitAnswers(int status, String json) {
-        downstream.on("/core/transfers", r -> new DownstreamResponse(status, Map.of("content-type", "application/json"), json));
+        downstream.on("/core/transfers",
+                r -> new DownstreamResponse(status, Map.of("content-type", "application/json"), json));
     }
 
     @Test
@@ -129,7 +136,7 @@ class SnapFlowTest {
     }
 
     @Test
-    void namedAdditionalInfoWithNothingToMapIsAnEmptyObject() {
+    void namedAdditionalInfoWithNothingToMapIsLeftOut() {
         var flow = snapFlow();
         rows.response(flow, "additionalInfo", null);
         rows.responseRule(flow, "additionalInfo", "$.failedStep", "$.error.step", null);
@@ -137,8 +144,7 @@ class SnapFlowTest {
 
         GatewayResponse r = post("{\"amount\":\"100\"}");
 
-        assertThat(r.body().get("additionalInfo").isObject()).isTrue();
-        assertThat(r.body().get("additionalInfo").isEmpty()).isTrue();
+        assertThat(r.body().has("additionalInfo")).isFalse();
     }
 
     @Test
@@ -328,7 +334,8 @@ class SnapFlowTest {
         FlowRegistry reg = compileOther(other);
         var match = reg.match(HttpMethod.POST, "/snap/transfers").orElseThrow();
         GatewayResponse r = executor.execute(reg, match,
-                new InboundRequest(HttpMethod.POST, "/snap/transfers", Map.of(), Map.of(), "{\"amount\":5}"), "c").response();
+                new InboundRequest(HttpMethod.POST, "/snap/transfers", Map.of(), Map.of(), "{\"amount\":5}"), "c")
+                .response();
 
         assertThat(r.status()).isEqualTo(400);
         assertThat(text(r, "responseCode")).isEqualTo("4002401");
@@ -366,7 +373,26 @@ class SnapFlowTest {
 
         assertThat(r.status()).isEqualTo(403);
         assertThat(text(r, "responseCode")).isEqualTo("4032414");
-        assertThat(r.body().get("additionalInfo").isEmpty()).isTrue();
+        assertThat(r.body().has("additionalInfo")).isFalse();
+    }
+
+    @Test
+    void downstreamHttpErrorCodeAndMessageGoToSnapAndAdditionalInfo() {
+        var flow = snapFlow();
+        rows.lookup("SNAP_ERR_CORE", "INVALID_CODE", "{\"snap\": \"404.01\", \"message\": \"Data Not Found\"}");
+        rows.response(flow, "additionalInfo", null);
+        rows.responseRule(flow, "additionalInfo", "$.message", "$.steps.debit.body.message", null);
+        debitAnswers(404, "{\"errorCode\":\"INVALID_CODE\",\"message\":\"data tidak ditemukan\"}");
+        GatewayResponse error = post("{\"amount\":\"100\"}");
+        debitAnswers(200, "{\"responseCode\":\"00\",\"refNo\":\"TRX1\"}");
+        GatewayResponse success = post("{\"amount\":\"100\"}");
+
+        assertThat(error.status()).isEqualTo(404);
+        assertThat(text(error, "responseCode")).isEqualTo("4042401");
+        assertThat(text(error, "responseMessage")).isEqualTo("Data Not Found");
+        assertThat(error.body().get("additionalInfo").get("message").asString()).isEqualTo("data tidak ditemukan");
+        assertThat(success.status()).isEqualTo(200);
+        assertThat(success.body().has("additionalInfo")).isFalse();
     }
 
     @Test
@@ -433,7 +459,8 @@ class SnapFlowTest {
         GatewayResponse ok = executor.execute(reg, match,
                 new InboundRequest(HttpMethod.POST, "/snap/transfers", Map.of(), Map.of(), "{}"), "c").response();
         GatewayResponse bad = executor.execute(reg, match,
-                new InboundRequest(HttpMethod.POST, "/snap/transfers", Map.of(), Map.of(), "{\"amount\":5}"), "c").response();
+                new InboundRequest(HttpMethod.POST, "/snap/transfers", Map.of(), Map.of(), "{\"amount\":5}"), "c")
+                .response();
 
         assertThat(text(ok, "responseCode")).isEqualTo("2002400");
         assertThat(text(bad, "responseCode")).isEqualTo("4002401");

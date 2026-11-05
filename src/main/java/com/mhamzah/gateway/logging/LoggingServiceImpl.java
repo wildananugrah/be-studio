@@ -84,9 +84,22 @@ public class LoggingServiceImpl implements LoggingService {
         message.append("path=[").append(request.getRequestURI()).append("] ");
         message.append("responseHeaders=[").append(masker.maskHeaders(headers)).append("] ");
         if (body != null) {
-            message.append("responseBody=[").append(render(body)).append("]");
+            message.append("responseBody=[").append(render(responseBody(body, responseHeaders))).append("]");
         }
         log.info(message.toString().stripTrailing());
+    }
+
+    /** The gateway writes bytes: JSON is logged as text, a file (any other type) only by its type and size. */
+    private static Object responseBody(Object body, HttpHeaders headers) {
+        if (!(body instanceof byte[] bytes)) {
+            return body;
+        }
+        org.springframework.http.MediaType type = headers.getContentType();
+        if (type == null || type.isCompatibleWith(org.springframework.http.MediaType.APPLICATION_JSON)
+                || "json".equals(type.getSubtypeSuffix())) {
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        }
+        return "binary " + type + " " + bytes.length + " bytes";
     }
 
     private static boolean isActuator(HttpServletRequest request) {

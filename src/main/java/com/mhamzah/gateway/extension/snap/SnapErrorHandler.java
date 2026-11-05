@@ -30,42 +30,64 @@ import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * SNAP error responses: {@code {"responseCode": "4032414", "responseMessage": "Insufficient Funds",
- * "additionalInfo": {...}}}. Set {@code gw_flow.error_handler = snapErrorHandler}; everything else is rows.
+ * SNAP error responses:
+ * {@code {"responseCode": "4032414", "responseMessage": "Insufficient Funds",
+ * "additionalInfo": {...}}}. Set
+ * {@code gw_flow.error_handler = snapErrorHandler}; everything else is rows.
  *
  * <ul>
- *   <li>A downstream failure ({@code DOWNSTREAM_HTTP_ERROR} / {@code DOWNSTREAM_BUSINESS_ERROR}) is translated by the
- *       lookup {@code SNAP_ERR_<target system>} of the failed step. Its code is read from the paths in the row
- *       {@code @codePath} (default {@code $.body.errorCode}, {@code $.body.code}, {@code $.body.responseCode}); numbers
- *       and text match the same row ({@code 30} = {@code "30"}). Keys are tried in order: {@code <status>:<code>},
- *       {@code <code>}, {@code HTTP_<status>}, then the table's {@code *} row.</li>
- *   <li>Anything else, or a downstream failure without a match, goes through {@code SNAP_GATEWAY_ERROR} by error type
- *       ({@code REQUEST_SCHEMA_MISSING} and {@code MAPPING_ERROR_CLIENT} for the client's mistakes), with built-in
- *       defaults.</li>
- *   <li>A row's value is a SNAP code ({@code "403.14"}) or {@code {"snap": "403.14", "message": "...", "reason":
- *       "...", "messagePath": "$.body.message", "httpStatus": 200}}: {@code message} replaces the catalog text,
- *       {@code reason} fills {@code [reason]}, {@code messagePath} takes the text from the failed call ({@code
- *       {status, headers, body}}; when it is missing or empty {@code message} / the catalog are used), and {@code
- *       httpStatus} sends another HTTP status than the SNAP code's ({@code responseCode} keeps the SNAP one). The
- *       downstream's own message is copied only through {@code messagePath}.</li>
- *   <li>A status that cannot carry a body (204, 205, 304, 1xx) is sent as {@code gateway.snap.no-body-status}
- *       (200).</li>
- *   <li>{@code additionalInfo} is optional: it is sent only when the flow has the named response {@value
- *       #ADDITIONAL_INFO}, whose BODY rules build it (they can read {@code $.error.*}, {@code $.steps.*} and the
- *       request). The same response builds it for success responses ({@link SnapResponseHandler}).</li>
+ * <li>A downstream failure ({@code DOWNSTREAM_HTTP_ERROR} /
+ * {@code DOWNSTREAM_BUSINESS_ERROR}) is translated by the
+ * lookup {@code SNAP_ERR_<target system>} of the failed step. Its code is read
+ * from the paths in the row
+ * {@code @codePath} (default {@code $.body.errorCode}, {@code $.body.code},
+ * {@code $.body.responseCode}); numbers
+ * and text match the same row ({@code 30} = {@code "30"}). Keys are tried in
+ * order: {@code <status>:<code>},
+ * {@code <code>}, {@code HTTP_<status>}, then the table's {@code *} row.</li>
+ * <li>Anything else, or a downstream failure without a match, goes through
+ * {@code SNAP_GATEWAY_ERROR} by error type
+ * ({@code REQUEST_SCHEMA_MISSING} and {@code MAPPING_ERROR_CLIENT} for the
+ * client's mistakes), with built-in
+ * defaults.</li>
+ * <li>A row's value is a SNAP code ({@code "403.14"}) or
+ * {@code {"snap": "403.14", "message": "...", "reason":
+ *       "...", "messagePath": "$.body.message", "httpStatus": 200}}:
+ * {@code message} replaces the catalog text,
+ * {@code reason} fills {@code [reason]}, {@code messagePath} takes the text
+ * from the failed call ({@code
+ *       {status, headers, body}}; when it is missing or empty {@code message} /
+ * the catalog are used), and {@code
+ *       httpStatus} sends another HTTP status than the SNAP code's
+ * ({@code responseCode} keeps the SNAP one). The
+ * downstream's own message is copied only through {@code messagePath}.</li>
+ * <li>A status that cannot carry a body (204, 205, 304, 1xx) is sent as
+ * {@code gateway.snap.no-body-status}
+ * (200).</li>
+ * <li>{@code additionalInfo} is optional: it is sent only when the flow has the
+ * named response {@value
+ * #ADDITIONAL_INFO} and its BODY rules produce at least one field (they can
+ * read {@code $.error.*}, {@code
+ *       $.steps.*} — the failed call's {@code body} included — and the
+ * request). The same response builds it for
+ * success responses ({@link SnapResponseHandler}).</li>
  * </ul>
- * It never throws: when something goes wrong it answers 500 Internal Server Error in the same format.
+ * It never throws: when something goes wrong it answers 500 Internal Server
+ * Error in the same format.
  */
 @Component(SnapErrorHandler.BEAN_NAME)
 public class SnapErrorHandler implements ErrorHandler {
 
     public static final String BEAN_NAME = "snapErrorHandler";
-    /** Name of the flow's named response whose rules build {@code additionalInfo}. */
+    /**
+     * Name of the flow's named response whose rules build {@code additionalInfo}.
+     */
     public static final String ADDITIONAL_INFO = SnapAdditionalInfo.FIELD;
 
     private static final Logger log = LoggerFactory.getLogger(SnapErrorHandler.class);
     private static final JsonNodeFactory F = JsonNodeFactory.instance;
-    private static final List<String> DEFAULT_CODE_PATHS = List.of("$.body.errorCode", "$.body.code", "$.body.responseCode");
+    private static final List<String> DEFAULT_CODE_PATHS = List.of("$.body.errorCode", "$.body.code",
+            "$.body.responseCode");
     private static final Map<String, String> GATEWAY_DEFAULTS = Map.ofEntries(
             Map.entry("ROUTE_NOT_FOUND", "404.02"),
             Map.entry("INVALID_JSON", "400.00"),
@@ -87,7 +109,8 @@ public class SnapErrorHandler implements ErrorHandler {
             Map.entry("RESPONSE_SCHEMA_INVALID", "500.01"),
             Map.entry("INTERNAL", "500.01"));
     /** A field named in a mapping error, e.g. {@code $.request.body.amount}. */
-    private static final Pattern REQUEST_FIELD = Pattern.compile("\\$\\.request\\.(?:body|query|path|headers)\\.([A-Za-z0-9_.\\[\\]-]+)");
+    private static final Pattern REQUEST_FIELD = Pattern
+            .compile("\\$\\.request\\.(?:body|query|path|headers)\\.([A-Za-z0-9_.\\[\\]-]+)");
     private static final Pattern REQUIRED_PROPERTY = Pattern.compile("required property '([^']+)'");
 
     private final Supplier<FlowRegistry> registry;
@@ -116,7 +139,8 @@ public class SnapErrorHandler implements ErrorHandler {
     }
 
     /**
-     * What a lookup row says: a SNAP code, optionally with its own message, reason, path to the downstream's message
+     * What a lookup row says: a SNAP code, optionally with its own message, reason,
+     * path to the downstream's message
      * and HTTP status.
      */
     private record Choice(String key, String message, String reason, String messagePath, Integer httpStatus) {
@@ -180,7 +204,10 @@ public class SnapErrorHandler implements ErrorHandler {
         return row != null ? choice(row) : new Choice(GATEWAY_DEFAULTS.getOrDefault(key, "500.01"));
     }
 
-    /** {@code <status>:<code>}, {@code <code>}, {@code HTTP_<status>}, then {@code *}; null when nothing matches. */
+    /**
+     * {@code <status>:<code>}, {@code <code>}, {@code HTTP_<status>}, then
+     * {@code *}; null when nothing matches.
+     */
     private static Choice fromDownstream(LookupTable table, GatewayError error) {
         ObjectNode result = stepResult(error);
         String code = null;
@@ -232,7 +259,10 @@ public class SnapErrorHandler implements ErrorHandler {
         return new Choice(SnapCodes.key(row));
     }
 
-    /** A row's {@code httpStatus}: 100-599, as a number or text; anything else is ignored with a warning. */
+    /**
+     * A row's {@code httpStatus}: 100-599, as a number or text; anything else is
+     * ignored with a warning.
+     */
     private static Integer httpStatus(JsonNode n) {
         if (JsonValues.isAbsent(n)) {
             return null;
@@ -249,7 +279,10 @@ public class SnapErrorHandler implements ErrorHandler {
         return null;
     }
 
-    /** The text at the row's {@code messagePath} in the failed call; null when it has none or it is empty. */
+    /**
+     * The text at the row's {@code messagePath} in the failed call; null when it
+     * has none or it is empty.
+     */
     private static String downstreamMessage(Choice choice, GatewayError error) {
         if (choice.messagePath() == null || choice.messagePath().isBlank()) {
             return null;
@@ -270,7 +303,8 @@ public class SnapErrorHandler implements ErrorHandler {
     }
 
     private static String gatewayKey(GatewayError error) {
-        if (error.type() == ErrorType.REQUEST_SCHEMA_INVALID && error.details().stream().anyMatch(d -> d.contains("required"))) {
+        if (error.type() == ErrorType.REQUEST_SCHEMA_INVALID
+                && error.details().stream().anyMatch(d -> d.contains("required"))) {
             return "REQUEST_SCHEMA_MISSING";
         }
         if (error.type() == ErrorType.MAPPING_ERROR && error.clientError()) {
@@ -279,7 +313,10 @@ public class SnapErrorHandler implements ErrorHandler {
         return error.type().name();
     }
 
-    /** The field a client error is about, for {@code {field name}}; null when it cannot be told. */
+    /**
+     * The field a client error is about, for {@code {field name}}; null when it
+     * cannot be told.
+     */
     static String field(GatewayError error) {
         if (error.type() == ErrorType.REQUEST_SCHEMA_INVALID && !error.details().isEmpty()) {
             String detail = error.details().stream().filter(d -> d.contains("required")).findFirst()
@@ -312,7 +349,10 @@ public class SnapErrorHandler implements ErrorHandler {
         return out;
     }
 
-    /** {@code additionalInfo} from the flow's named response {@value #ADDITIONAL_INFO}; null when it has none. */
+    /**
+     * {@code additionalInfo} from the flow's named response
+     * {@value #ADDITIONAL_INFO}; null when it has none.
+     */
     private ObjectNode additionalInfo(FlowDefinition flow, GatewayError error, SnapCodes.Code code, String responseCode,
             String message, ExecutionContext ctx) {
         if (flow == null || !flow.responses().containsKey(ADDITIONAL_INFO)) {
@@ -345,7 +385,10 @@ public class SnapErrorHandler implements ErrorHandler {
                 .map(StepDefinition::targetSystemName).orElse(null);
     }
 
-    /** The failed call as a step result: {@code {"status": ..., "headers": {...}, "body": ...}}. */
+    /**
+     * The failed call as a step result:
+     * {@code {"status": ..., "headers": {...}, "body": ...}}.
+     */
     private static ObjectNode stepResult(GatewayError error) {
         ObjectNode result = F.objectNode();
         if (error.downstreamStatus() != null) {

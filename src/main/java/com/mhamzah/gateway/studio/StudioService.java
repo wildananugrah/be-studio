@@ -346,6 +346,7 @@ public class StudioService {
                 case QUERY -> text(m.query().get(rule.targetName()));
                 case PATH -> text(m.pathVariables().get(rule.targetName()));
                 case STATUS -> m.status() == null ? null : JsonNodeFactory.instance.numberNode(m.status());
+                case FILE -> m.fileStep() == null ? null : JsonNodeFactory.instance.stringNode("file of step " + m.fileStep());
             };
             return new RuleResult(value, value != null, null);
         }

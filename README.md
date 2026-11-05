@@ -111,7 +111,7 @@ Implement one of these as a Spring bean in `com.mhamzah.gateway.extension.custom
 | `FieldHandler` | `gw_mapping_rule.field_handler` | one field: value in, value out (masking, check digits, special formats) |
 | `MessageHandler` | flow/step `request_handler` / `response_handler` | whole message: HTTP headers + JSON body (signatures, tokens, restructuring). A flow `request_handler` can return a response to short-circuit the flow. |
 | `ErrorHandler` | `gw_flow.error_handler` | turning failures into the client error response |
-| `BodyCodec` | `gw_target_system.body_codec` / `gw_flow_step.body_codec` | the wire format of downstream calls. Built in: `xmlCodec`, `soapCodec`, `soap12Codec`; write one for SOAP headers / WS-Security / signed XML ([guide](docs/CONFIGURATION-GUIDE.md#415-xml-or-soap-downstream)) |
+| `BodyCodec` | `gw_target_system.body_codec` / `gw_flow_step.body_codec` | the wire format of downstream calls. Built in: `xmlCodec`, `soapCodec`, `soap12Codec`, `fileCodec` (a file download: a non-JSON 2xx is kept as a file, and a FLOW_RESPONSE rule `target_type = FILE`, `source_path = $.steps.<step>` sends it to the client with its Content-Type and Content-Disposition); write one for SOAP headers / WS-Security / signed XML ([guide](docs/CONFIGURATION-GUIDE.md#415-xml-or-soap-downstream)) |
 
 **Error mapping** is the common case, so it has a base class. Extend `LookupErrorHandler`, say where the downstream code is and which lookup table translates it, and put the mappings in `gw_lookup_entry`:
 

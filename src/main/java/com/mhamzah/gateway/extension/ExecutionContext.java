@@ -30,6 +30,8 @@ public final class ExecutionContext {
     private final ObjectNode steps;
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     private final Map<String, InboundFile> files;
+    /** Files downloaded by steps ({@code body_codec = fileCodec}), by step name; steps of a group run concurrently. */
+    private final Map<String, InboundFile> stepFiles = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile String serviceCode;
 
     public ExecutionContext(String flowCode, String correlationId, Map<String, LookupTable> lookups, ObjectNode request) {
@@ -178,6 +180,19 @@ public final class ExecutionContext {
     /** The mutable inbound request node. Engine use only, before steps run. */
     public ObjectNode request() {
         return (ObjectNode) root.get("request");
+    }
+
+    /**
+     * The file step {@code name} downloaded ({@code body_codec = fileCodec}); null when it has none, e.g. it answered
+     * JSON. Its description is the step's {@code $.steps.<name>.body}.
+     */
+    public InboundFile stepFile(String name) {
+        return name == null ? null : stepFiles.get(name);
+    }
+
+    /** Stores the file step {@code name} downloaded. Engine use only. */
+    public void putStepFile(String name, InboundFile file) {
+        stepFiles.put(name, file);
     }
 
     /** Stores the result of step {@code name}. Engine use only. */

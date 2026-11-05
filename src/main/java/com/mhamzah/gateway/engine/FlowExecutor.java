@@ -12,6 +12,7 @@ import com.mhamzah.gateway.extension.ErrorType;
 import com.mhamzah.gateway.extension.ExecutionContext;
 import com.mhamzah.gateway.extension.GatewayError;
 import com.mhamzah.gateway.extension.GatewayResponse;
+import com.mhamzah.gateway.extension.InboundFile;
 import com.mhamzah.gateway.extension.MessageHandler;
 import com.mhamzah.gateway.extension.MessageView;
 import com.mhamzah.gateway.invoke.DownstreamClient;
@@ -50,6 +51,8 @@ public class FlowExecutor implements AutoCloseable {
     private static final JsonMapper MAPPER = JsonValues.MAPPER;
     private static final JsonNodeFactory F = JsonNodeFactory.instance;
     static final String CORRELATION_HEADER = "X-Correlation-Id";
+    /** The default of {@code gateway.files.max-size}. */
+    static final long DEFAULT_MAX_FILE_BYTES = 20L * 1024 * 1024;
 
     private final MappingEngine mapping;
     private final ErrorHandler defaultErrorHandler;
@@ -57,9 +60,14 @@ public class FlowExecutor implements AutoCloseable {
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
     public FlowExecutor(DownstreamClient client, MappingEngine mapping, ErrorHandler defaultErrorHandler) {
+        this(client, mapping, defaultErrorHandler, DEFAULT_MAX_FILE_BYTES);
+    }
+
+    /** @param maxFileBytes the largest file a {@code fileCodec} step accepts ({@code gateway.files.max-size}) */
+    public FlowExecutor(DownstreamClient client, MappingEngine mapping, ErrorHandler defaultErrorHandler, long maxFileBytes) {
         this.mapping = mapping;
         this.defaultErrorHandler = defaultErrorHandler;
-        this.stepRunner = new StepRunner(client, mapping);
+        this.stepRunner = new StepRunner(client, mapping, maxFileBytes);
     }
 
     public ExecutionResult execute(FlowRegistry registry, RouteMatch match, InboundRequest in, String correlationId) {
@@ -168,6 +176,10 @@ public class FlowExecutor implements AutoCloseable {
             MappedMessage named = mapping.apply(respond.rules(), ctx);
             // a STATUS rule (e.g. the backend's own status) wins over the response's fixed status
             int status = named.status() != null ? named.status() : respond.status();
+            GatewayResponse file = fileResponse(named, status, ctx);
+            if (file != null) {
+                return file;
+            }
             MessageView view = new MessageView(named.headers(), named.body(), status);
             if (flow.responseHandler() != null) {
                 invoke(flow.responseHandler(), view, ctx, "response_handler of flow", false);
@@ -176,6 +188,10 @@ public class FlowExecutor implements AutoCloseable {
         }
 
         MappedMessage out = mapping.apply(flow.responseRules(), ctx);
+        GatewayResponse file = fileResponse(out, out.status() != null ? out.status() : flow.successStatus(), ctx);
+        if (file != null) {
+            return file;
+        }
         if (flow.responseSchema() != null && flow.schemaValidation().response()) {
             List<String> errors = flow.responseSchema().validate(out.body());
             if (!errors.isEmpty()) {
@@ -188,6 +204,29 @@ public class FlowExecutor implements AutoCloseable {
             invoke(flow.responseHandler(), view, ctx, "response_handler of flow", false);
         }
         return new GatewayResponse(finalStatus(view, status), view.headers(), view.body());
+    }
+
+    /**
+     * The file a FILE rule sends, with its Content-Type and the downstream's Content-Disposition (HEADER rules win);
+     * BODY rules, the response schema and the flow response_handler do not apply. Null when the response has no FILE
+     * rule or its step downloaded no file (it answered JSON): the response is then built as usual.
+     */
+    private static GatewayResponse fileResponse(MappedMessage out, int status, ExecutionContext ctx) {
+        InboundFile file = ctx.stepFile(out.fileStep());
+        if (file == null) {
+            return null;
+        }
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("Content-Type", file.contentType());
+        JsonNode stepHeaders = ctx.read("$.steps." + out.fileStep() + ".headers");
+        String disposition = stepHeaders == null ? null : stepHeaders.path("content-disposition").asString(null);
+        headers.put("Content-Disposition", disposition != null ? disposition
+                : "attachment; filename=\"" + file.filename().replace("\"", "") + "\"");
+        out.headers().forEach((name, value) -> {
+            headers.keySet().removeIf(name::equalsIgnoreCase);
+            headers.put(name, value);
+        });
+        return new GatewayResponse(status, headers, file.describe(), file);
     }
 
     /** The status after the flow response_handler, which may change it (e.g. a SNAP 204 sent as 200). */
@@ -395,7 +434,7 @@ public class FlowExecutor implements AutoCloseable {
             InboundRequest in, Instant startedAt, long start, List<StepRecord> records) {
         Map<String, String> headers = new LinkedHashMap<>(response.headers());
         headers.put(CORRELATION_HEADER, ctx.correlationId());
-        GatewayResponse finalResponse = new GatewayResponse(response.status(), headers, response.body());
+        GatewayResponse finalResponse = new GatewayResponse(response.status(), headers, response.body(), response.file());
         String errorCode = failure == null || response.body() == null ? null
                 : response.body().path("errorCode").asString(null);
         JsonNode requestBody = ctx.request().get("body");

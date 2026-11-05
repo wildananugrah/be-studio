@@ -1,7 +1,7 @@
 # ==============================
 # Stage 1 - Builder
 # ==============================
-FROM jtl-tkgiharbor.hq.bni.co.id/wss-dev/ubi9/openjdk-21:1.22-1 AS builder
+FROM nexus-dev.bni.co.id/docker-wdl-redhat/ubi9/openjdk-25:1.24-3.1792711405 AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -25,7 +25,6 @@ COPY src ./src
 
 # Build application
 RUN mvn -s /root/.m2/settings.xml \
-    -Dspring-boot.run.arguments=--server.port=8080 \
     -Dmaven.test.skip=true \
     clean package
 
@@ -33,7 +32,7 @@ RUN mvn -s /root/.m2/settings.xml \
 # Stage 2 - Runtime
 # ==============================
 # FROM jtl-tkgiharbor.hq.bni.co.id/wss-dev/ubi9/openjdk-21-runtime
-FROM nexus-dev.bni.co.id/docker-wdl-cts/ubi8/openjdk-21-runtime:latest
+FROM nexus-dev.bni.co.id/docker-wdl-redhat/ubi9/openjdk-25-runtime:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
 

@@ -2694,7 +2694,7 @@ class App extends Component {
       });
     };
     const ruleAccept = d => ['src', 'conv', 'lookup', 'fh'].includes(d.kind);
-    const types = scopeStep ? (isSql(scopeStep) || isTransform(scopeStep) ? ['BODY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes.filter(t => t !== 'STATUS')) : respSel && isInfoResp(respSel) ? ['BODY'] : ['BODY', 'HEADER', 'STATUS'];
+    const types = scopeStep ? (isSql(scopeStep) || isTransform(scopeStep) ? ['BODY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes.filter(t => t !== 'STATUS' && t !== 'FILE')) : respSel && isInfoResp(respSel) ? ['BODY'] : ['BODY', 'HEADER', 'STATUS', 'FILE'];
 
     const pv = s.preview && s.preview.key === f.code + '/' + (scopeStep ? scopeStep.name : respSel ? '@' + respSel.name : '') ? s.preview : null;
     const resText = (r, i) => {
@@ -2825,10 +2825,10 @@ class App extends Component {
               <div ...${zoneProps(z)} style="position:relative;background:#fff;border:1px solid #E4E1D8;border-radius:9px;padding:9px 10px;display:flex;flex-direction:column;gap:7px">
                 <div style="display:flex;align-items:center;gap:8px">
                   <span style=${`width:18px;text-align:right;font:11px ${MONO};color:#9A9CA2`}>${i + 1}</span>
-                  <select value=${r.type} onChange=${e => { const v = e.currentTarget.value; updRule(r.id, x => { x.type = v; if (v === 'STATUS') { x.target = 'status'; return; } if (v !== 'BODY' && x.target.startsWith('$.')) x.target = x.target.slice(2); if (v === 'BODY' && !x.target.startsWith('$')) x.target = '$.' + x.target; }); }} style=${`height:28px;border:1px solid #E4E1D8;border-radius:5px;background:#FAF9F6;font:600 10.5px ${MONO};padding:0 4px`}>
+                  <select value=${r.type} onChange=${e => { const v = e.currentTarget.value; updRule(r.id, x => { x.type = v; if (v === 'STATUS') { x.target = 'status'; return; } if (v === 'FILE') { x.target = 'file'; return; } if (v !== 'BODY' && x.target.startsWith('$.')) x.target = x.target.slice(2); if (v === 'BODY' && !x.target.startsWith('$')) x.target = '$.' + x.target; }); }} style=${`height:28px;border:1px solid #E4E1D8;border-radius:5px;background:#FAF9F6;font:600 10.5px ${MONO};padding:0 4px`}>
                     ${withType(types, r.type).map(o => html`<option value=${o}>${o}</option>`)}
                   </select>
-                  <input class="inp" value=${r.type === 'STATUS' ? 'HTTP status (100-599)' : r.target} readOnly=${r.type === 'STATUS'} title=${r.type === 'STATUS' ? 'Sets the HTTP status of this response, e.g. from $.steps.<step>.status; wins over the fixed status' : ''} onInput=${set('target')} style=${`flex:1;min-width:120px;height:28px;border:1px solid #E4E1D8;border-radius:5px;padding:0 8px;font:12px ${MONO};background:${r.type === 'STATUS' ? '#FAF9F6' : '#fff'};color:${r.type === 'STATUS' ? '#6A6D75' : 'inherit'}`}/>
+                  <input class="inp" value=${r.type === 'STATUS' ? 'HTTP status (100-599)' : r.type === 'FILE' ? 'the file of the step (source $.steps.<step>)' : r.target} readOnly=${r.type === 'STATUS' || r.type === 'FILE'} title=${r.type === 'FILE' ? 'Sends the file a step with body_codec fileCodec downloaded, with its Content-Type; BODY rules and the response handler do not apply' : r.type === 'STATUS' ? 'Sets the HTTP status of this response, e.g. from $.steps.<step>.status; wins over the fixed status' : ''} onInput=${set('target')} style=${`flex:1;min-width:120px;height:28px;border:1px solid #E4E1D8;border-radius:5px;padding:0 8px;font:12px ${MONO};background:${r.type === 'STATUS' || r.type === 'FILE' ? '#FAF9F6' : '#fff'};color:${r.type === 'STATUS' || r.type === 'FILE' ? '#6A6D75' : 'inherit'}`}/>
                   <span style="color:#ADA99E">←</span>
                   ${r.source ? html`
                     <div style=${`flex:1.25;min-width:0;height:28px;display:flex;align-items:center;gap:6px;padding:0 4px 0 9px;border-radius:5px;background:oklch(0.96 0.025 255);font:11.5px ${MONO};color:oklch(0.38 0.12 255)`}>
