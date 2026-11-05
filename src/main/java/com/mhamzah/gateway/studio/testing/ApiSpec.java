@@ -232,29 +232,34 @@ public final class ApiSpec {
         }
         JsonNode requestBody = op.path("requestBody");
         String contentType = null;
-        JsonNode requestExample = null;
+        // one example body per option of a oneOf / anyOf body (a router's), by option label (null: a plain body)
+        Map<String, JsonNode> requestExamples = new LinkedHashMap<>();
         if (!requestBody.isMissingNode()) {
             Map.Entry<String, JsonNode> content = first(requestBody.path("content"));
             if (content != null) {
                 contentType = content.getKey();
-                JsonNode schema = TestCaseGenerator.resolve(doc, content.getValue().path("schema"));
-                List<List<String>> fields = new ArrayList<>();
-                fields(doc, schema, "", true, fields, 0);
-                out.add(new Paragraph("Body (" + contentType + (requestBody.path("required").asBoolean(false)
-                        ? ", required" : "") + "):"));
-                if (fields.isEmpty()) {
-                    out.add(new Paragraph(contentType.contains("octet-stream")
-                            ? "The whole body is the file; send its name in the X-File-Name header."
-                            : "No documented fields."));
-                } else {
-                    out.add(new Table(List.of("Field", "Type", "M/O", "Notes"), fields));
-                    if (flow.requestSchema() == null && contentType.equals("application/json")) {
-                        out.add(new Paragraph("These fields are the ones the flow reads; without a request schema their"
-                                + " types and lengths are not declared (attach one to the flow to document and validate them)."));
+                String about = contentType + (requestBody.path("required").asBoolean(false) ? ", required" : "");
+                List<TestCaseGenerator.Option> options = TestCaseGenerator.options(doc, content.getValue().path("schema"));
+                for (int i = 0; i < options.size(); i++) {
+                    TestCaseGenerator.Option option = options.get(i);
+                    List<List<String>> fields = new ArrayList<>();
+                    fields(doc, option.schema(), "", true, fields, 0);
+                    out.add(new Paragraph(option.label() == null ? "Body (" + about + "):"
+                            : "Body option " + (i + 1) + " of " + options.size() + ": " + option.label() + " (" + about + "):"));
+                    if (fields.isEmpty()) {
+                        out.add(new Paragraph(contentType.contains("octet-stream")
+                                ? "The whole body is the file; send its name in the X-File-Name header."
+                                : "No documented fields."));
+                    } else {
+                        out.add(new Table(List.of("Field", "Type", "M/O", "Notes"), fields));
+                        if (flow.requestSchema() == null && contentType.equals("application/json")) {
+                            out.add(new Paragraph("These fields are the ones the flow reads; without a request schema their"
+                                    + " types and lengths are not declared (attach one to the flow to document and validate them)."));
+                        }
                     }
-                }
-                if (contentType.equals("application/json")) {
-                    requestExample = TestCaseGenerator.example(doc, schema, "body");
+                    if (contentType.equals("application/json")) {
+                        requestExamples.put(option.label(), TestCaseGenerator.example(doc, option.schema(), "body"));
+                    }
                 }
             }
         } else {
@@ -273,11 +278,15 @@ public final class ApiSpec {
         }
         exampleHeaders.forEach((k, v) -> req.append(k).append(": ").append(v).append('\n'));
         req.append("X-Correlation-Id: REQ-0001\n");
-        if (requestExample != null) {
-            req.append('\n').append(JsonValues.MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(requestExample));
+        if (requestExamples.isEmpty()) {
+            out.add(new Paragraph("Example request:"));
+            out.add(new Code(req.toString().stripTrailing()));
         }
-        out.add(new Paragraph("Example request:"));
-        out.add(new Code(req.toString().stripTrailing()));
+        for (Map.Entry<String, JsonNode> example : requestExamples.entrySet()) {
+            out.add(new Paragraph(example.getKey() == null ? "Example request:" : "Example request (" + example.getKey() + "):"));
+            out.add(new Code((req + "\n" + JsonValues.MAPPER.writerWithDefaultPrettyPrinter()
+                    .writeValueAsString(example.getValue())).stripTrailing()));
+        }
 
         // ---- response
         out.add(new Heading(level + 1, "Response"));
@@ -287,22 +296,30 @@ public final class ApiSpec {
                 type(TestCaseGenerator.resolve(doc, h.getValue().path("schema"))))));
         out.add(new Paragraph("HTTP " + flow.successStatus() + " with these headers:"));
         out.add(new Table(List.of("Header", "Type"), headers));
-        JsonNode responseSchema = TestCaseGenerator.resolve(doc, ok.path("content").path("application/json").path("schema"));
-        List<List<String>> fields = new ArrayList<>();
-        fields(doc, responseSchema, "", false, fields, 0);
-        if (fields.isEmpty()) {
-            out.add(new Paragraph("No documented body fields."));
-        } else {
-            out.add(new Paragraph("Body (application/json):"));
+        JsonNode okBody = ok.path("content").path("application/json").path("schema");
+        // a oneOf the generator built for named responses starts with the default body; those are listed further down
+        List<TestCaseGenerator.Option> responseOptions = TestCaseGenerator.options(doc,
+                okBody.has("oneOf") ? okBody.get("oneOf").get(0) : okBody);
+        for (int i = 0; i < responseOptions.size(); i++) {
+            TestCaseGenerator.Option option = responseOptions.get(i);
+            List<List<String>> fields = new ArrayList<>();
+            fields(doc, option.schema(), "", false, fields, 0);
+            if (fields.isEmpty()) {
+                out.add(new Paragraph(option.label() == null ? "No documented body fields."
+                        : "Body option " + (i + 1) + " of " + responseOptions.size() + ": " + option.label() + ": no documented fields."));
+                continue;
+            }
+            out.add(new Paragraph(option.label() == null ? "Body (application/json):"
+                    : "Body option " + (i + 1) + " of " + responseOptions.size() + ": " + option.label() + " (application/json):"));
             out.add(new Table(List.of("Field", "Type", "Notes"), fields));
             if (flow.responseSchema() == null) {
                 out.add(new Paragraph("These fields are the ones the flow writes; without a response schema their types"
                         + " are not declared, so the example values below are placeholders."));
             }
-            out.add(new Paragraph("Example response:"));
+            out.add(new Paragraph(option.label() == null ? "Example response:" : "Example response (" + option.label() + "):"));
             out.add(new Code("HTTP/1.1 " + flow.successStatus() + "\nContent-Type: application/json\nX-Correlation-Id: REQ-0001\n\n"
                     + JsonValues.MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(
-                            TestCaseGenerator.example(doc, responseSchema, "body"))));
+                            TestCaseGenerator.example(doc, option.schema(), "body"))));
         }
 
         // ---- other responses (named responses the flow's branches end with)

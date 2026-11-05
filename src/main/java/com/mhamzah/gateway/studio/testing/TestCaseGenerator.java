@@ -27,6 +27,7 @@ public final class TestCaseGenerator {
     private static final JsonNodeFactory F = JsonNodeFactory.instance;
     private static final int MAX_NEGATIVE = 8;
     private static final Set<String> SKIPPED_HEADERS = Set.of("x-correlation-id");
+    private static final String COMPONENT = "#/components/schemas/";
 
     private final JsonNode doc;
 
@@ -50,6 +51,36 @@ public final class TestCaseGenerator {
     /** The schema with local {@code $ref}s followed and {@code allOf} merged. */
     static JsonNode resolve(JsonNode openApi, JsonNode schema) {
         return new TestCaseGenerator(openApi).resolve(schema);
+    }
+
+    /** One alternative body of a {@code oneOf} / {@code anyOf} schema; {@code label} is null for a plain schema. */
+    record Option(String label, JsonNode schema) {}
+
+    /**
+     * The alternatives of a schema whose {@code $ref}s lead to a {@code oneOf} / {@code anyOf} (e.g. a router's request:
+     * one of its sub-routes' bodies), each resolved and labelled with its component name, else its title, else
+     * "Option n"; a single unlabelled option otherwise.
+     */
+    static List<Option> options(JsonNode openApi, JsonNode schema) {
+        TestCaseGenerator g = new TestCaseGenerator(openApi);
+        JsonNode s = schema;
+        for (int i = 0; i < 10 && s != null && s.has("$ref"); i++) {
+            String ref = s.get("$ref").asString();
+            s = ref.startsWith("#") ? openApi.at(ref.substring(1)) : null;
+        }
+        JsonNode choices = s == null ? null : s.has("oneOf") ? s.get("oneOf") : s.get("anyOf");
+        if (choices == null || !choices.isArray() || choices.isEmpty()) {
+            return List.of(new Option(null, g.resolve(schema)));
+        }
+        List<Option> out = new ArrayList<>();
+        for (JsonNode choice : choices) {
+            String ref = choice.path("$ref").asString("");
+            String label = ref.startsWith(COMPONENT) && ref.indexOf('/', COMPONENT.length()) < 0
+                    ? ref.substring(COMPONENT.length()).replace("~1", "/").replace("~0", "~")
+                    : choice.path("title").asString("");
+            out.add(new Option(label.isEmpty() ? "Option " + (out.size() + 1) : label, g.resolve(choice)));
+        }
+        return out;
     }
 
     static String typeOf(JsonNode schema) {
@@ -116,8 +147,12 @@ public final class TestCaseGenerator {
                     method, path, values(query, true), values(headers, true), minimal, ok));
         }
 
+        // a body that is one of several (a router's) and not validated: without a field it may still match another
+        // option, or the sub-route answers, so a missing field does not mean 400
+        boolean choice = op.has("requestBody")
+                && options(doc, op.path("requestBody").path("content").path("application/json").path("schema")).size() > 1;
         int negatives = 0;
-        if (full instanceof ObjectNode body) {
+        if (full instanceof ObjectNode body && (validated || !choice)) {
             for (String field : required(bodySchema)) {
                 if (negatives++ >= MAX_NEGATIVE) {
                     break;

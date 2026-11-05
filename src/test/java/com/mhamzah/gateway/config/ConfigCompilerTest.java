@@ -129,6 +129,12 @@ class ConfigCompilerTest {
     }
 
     @Test
+    void rule2_unknownSchemaReference() {
+        rows.schema("PAYMENT_REQUEST", "{\"oneOf\":[{\"$ref\":\"gw:NOPE\"}]}");
+        assertInvalid("json schema 'PAYMENT_REQUEST': $ref 'gw:NOPE' references unknown schema 'NOPE'");
+    }
+
+    @Test
     void rule3_unknownOrWrongTypeHandlers() {
         var flow = rows.flow("A", "POST", "/x", f -> f.withHandlers("missingBean", null, "myMessage"));
         var step = rows.step(flow, "s", 1);
