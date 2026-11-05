@@ -216,20 +216,27 @@ public final class TestCaseGenerator {
 
     /** Follows local {@code $ref}s and merges {@code allOf}. */
     private JsonNode resolve(JsonNode schema) {
+        return resolve(schema, 0);
+    }
+
+    /** {@code depth} ends reference cycles through allOf / oneOf / anyOf (schemas may reference each other). */
+    private JsonNode resolve(JsonNode schema, int depth) {
         JsonNode s = schema;
         for (int i = 0; i < 10 && s != null && s.has("$ref"); i++) {
             String ref = s.get("$ref").asString();
             s = ref.startsWith("#") ? doc.at(ref.substring(1)) : null;
         }
-        if (s == null || s.isMissingNode()) {
+        if (s == null || s.isMissingNode() || depth > 10) {
             return F.objectNode();
         }
         if (s.has("allOf")) {
             ObjectNode merged = F.objectNode().put("type", "object");
             ObjectNode props = merged.putObject("properties");
             ArrayNode req = merged.putArray("required");
-            for (JsonNode part : s.get("allOf")) {
-                JsonNode p = resolve(part);
+            List<JsonNode> parts = new ArrayList<>();
+            s.get("allOf").forEach(part -> parts.add(resolve(part, depth + 1)));
+            parts.add(s); // its own properties, next to the allOf
+            for (JsonNode p : parts) {
                 p.path("properties").properties().forEach(e -> props.set(e.getKey(), e.getValue()));
                 p.path("required").forEach(req::add);
             }
@@ -237,7 +244,7 @@ public final class TestCaseGenerator {
         }
         if (s.has("oneOf") || s.has("anyOf")) {
             JsonNode first = (s.has("oneOf") ? s.get("oneOf") : s.get("anyOf")).path(0);
-            return first.isMissingNode() ? s : resolve(first);
+            return first.isMissingNode() ? s : resolve(first, depth + 1);
         }
         return s;
     }

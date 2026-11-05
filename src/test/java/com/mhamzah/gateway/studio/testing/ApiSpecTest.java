@@ -40,6 +40,21 @@ class ApiSpecTest {
     }
 
     @Test
+    void cyclesThroughAllOfAndOneOfTerminate() {
+        fixture.rows.schema("CA", "{\"allOf\":[{\"$ref\":\"gw:CB\"}],\"properties\":{\"x\":{\"type\":\"string\"}}}");
+        fixture.rows.schema("CB", "{\"allOf\":[{\"$ref\":\"gw:CA\"}],\"properties\":{\"y\":{\"type\":\"string\"}}}");
+        fixture.rows.schema("SELF", "{\"oneOf\":[{\"$ref\":\"gw:TRANSFER_REQUEST\"},{\"$ref\":\"gw:SELF\"}]}");
+        fixture.rows.flow("ALLOF", "POST", "/allof", f -> f.withSchemas("CA", null).withSchemaValidation("NONE"));
+        fixture.rows.flow("SELFISH", "POST", "/selfish", f -> f.withSchemas("SELF", null).withSchemaValidation("NONE"));
+        fixture.build();
+
+        assertThat(spec("ALLOF")).contains("| x |");
+        assertThat(spec("SELFISH")).contains("Body option 1 of 2: TRANSFER_REQUEST", "Body option 2 of 2: SELF");
+        assertThat(TestCaseGenerator.generate(fixture.doc, fixture.flow("ALLOF"), "/api")).isNotEmpty();
+        assertThat(TestCaseGenerator.generate(fixture.doc, fixture.flow("SELFISH"), "/api")).isNotEmpty();
+    }
+
+    @Test
     void namedResponsesStillListTheirShapesUnderOtherResponses() {
         var flow = fixture.rows.flow("F", "POST", "/f");
         fixture.rows.step(flow, "s", 1, s -> s.withNext("RESPOND:accepted", "RESPOND:refused"));

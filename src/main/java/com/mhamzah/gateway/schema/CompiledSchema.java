@@ -89,11 +89,20 @@ public final class CompiledSchema {
         parsed.forEach((code, node) -> forEachRef(node, ref -> {
             String target = target(ref);
             String fragment = ref.substring(REF_PREFIX.length() + target.length());
+            String pointer = fragment.length() > 1 ? fragment.substring(1) : "";
             if (!textsByCode.containsKey(target)) {
                 error(errors, code, "$ref '" + ref + "' references unknown schema '" + target + "'");
-            } else if (fragment.startsWith("#") && fragment.length() > 1 && parsed.containsKey(target)
-                    && parsed.get(target).at(fragment.substring(1)).isMissingNode()) {
-                error(errors, code, "$ref '" + ref + "' points to nothing in schema '" + target + "'");
+            } else if (!pointer.isEmpty() && !pointer.startsWith("/")) {
+                // anchors (#name) are not supported: the OpenAPI description could not point to them
+                error(errors, code, "$ref '" + ref + "': only JSON pointer fragments are supported, e.g. "
+                        + REF_PREFIX + target + "#/$defs/name");
+            } else if (!pointer.isEmpty() && parsed.containsKey(target)) {
+                JsonNode pointed = parsed.get(target).at(pointer);
+                if (pointed.isMissingNode()) {
+                    error(errors, code, "$ref '" + ref + "' points to nothing in schema '" + target + "'");
+                } else if (!pointed.isObject() && !pointed.isBoolean()) {
+                    error(errors, code, "$ref '" + ref + "' does not point to a schema in schema '" + target + "'");
+                }
             }
         }));
 

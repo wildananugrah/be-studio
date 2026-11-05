@@ -118,6 +118,22 @@ class CompiledSchemaTest {
     }
 
     @Test
+    void fragmentThatIsNotAJsonPointerIsAnError() {
+        var c = CompiledSchema.compileAll(texts("X", "{\"$anchor\":\"top\",\"type\":\"object\"}",
+                "R", "{\"oneOf\":[{\"$ref\":\"gw:X#top\"},{\"$ref\":\"gw:X#$defs/x\"}]}"));
+        assertThat(c.errors().get("R")).containsExactly(
+                "$ref 'gw:X#top': only JSON pointer fragments are supported, e.g. gw:X#/$defs/name",
+                "$ref 'gw:X#$defs/x': only JSON pointer fragments are supported, e.g. gw:X#/$defs/name");
+    }
+
+    @Test
+    void fragmentPointingToSomethingThatIsNotASchemaIsAnError() {
+        var c = CompiledSchema.compileAll(texts("X", "{\"type\":\"object\",\"required\":[\"a\"]}",
+                "R", "{\"$ref\":\"gw:X#/required\"}"));
+        assertThat(c.errors().get("R")).containsExactly("$ref 'gw:X#/required' does not point to a schema in schema 'X'");
+    }
+
+    @Test
     void cyclesCompileAndValidate() {
         var c = CompiledSchema.compileAll(texts(
                 "NODE", "{\"type\":\"object\",\"properties\":{\"child\":{\"$ref\":\"gw:NODE\"}}}",
