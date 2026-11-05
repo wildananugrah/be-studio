@@ -6,6 +6,7 @@ import com.mhamzah.gateway.config.ConfigRows.RuleRow;
 import com.mhamzah.gateway.config.ConfigRows.StepRow;
 import com.mhamzah.gateway.config.GatewayProperties;
 import com.mhamzah.gateway.mapping.JsonValues;
+import com.mhamzah.gateway.schema.CompiledSchema;
 import com.mhamzah.gateway.studio.StudioConfig.Application;
 import com.mhamzah.gateway.studio.StudioConfig.Flow;
 import com.mhamzah.gateway.studio.StudioConfig.Header;
@@ -18,7 +19,10 @@ import com.mhamzah.gateway.studio.StudioConfig.Target;
 import com.mhamzah.gateway.studio.StudioConfig.Tls;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -29,6 +33,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import tools.jackson.core.JacksonException;
 
 /**
  * One application's configuration, extracted for another environment: its flows (with steps and mapping rules) and
@@ -93,6 +98,7 @@ final class ApplicationExport {
                 s.rules().forEach(r -> rule(r, lookupCodes, handlers));
             }
         }
+        addReferencedSchemas(config, schemaCodes);
         List<String> secrets = new ArrayList<>();
         List<Target> targets = config.targets().stream().filter(t -> targetCodes.contains(t.code()))
                 .map(t -> withoutSecrets(t, secrets)).toList();
@@ -122,6 +128,28 @@ final class ApplicationExport {
             requires.put("lookupsNotFound", List.copyOf(missingLookups));
         }
         return new Bundle(app, flows, targets, lookups, schemas, storages, requires, secrets);
+    }
+
+    /** Adds the schemas the given ones reference with gw:CODE, transitively; unknown codes stay for schemasNotFound. */
+    private static void addReferencedSchemas(StudioConfig config, Set<String> schemaCodes) {
+        Map<String, String> texts = new HashMap<>();
+        config.schemas().forEach(s -> texts.put(s.code(), s.text()));
+        Deque<String> pending = new ArrayDeque<>(schemaCodes);
+        while (!pending.isEmpty()) {
+            String text = texts.get(pending.poll());
+            if (text == null || text.isBlank()) {
+                continue;
+            }
+            try {
+                for (String code : CompiledSchema.referencedCodes(JsonValues.MAPPER.readTree(text))) {
+                    if (schemaCodes.add(code)) {
+                        pending.add(code);
+                    }
+                }
+            } catch (JacksonException e) {
+                // not JSON: no references to follow
+            }
+        }
     }
 
     private static void rule(Rule r, Set<String> lookups, Set<String> handlers) {
