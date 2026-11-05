@@ -147,8 +147,12 @@ public final class TestCaseGenerator {
                     method, path, values(query, true), values(headers, true), minimal, ok));
         }
 
+        // a body that is one of several (a router's) and not validated: without a field it may still match another
+        // option, or the sub-route answers, so a missing field does not mean 400
+        boolean choice = op.has("requestBody")
+                && options(doc, op.path("requestBody").path("content").path("application/json").path("schema")).size() > 1;
         int negatives = 0;
-        if (full instanceof ObjectNode body) {
+        if (full instanceof ObjectNode body && (validated || !choice)) {
             for (String field : required(bodySchema)) {
                 if (negatives++ >= MAX_NEGATIVE) {
                     break;
