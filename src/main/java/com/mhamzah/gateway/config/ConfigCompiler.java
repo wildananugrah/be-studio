@@ -436,15 +436,13 @@ public class ConfigCompiler {
         }
 
         private Map<String, CompiledSchema> compileSchemas(List<SchemaRow> rows) {
-            Map<String, CompiledSchema> out = new HashMap<>();
-            for (SchemaRow s : rows) {
-                try {
-                    out.put(s.code(), CompiledSchema.compile(s.code(), s.schemaText()));
-                } catch (IllegalArgumentException e) {
-                    errors.add("json schema '" + s.code() + "': " + e.getMessage());
-                }
-            }
-            return out;
+            // compiled together, so gw:CODE references between them resolve
+            Map<String, String> texts = new LinkedHashMap<>();
+            rows.forEach(s -> texts.put(s.code(), s.schemaText()));
+            CompiledSchema.Compilation compilation = CompiledSchema.compileAll(texts);
+            compilation.errors().forEach((code, messages) ->
+                    messages.forEach(m -> errors.add("json schema '" + code + "': " + m)));
+            return compilation.schemas();
         }
 
         private Map<String, LookupTable> buildLookups(List<LookupRow> rows) {
