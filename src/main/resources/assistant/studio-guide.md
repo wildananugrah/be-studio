@@ -13,7 +13,7 @@ Gateway Studio is the browser UI of the JSON gateway for configuring flows, targ
 
 - Logo and **Gateway Studio** title.
 - Menu: **Flows**, **Target systems**, **Lookups**, **Schemas**.
-- Every screen has its own address (`#/flows`, `#/flow/<CODE>/pipeline|mapping|tests|rows`, `#/targets`, `#/lookups`, `#/schemas`, `#/storages`, `#/audit`): the browser's **Back** / **Forward** move between screens, and a copied link (or a reload) opens the same screen. The **←** button at the start of a flow's header goes back to the previous Studio screen (to Flows when there is none). Navigating never drops unsaved changes; only closing or reloading the tab asks first.
+- Every screen has its own address (`#/flows`, `#/flow/<CODE>/pipeline|mapping|schemas|tests|rows`, `#/targets`, `#/lookups`, `#/schemas`, `#/storages`, `#/audit`): the browser's **Back** / **Forward** move between screens, and a copied link (or a reload) opens the same screen. The **←** button at the start of a flow's header goes back to the previous Studio screen (to Flows when there is none). Navigating never drops unsaved changes; only closing or reloading the tab asks first.
 - **unsaved changes** (amber) and **Discard** when something was edited. Discard asks for confirmation in a dialog, then reloads from the database.
 - **Every delete asks first**: deleting a flow, step, mapping rule, target system or its header, lookup or lookup entry, schema, test case, removing a policy chip, clearing the assistant conversation and resetting an edited sample all open a confirmation dialog naming what goes (and what still uses it). Enter or the red button confirms; Esc, Cancel or a click outside cancels. Deletes only change the draft until Save & reload.
 - Host of the gateway (e.g. `localhost:8080`).
@@ -105,6 +105,16 @@ Edit the mapping rules of one step (STEP_REQUEST: what that call sends) or of th
   - **+ Constant rule** adds a rule with a constant value.
   - Rules run: value → default → lookup → converter → field handler → required check → write.
 - Right (dark): **LIVE PREVIEW**. The server runs the real rules (real converters, lookups, field handlers) on the sample data and shows the request line (method, resolved base URL, path, query) or `HTTP/1.1 <status>`, headers and body, plus mapping errors. **SAMPLE CONTEXT** shows the generated sample; edit it (kept in the tab only) or **Regenerate from rules**.
+
+### Schemas tab
+
+A read-only overview of the data the flow handles, in pipeline order; it follows unsaved edits. One card each:
+
+- **Client request**: the request schema; without one, the body fields the flow's rules, body templates and expressions read. Path variables, query parameters and headers it reads are listed above the body.
+- **Each external call** (a step calling a target system; database query, storage, transform and condition steps are not shown), titled `<order> · <name> → <TARGET>` with its method and path: **Sends** = its mapping rules (BODY targets as a tree, PATH / QUERY / HEADER as lines; M when the rule is required) or its body template's keys; **Receives** = its response schema, else its response example (types from the values), else the fields later rules read from it.
+- **Client response**: the response schema, else its FLOW_RESPONSE rules; then one card per named response.
+
+Each column names where its fields come from: a schema code (click → opens it on the Schemas screen), "mapping rules" / "body template" (click → opens that scope in the Mapping tab), "response example" or "fields the flow reads". Rows show name, type and M/O (blank when unknown); hover a field marked ⓘ for its description, allowed values or format. `gw:` references are followed; a `oneOf` / `anyOf` body (e.g. a router's request) shows each option separately, labelled with its schema code. A broken schema shows its problem in its card; nesting stops at 8 levels with a "…" row (also ends reference cycles).
 
 ### Tests tab (unit test documents)
 

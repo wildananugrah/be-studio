@@ -1,7 +1,7 @@
 // Gateway Studio: edits gw_flow, gw_flow_step, gw_mapping_rule, gw_target_system(_header) and gw_lookup_entry
 // through /studio/api (StudioController). Everything is edited in memory; "Save & reload" writes it in one go.
 import { html, render, Component } from './vendor/htm-preact.js';
-import { toks } from './flow-fields.js';
+import { toks, flowOverview } from './flow-fields.js';
 
 const C = { in: 'oklch(0.56 0.13 255)', call: 'oklch(0.62 0.17 42)', step: 'oklch(0.53 0.15 300)', out: 'oklch(0.55 0.12 160)', err: 'oklch(0.57 0.19 25)', flow: 'oklch(0.45 0.02 260)', java: 'oklch(0.7 0.13 85)', sql: 'oklch(0.52 0.12 200)', file: 'oklch(0.55 0.14 135)', tf: 'oklch(0.5 0.13 330)', cond: 'oklch(0.5 0.14 285)' };
 const MC = { GET: 'oklch(0.52 0.11 160)', POST: 'oklch(0.6 0.17 42)', PUT: 'oklch(0.52 0.13 255)', PATCH: 'oklch(0.5 0.15 300)', DELETE: 'oklch(0.55 0.19 25)' };
@@ -733,7 +733,7 @@ class App extends Component {
     if (m[1] === 'flow') {
       const i = this.state.cfg.flows.findIndex(f => f.code === decodeURIComponent(m[2] || ''));
       if (i < 0) return null;
-      return { screen: 'flow', cur: i, tab: ['pipeline', 'mapping', 'tests', 'rows'].includes(m[3]) ? m[3] : 'pipeline', sel: { kind: 'flow' }, scope: 'resp', preview: null };
+      return { screen: 'flow', cur: i, tab: ['pipeline', 'mapping', 'schemas', 'tests', 'rows'].includes(m[3]) ? m[3] : 'pipeline', sel: { kind: 'flow' }, scope: 'resp', preview: null };
     }
     return ['flows', 'targets', 'lookups', 'schemas', 'storages', 'audit'].includes(m[1]) ? { screen: m[1] } : null;
   }
@@ -1967,7 +1967,7 @@ class App extends Component {
   // ---------- one flow ----------
   renderFlow(f) {
     const s = this.state;
-    const tabs = [['Pipeline', 'pipeline'], ['Mapping', 'mapping'], ['Tests', 'tests'], ['Rows (SQL)', 'rows']];
+    const tabs = [['Pipeline', 'pipeline'], ['Mapping', 'mapping'], ['Schemas', 'schemas'], ['Tests', 'tests'], ['Rows (SQL)', 'rows']];
     return html`
       <div style="flex:1;min-height:0;display:flex;flex-direction:column">
         <div style="height:48px;flex:none;display:flex;align-items:center;gap:12px;padding:0 16px;background:#FFFFFF;border-bottom:1px solid #E4E1D8;overflow:hidden">
@@ -1987,6 +1987,7 @@ class App extends Component {
         </div>
         ${s.tab === 'pipeline' && this.renderPipeline(f)}
         ${s.tab === 'mapping' && this.renderMapping(f)}
+        ${s.tab === 'schemas' && this.renderSchemasTab(f)}
         ${s.tab === 'rows' && this.renderRows(f)}
         ${s.tab === 'tests' && this.renderTests(f)}
       </div>`;
@@ -2978,7 +2979,7 @@ class App extends Component {
       const parts = nav.getAttribute('data-nav').replace(/^studio:/, '').split('/');
       if (parts[0] === 'flow') {
         const i = this.state.cfg.flows.findIndex(f => f.code === parts[1]);
-        if (i >= 0) this.setState({ screen: 'flow', cur: i, tab: ['pipeline', 'mapping', 'tests', 'rows'].includes(parts[2]) ? parts[2] : 'pipeline', sel: { kind: 'flow' }, scope: 'resp', preview: null }, () => this.changed());
+        if (i >= 0) this.setState({ screen: 'flow', cur: i, tab: ['pipeline', 'mapping', 'schemas', 'tests', 'rows'].includes(parts[2]) ? parts[2] : 'pipeline', sel: { kind: 'flow' }, scope: 'resp', preview: null }, () => this.changed());
       } else if (['flows', 'targets', 'lookups', 'schemas'].includes(parts[0])) this.setState({ screen: parts[0] });
       return;
     }
@@ -3223,6 +3224,58 @@ class App extends Component {
             <button id="spec-ok" class="btn-dark" disabled=${busy || !chosen} onClick=${() => this.generateSpec()} style=${`display:flex;align-items:center;gap:8px;border:0;background:#17181C;color:#fff;border-radius:7px;padding:8px 14px;cursor:pointer;font-weight:600${busy ? ';opacity:1' : ''}`}>
               ${busy && html`<span class="spin"></span>`}${busy ? 'Generating ' + label + '…' : 'Generate ' + label}</button>
           </div>
+        </div>
+      </div>`;
+  }
+
+  /** Read-only overview of the fields a flow takes and gives, and of what each external call sends and receives. */
+  renderSchemasTab(f) {
+    const blocks = flowOverview(f, { texts: SCHEMA_TEXT, isExternal: st => !isSql(st) && !isStore(st) && !isTransform(st) && !isCondition(st) });
+    const accent = b => (b.key === 'request' ? C.in : b.key === 'response' || b.key.startsWith('resp:') ? C.out : C.call);
+    const toMap = scope => this.setState({ tab: 'mapping', scope, preview: null }, () => this.changed());
+    const source = src => {
+      const style = `font:600 10.5px ${MONO};padding:2px 7px;border-radius:4px;white-space:nowrap;border:0;background:#EFEDE6;color:#3E4047`;
+      if (src.schema) return html`<button class="btn-line" title="Open this schema" onClick=${() => this.openSchema(src.schema)} style=${style + ';cursor:pointer'}>${src.label} →</button>`;
+      if (src.scope) return html`<button class="btn-line" title="Open this mapping" onClick=${() => toMap(src.scope)} style=${style + ';cursor:pointer'}>${src.label} →</button>`;
+      return html`<span style=${style}>${src.label}</span>`;
+    };
+    const rows = (fields, depth) => fields.map(fd => html`
+      <div title=${fd.notes} style=${`display:grid;grid-template-columns:minmax(0,1fr) auto 18px;gap:10px;padding:2px 0 2px ${depth * 14}px;font:11.5px ${MONO};border-bottom:1px dashed #EFEDE6`}>
+        <span style=${`overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${fd.name === '…' ? '#9A9CA2' : '#17181C'}`}>${fd.name}${fd.notes && fd.name !== '…' ? html`<span style="color:#B5B3AB"> ⓘ</span>` : ''}</span>
+        <span style="color:#6A6D75">${fd.type}</span>
+        <span style=${`color:${fd.required ? 'oklch(0.5 0.15 25)' : '#9A9CA2'};text-align:right`}>${fd.required === null ? '' : fd.required ? 'M' : 'O'}</span>
+      </div>
+      ${rows(fd.children, depth + 1)}`);
+    const column = col => html`
+      <div style="flex:1;min-width:280px;display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style=${`font:600 10px ${MONO};letter-spacing:.08em;color:#6A6D75;text-transform:uppercase`}>${col.heading}</span>
+          ${source(col.source)}
+        </div>
+        ${col.params.map(p => html`<div style=${`font:11px ${MONO};color:#6A6D75`}><b style="font-weight:600;color:#3E4047">${p.type}</b> ${p.names.join(', ')}</div>`)}
+        ${col.shape.problem ? html`<div style="font-size:12px;color:oklch(0.5 0.18 25)">${col.shape.problem}</div>`
+          : col.shape.options.every(o => !o.fields.length) ? html`<div style="font-size:12px;color:#9A9CA2">No fields known: no schema, example or rules.</div>`
+          : html`<div style="display:flex;gap:14px;flex-wrap:wrap">${col.shape.options.map((o, i) => html`
+              <div style="flex:1;min-width:220px">
+                ${o.label && html`<div style=${`font:600 11px ${MONO};color:${C.in};margin-bottom:3px`}>${col.shape.options.length > 1 ? 'option ' + (i + 1) + ' · ' : ''}${o.label}</div>`}
+                ${rows(o.fields, 0)}
+              </div>`)}</div>`}
+      </div>`;
+    return html`
+      <div style="flex:1;min-height:0;overflow:auto;padding:22px 28px 60px">
+        <div style="max-width:1100px;margin:0 auto;display:flex;flex-direction:column;gap:14px">
+          <div>
+            <div style="font-size:18px;font-weight:600;letter-spacing:-0.01em">Schemas</div>
+            <div style="font-size:12.5px;color:#6A6D75;margin-top:4px">The fields this flow takes and gives, and what each external call sends and receives, in pipeline order. Read-only; follows unsaved edits. Hover a field marked ⓘ for its description.</div>
+          </div>
+          ${blocks.map(b => html`
+            <div style=${`background:#fff;border:1px solid #E4E1D8;border-left:3px solid ${accent(b)};border-radius:9px;padding:12px 16px 14px`}>
+              <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+                <span style="font-weight:600;font-size:13.5px">${b.title}</span>
+                ${b.detail && html`<span style=${`font:11.5px ${MONO};color:#6A6D75`}>${b.detail}</span>`}
+              </div>
+              <div style="display:flex;gap:24px;flex-wrap:wrap">${b.columns.map(column)}</div>
+            </div>`)}
         </div>
       </div>`;
   }
