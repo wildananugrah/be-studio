@@ -16,6 +16,10 @@ variables:
   DB_PASS: ""
   DB_URL: ""
 
+default:
+  tags:
+    - docker-dev
+
 trivy_dependency_scan:
   stage: sast
   image:
