@@ -1,6 +1,7 @@
 // Gateway Studio: edits gw_flow, gw_flow_step, gw_mapping_rule, gw_target_system(_header) and gw_lookup_entry
 // through /studio/api (StudioController). Everything is edited in memory; "Save & reload" writes it in one go.
 import { html, render, Component } from './vendor/htm-preact.js';
+import { toks } from './flow-fields.js';
 
 const C = { in: 'oklch(0.56 0.13 255)', call: 'oklch(0.62 0.17 42)', step: 'oklch(0.53 0.15 300)', out: 'oklch(0.55 0.12 160)', err: 'oklch(0.57 0.19 25)', flow: 'oklch(0.45 0.02 260)', java: 'oklch(0.7 0.13 85)', sql: 'oklch(0.52 0.12 200)', file: 'oklch(0.55 0.14 135)', tf: 'oklch(0.5 0.13 330)', cond: 'oklch(0.5 0.14 285)' };
 const MC = { GET: 'oklch(0.52 0.11 160)', POST: 'oklch(0.6 0.17 42)', PUT: 'oklch(0.52 0.13 255)', PATCH: 'oklch(0.5 0.15 300)', DELETE: 'oklch(0.55 0.19 25)' };
@@ -253,8 +254,7 @@ function tlsOut(t) {
   return { mode: x.mode === 'INSECURE' ? 'INSECURE' : null, trustStore: null, trustStorePassword: null, keyStore: null, keyStorePassword: null };
 }
 
-// ---------- JSON paths and sample data ----------
-function toks(p) { const t = []; const s = String(p || '').replace(/^\$/, ''); const re = /\.([A-Za-z0-9_-]+)|\['([^']*)'\]|\[(\*|\d+)\]/g; let m; while ((m = re.exec(s))) t.push(m[1] !== undefined ? m[1] : m[2] !== undefined ? m[2] : (m[3] === '*' ? '*' : Number(m[3]))); return t; }
+// ---------- JSON paths and sample data (toks: flow-fields.js) ----------
 function place(root, path, value) {
   const t = toks(path); if (!t.length || !['request', 'steps'].includes(t[0])) return;
   let o = root;
