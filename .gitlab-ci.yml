@@ -315,9 +315,9 @@ tenable_scan_image:
   rules:
     - if: '$CI_COMMIT_REF_NAME == "development" && $CI_PIPELINE_SOURCE == "push"'
       when: manual
+  # TENABLE_API_URL / TENABLE_API_TOKEN come from Settings > CI/CD > Variables; don't redeclare them here
+  # (TENABLE_API_URL: $TENABLE_API_URL leaves the literal text "$TENABLE_API_URL" when the variable isn't available)
   variables:
-    TENABLE_API_URL: $TENABLE_API_URL
-    TENABLE_API_TOKEN: $TENABLE_API_TOKEN
     TENABLE_PIPELINE_RUN_ID: $CI_PIPELINE_ID
     TENABLE_PIPELINE_RUN_TRIGGER: "gitlab_ci"
     TENABLE_PIPELINE_RUN_URL: "$CI_PIPELINE_URL"
@@ -325,6 +325,11 @@ tenable_scan_image:
     HTTPS_PROXY: $PROXY
     NO_PROXY: "${DEV_REGISTRY_HOSTS},gitlab-dc.bni.co.id,127.0.0.1,localhost,jtl-tkgiharbor.hq.bni.co.id"
   script:
+    - |
+      if [ -z "${TENABLE_API_URL:-}" ] || [ -z "${TENABLE_API_TOKEN:-}" ]; then
+        echo "TENABLE_API_URL / TENABLE_API_TOKEN not available to this job: check Settings > CI/CD > Variables (Protected flag, environment scope)"
+        exit 1
+      fi
     - IMAGE_NAME="${DEV_REGISTRY_HOSTS}/${DEV_REGISTRY_PROJECT}/${CI_PROJECT_NAME}:${IMAGE_TAG}"
     - echo "Starting Tenable Image Scan for $IMAGE_NAME"
     - |
