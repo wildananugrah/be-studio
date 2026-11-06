@@ -76,19 +76,19 @@ objects:
       DB_USERNAME: "TBAPIGW"
       DB_PASSWORD: "AE4ApjsrKjnq"
       DB_POOL_MAX: "10"
-      DB_POOL_MIN_IDLE: "2"
+      DB_POOL_MIN_IDLE: "1"
       DB_POOL_CONNECTION_TIMEOUT_MS: "30000"
       DB_POOL_LEAK_DETECTION_MS: "0"
-      LIQUIBASE_ENABLED: "false"
+      LIQUIBASE_ENABLED: "true"
       GATEWAY_ADMIN_TOKEN: "supersecretpassword!"
       GATEWAY_AUDIT_ENABLED: "true"
-      GATEWAY_STUDIO_ENABLED: "false"
-      GATEWAY_STUDIO_MODE: "edit"
+      GATEWAY_STUDIO_ENABLED: "true"
+      GATEWAY_STUDIO_MODE: "view-only"
       GATEWAY_ASSISTANT_ENABLED: "false"
       GATEWAY_DOCS_ENABLED: "true"
       GATEWAY_DOCS_TITLE: "Transaction Banking Platform B2B Gateway"
       GATEWAY_AUDIT_PARTITION_INTERVAL: "MONTH"
-      GATEWAY_AUDIT_RETENTION: ""
+      GATEWAY_AUDIT_RETENTION: "30d"
       GATEWAY_MASKING_FIELDS: "pin,password,cardNo,cvv,authorization,x-admin-token"
       GATEWAY_SNAP_SERVICE_CODE_PATTERN: "[0-9A-Z]{2}[a-z]?"
       GATEWAY_SNAP_NO_BODY_STATUS: "200"
@@ -165,5 +165,5 @@ parameters:
     required: true
   - name: GROUP_APP_NAME
     description: group application name
-    value: ""
+    value: "gateway"
     required: true
