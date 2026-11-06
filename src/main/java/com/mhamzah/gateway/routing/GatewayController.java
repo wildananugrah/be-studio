@@ -39,7 +39,8 @@ import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * Catch-all endpoint under {@code gateway.api-base-path}; every request is routed by method + path. The body is
+ * Catch-all endpoint under {@code gateway.api-base-path} (the prefix comes from {@link GatewayWebConfiguration});
+ * every request is routed by method + path. The body is
  * read by its content type:
  * <ul>
  *   <li>JSON (or anything not listed below): parsed as JSON into {@code $.request.body}.</li>
@@ -68,18 +69,18 @@ public class GatewayController {
      * Read-only methods, kept apart from the state-changing ones below (Sonar S3752 / CSRF). A request without a body
      * lands here whatever its Content-Type, with the body empty.
      */
-    @RequestMapping(path = "${gateway.api-base-path:/api}/**", method = {GET, HEAD, OPTIONS})
+    @RequestMapping(path = "/**", method = {GET, HEAD, OPTIONS})
     public ResponseEntity<byte[]> handleRead(HttpServletRequest request, @RequestBody(required = false) String body) {
         return route(request, body, null, Map.of());
     }
 
-    @RequestMapping(path = "${gateway.api-base-path:/api}/**", method = {POST, PUT, PATCH, DELETE})
+    @RequestMapping(path = "/**", method = {POST, PUT, PATCH, DELETE})
     public ResponseEntity<byte[]> handle(HttpServletRequest request, @RequestBody(required = false) String body) {
         return route(request, body, null, Map.of());
     }
 
     /** File uploads: text parts are the body fields, parts with a file name are files. */
-    @RequestMapping(path = "${gateway.api-base-path:/api}/**", method = {POST, PUT, PATCH, DELETE},
+    @RequestMapping(path = "/**", method = {POST, PUT, PATCH, DELETE},
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<byte[]> handleMultipart(HttpServletRequest request) throws IOException, ServletException {
         ObjectNode form = JsonNodeFactory.instance.objectNode();
@@ -115,7 +116,7 @@ public class GatewayController {
     }
 
     /** HTML-style forms: the fields (not the query string's) are the body. */
-    @RequestMapping(path = "${gateway.api-base-path:/api}/**", method = {POST, PUT, PATCH, DELETE},
+    @RequestMapping(path = "/**", method = {POST, PUT, PATCH, DELETE},
             consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
     public ResponseEntity<byte[]> handleForm(HttpServletRequest request) {
         Map<String, String> query = parseQuery(request.getQueryString());
@@ -130,7 +131,7 @@ public class GatewayController {
     }
 
     /** A raw binary body (a PDF, an image, ...) is one file, field {@code body}. */
-    @RequestMapping(path = "${gateway.api-base-path:/api}/**", method = {POST, PUT, PATCH, DELETE},
+    @RequestMapping(path = "/**", method = {POST, PUT, PATCH, DELETE},
             consumes = {MediaType.APPLICATION_OCTET_STREAM_VALUE,
             MediaType.APPLICATION_PDF_VALUE, "image/*", "audio/*", "video/*", "application/zip", "application/gzip",
             "text/csv", "application/msword", "application/vnd.ms-excel",
