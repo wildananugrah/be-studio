@@ -176,8 +176,10 @@ unit-test:
       fi
   after_script:
     # On failure: which test classes failed, and the first Docker / Testcontainers errors (full logs are in the artifacts)
-    - grep -hE "Tests run:.*(Failures|Errors): [1-9]" target/surefire-reports/*.txt 2>/dev/null | head -40 || true
-    - grep -hiE "testcontainers|docker" target/surefire-reports/*-output.txt 2>/dev/null | grep -iE "error|fail|refused|denied|not found|unknown" | sort -u | head -30 || true
+    - |
+      grep -hE "Tests run:.*(Failures|Errors): [1-9]" target/surefire-reports/*.txt 2>/dev/null | head -40 || true
+    - |
+      grep -hiE "testcontainers|docker" target/surefire-reports/*-output.txt 2>/dev/null | grep -iE "error|fail|refused|denied|not found|unknown" | sort -u | head -30 || true
   coverage: "/Total.*?([0-9]{1,3})%/"
   artifacts:
     when: always
