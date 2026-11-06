@@ -17,8 +17,6 @@ variables:
   DB_USER: ""
   DB_PASS: ""
   DB_URL: ""
-  # Testcontainers pulls Docker Hub images (postgres, s3mock, ryuk) through the Nexus Docker Hub proxy
-  TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: "nexus-dev.bni.co.id/docker-wdl/"
 
 default:
   tags:
@@ -84,7 +82,7 @@ sonarqube:
   script:
     - |
       mvn -s ~/.m2/settings.xml \
-      clean verify \
+      clean verify -Pno-docker \
       -Dspring.profiles.active=test \
       org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
       -Dsonar.projectKey=$CI_PROJECT_NAME \
@@ -110,7 +108,7 @@ unit-test:
     - echo "Running unit tests..."
     - |
       mvn -s ~/.m2/settings.xml \
-      clean test jacoco:report \
+      clean test jacoco:report -Pno-docker \
       -Dspring.profiles.active=test 2>&1 | tee test.log
 
     # Added: Print coverage to console so the 'coverage' regex can find it

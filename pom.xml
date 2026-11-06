@@ -278,6 +278,24 @@
 				<it.db>oracle</it.db>
 			</properties>
 		</profile>
+		<profile>
+			<!-- CI runners without Docker: skip the Testcontainers tests: ./mvnw test -Pno-docker -->
+			<id>no-docker</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-surefire-plugin</artifactId>
+						<configuration>
+							<excludes>
+								<exclude>**/*IntegrationTest.java</exclude>
+								<exclude>**/S3FileStoreTest.java</exclude>
+							</excludes>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
 	</profiles>
 
 </project>
