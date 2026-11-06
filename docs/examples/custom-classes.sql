@@ -12,8 +12,9 @@
 -- Remove again:  DELETE FROM gw_flow WHERE code = 'PARTNER_ACCOUNT_INQUIRY';   then make reload
 
 -- 1. The flow, with its flow-level handlers -------------------------------------------------------
-INSERT INTO gw_flow (code, name, http_method, path_pattern, request_handler, error_handler)
-VALUES ('PARTNER_ACCOUNT_INQUIRY', 'Partner account inquiry', 'GET', '/v3/accounts/{accountNo}',
+-- service_code is required and unique within the flow's application (DEFAULT here)
+INSERT INTO gw_flow (code, name, http_method, path_pattern, service_code, request_handler, error_handler)
+VALUES ('PARTNER_ACCOUNT_INQUIRY', 'Partner account inquiry', 'GET', '/v3/accounts/{accountNo}', '90',
         'channelGuard', 'partnerErrorHandler');
 
 -- 2. The target system, only if it doesn't exist yet (it does with the dev demo data) -------------

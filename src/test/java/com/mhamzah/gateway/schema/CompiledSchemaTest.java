@@ -43,7 +43,7 @@ class CompiledSchemaTest {
     @Test
     void rootLevelErrorsUseDollarLocation() {
         CompiledSchema s = CompiledSchema.compile("TRANSFER_REQ", SCHEMA);
-        assertThat(s.validate(mapper.readTree("{}"))).allSatisfy(m -> assertThat(m).startsWith("$: "));
+        assertThat(s.validate(mapper.readTree("{}"))).isNotEmpty().allSatisfy(m -> assertThat(m).startsWith("$: "));
     }
 
     @Test

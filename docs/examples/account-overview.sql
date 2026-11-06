@@ -31,8 +31,9 @@ WHERE NOT EXISTS (SELECT 1 FROM gw_lookup_entry e
                   WHERE e.lookup_code = v.lookup_code AND e.source_value = v.source_value);
 
 -- 1. The endpoint ---------------------------------------------------------------------------------
-INSERT INTO gw_flow (code, name, http_method, path_pattern)
-VALUES ('ACCOUNT_OVERVIEW', 'Account overview', 'GET', '/v2/accounts/{accountNo}/overview');
+-- service_code is required and unique within the flow's application (DEFAULT here)
+INSERT INTO gw_flow (code, name, http_method, path_pattern, service_code)
+VALUES ('ACCOUNT_OVERVIEW', 'Account overview', 'GET', '/v2/accounts/{accountNo}/overview', '91');
 
 -- 2. The downstream calls (same step_order = run in parallel) ------------------------------------
 INSERT INTO gw_flow_step (flow_id, name, step_order, target_system, http_method, path_template)

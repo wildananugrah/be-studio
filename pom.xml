@@ -22,6 +22,8 @@
 		<poi.version>5.5.1</poi.version>
 		<pdfbox.version>3.0.7</pdfbox.version>
 		<anthropic-java.version>2.70.0</anthropic-java.version>
+		<!-- 0.8.14+ is needed for Java 25 class files -->
+		<jacoco.version>0.8.14</jacoco.version>
 		<!-- Integration tests run against PostgreSQL by default; the oracle-it profile switches to Oracle Free -->
 		<it.db>postgres</it.db>
 	</properties>
@@ -214,6 +216,27 @@
 					</systemPropertyVariables>
 				</configuration>
 			</plugin>
+			<!-- Test coverage for the CI pipeline: target/site/jacoco/jacoco.xml (and index.html) after mvn test -->
+			<plugin>
+				<groupId>org.jacoco</groupId>
+				<artifactId>jacoco-maven-plugin</artifactId>
+				<version>${jacoco.version}</version>
+				<executions>
+					<execution>
+						<id>prepare-agent</id>
+						<goals>
+							<goal>prepare-agent</goal>
+						</goals>
+					</execution>
+					<execution>
+						<id>report</id>
+						<phase>test</phase>
+						<goals>
+							<goal>report</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
 			<!--
 				Lets DBAs generate DDL for DBA-managed schemas, e.g.
 				./mvnw liquibase:updateSQL -Dliquibase.url=... -Dliquibase.username=... -Dliquibase.password=...
@@ -254,6 +277,24 @@
 			<properties>
 				<it.db>oracle</it.db>
 			</properties>
+		</profile>
+		<profile>
+			<!-- CI runners without Docker: skip the Testcontainers tests: ./mvnw test -Pno-docker -->
+			<id>no-docker</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-surefire-plugin</artifactId>
+						<configuration>
+							<excludes>
+								<exclude>**/*IntegrationTest.java</exclude>
+								<exclude>**/S3FileStoreTest.java</exclude>
+							</excludes>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
 		</profile>
 	</profiles>
 

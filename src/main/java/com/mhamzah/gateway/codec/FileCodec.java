@@ -45,7 +45,33 @@ public final class FileCodec implements BodyCodec {
         if (contentType == null || contentType.isBlank()) {
             return true;
         }
+        return !isJson(contentType);
+    }
+
+    /**
+     * {@code application/json} or {@code application/<subtype>+json}, parameters allowed: the types of
+     * {@code application/([a-z0-9.+-]*\+)?json.*}, checked in linear time (the regex backtracks on a long subtype).
+     */
+    public static boolean isJson(String contentType) {
+        if (contentType == null) {
+            return false;
+        }
         String type = contentType.toLowerCase(Locale.ROOT);
-        return !type.matches("application/([a-z0-9.+-]*\\+)?json.*");
+        String prefix = "application/";
+        if (!type.startsWith(prefix)) {
+            return false;
+        }
+        for (int i = prefix.length(); ; i++) {
+            if (type.startsWith("json", i) && (i == prefix.length() || type.charAt(i - 1) == '+')) {
+                return true;
+            }
+            if (i >= type.length() || !subtypeChar(type.charAt(i))) {
+                return false;
+            }
+        }
+    }
+
+    private static boolean subtypeChar(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '+' || c == '-';
     }
 }
