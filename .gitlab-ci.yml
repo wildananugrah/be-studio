@@ -71,7 +71,7 @@ sonarqube:
   stage: sast
   tags:
     - docker-dev
-  image: jtl-tkgiharbor.hq.bni.co.id/wss-dev/ubi9/openjdk-21:1.22-1
+  image: nexus-dev.bni.co.id/docker-wdl-redhat/ubi9/openjdk-25:1.24-3.1792711405
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"'
   before_script:
@@ -96,7 +96,7 @@ unit-test:
   stage: unit-test
   tags:
     - docker-dev
-  image: jtl-tkgiharbor.hq.bni.co.id/wss-dev/ubi9/openjdk-21:1.22-1
+  image: nexus-dev.bni.co.id/docker-wdl-redhat/ubi9/openjdk-25:1.24-3.1792711405
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"'
   before_script:
@@ -147,7 +147,7 @@ unit-test:
           }
           END { if (query != "") print query; }
         ' test.log | sort -u > queries.sql
-      
+
         if [ -s queries.sql ]; then
           echo "Found $(wc -l < queries.sql) unique queries"
         else
@@ -157,7 +157,7 @@ unit-test:
         echo "Warning: test.log not found"
         touch queries.sql
       fi
-  coverage: '/Total.*?([0-9]{1,3})%/'
+  coverage: "/Total.*?([0-9]{1,3})%/"
   artifacts:
     when: always
     paths:
@@ -186,13 +186,13 @@ explain_sql_queries:
       when: manual
   script:
     - echo "Generating execution plans..."
-    - set -e  # Move this to its own line
+    - set -e # Move this to its own line
     - |
       if [ ! -f queries.sql ]; then
         echo "Error: queries.sql not found"
         exit 1
       fi
-      
+
       query_count=$(wc -l < queries.sql)
       echo "Found $query_count queries to analyze"
 
@@ -366,7 +366,7 @@ deploy_non_prod:
       -p NS_NAME=$NS_NAME \
       -p IMAGE_NAME=$REGISTRY_HOST/$REGISTRY_PROJECT/$CI_PROJECT_NAME:$IMAGE_TAG \
       -p APP_NAME=$CI_PROJECT_NAME | oc apply -f -
-      
+
       # 2. Check if deployment exists, then trigger rollout restart
       if oc get deployment $CI_PROJECT_NAME >/dev/null 2>&1; then
         echo "Deployment $CI_PROJECT_NAME exists. Triggering rollout restart..."
@@ -384,7 +384,7 @@ tag_image_prod:
   variables:
     GIT_DEPTH: 0
   rules:
-    - if: '$CI_COMMIT_TAG =~ /^CR.*$/'
+    - if: "$CI_COMMIT_TAG =~ /^CR.*$/"
       when: manual
   before_script:
     - BRANCH_NAME=$(git branch -r --contains "$CI_COMMIT_SHA" | grep 'origin/master' || true)
@@ -411,7 +411,7 @@ deploy_prod:
   variables:
     GIT_DEPTH: 0
   rules:
-    - if: '$CI_COMMIT_TAG =~ /^CR.*$/'
+    - if: "$CI_COMMIT_TAG =~ /^CR.*$/"
       when: manual
   before_script:
     - BRANCH_NAME=$(git branch -r --contains "$CI_COMMIT_SHA" | grep 'origin/master' || true)
@@ -429,7 +429,7 @@ deploy_prod:
       -p NS_NAME=$NS_NAME \
       -p IMAGE_NAME=$PROD_REGISTRY_HOSTS/$PROD_REGISTRY_PROJECT/$CI_PROJECT_NAME:$IMAGE_TAG \
       -p APP_NAME=$CI_PROJECT_NAME | oc apply -f -
-      
+
       # 2. Check if deployment exists, then trigger rollout restart
       if oc get deployment $CI_PROJECT_NAME >/dev/null 2>&1; then
         echo "Deployment $CI_PROJECT_NAME exists. Triggering rollout restart..."

@@ -22,6 +22,8 @@
 		<poi.version>5.5.1</poi.version>
 		<pdfbox.version>3.0.7</pdfbox.version>
 		<anthropic-java.version>2.70.0</anthropic-java.version>
+		<!-- 0.8.14+ is needed for Java 25 class files -->
+		<jacoco.version>0.8.14</jacoco.version>
 		<!-- Integration tests run against PostgreSQL by default; the oracle-it profile switches to Oracle Free -->
 		<it.db>postgres</it.db>
 	</properties>
@@ -213,6 +215,27 @@
 						<it.db>${it.db}</it.db>
 					</systemPropertyVariables>
 				</configuration>
+			</plugin>
+			<!-- Test coverage for the CI pipeline: target/site/jacoco/jacoco.xml (and index.html) after mvn test -->
+			<plugin>
+				<groupId>org.jacoco</groupId>
+				<artifactId>jacoco-maven-plugin</artifactId>
+				<version>${jacoco.version}</version>
+				<executions>
+					<execution>
+						<id>prepare-agent</id>
+						<goals>
+							<goal>prepare-agent</goal>
+						</goals>
+					</execution>
+					<execution>
+						<id>report</id>
+						<phase>test</phase>
+						<goals>
+							<goal>report</goal>
+						</goals>
+					</execution>
+				</executions>
 			</plugin>
 			<!--
 				Lets DBAs generate DDL for DBA-managed schemas, e.g.
