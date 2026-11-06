@@ -138,7 +138,7 @@ public class GatewayController {
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
     public ResponseEntity<byte[]> handleBinary(HttpServletRequest request) throws IOException {
-        byte[] bytes = request.getInputStream().readNBytes((int) Math.min(Integer.MAX_VALUE - 8, maxRawBytes + 1));
+        byte[] bytes = request.getInputStream().readNBytes((int) Math.min(Integer.MAX_VALUE - 8L, maxRawBytes + 1));
         if (bytes.length > maxRawBytes) {
             throw new MaxUploadSizeExceededException(maxRawBytes);
         }

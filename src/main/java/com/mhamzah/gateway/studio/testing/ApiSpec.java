@@ -535,10 +535,8 @@ public final class ApiSpec {
     }
 
     private static Map.Entry<String, JsonNode> first(JsonNode content) {
-        for (Map.Entry<String, JsonNode> e : content.properties()) {
-            return e;
-        }
-        return null;
+        var it = content.properties().iterator();
+        return it.hasNext() ? it.next() : null;
     }
 
     private static String[] row(String key, String value) {

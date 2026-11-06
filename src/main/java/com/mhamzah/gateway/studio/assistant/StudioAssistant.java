@@ -178,8 +178,9 @@ public class StudioAssistant {
                 if (delta.isPresent()) {
                     sink.text(delta.get().text());
                 }
-                if (event.messageDelta().isPresent()) {
-                    var md = event.messageDelta().get();
+                var messageDelta = event.messageDelta();
+                if (messageDelta.isPresent()) {
+                    var md = messageDelta.get();
                     usage.put("outputTokens", md.usage().outputTokens());
                     stopReason = md.delta().stopReason().map(StopReason::asString).orElse(stopReason);
                     if (md.delta().stopReason().filter(StopReason.REFUSAL::equals).isPresent()) {

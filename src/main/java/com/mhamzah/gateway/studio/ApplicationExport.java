@@ -31,7 +31,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import tools.jackson.core.JacksonException;
 
@@ -53,7 +52,20 @@ final class ApplicationExport {
             List<Schema> schemas, List<Storage> storages, Map<String, List<String>> requires,
             List<String> replacedSecrets) {}
 
-    private static final Pattern SECRET_HEADER = Pattern.compile("(?i).*(auth|token|secret|password|api[-_]?key|signature).*");
+    /** Header names whose values are secrets: auth, token, secret, password, api key, signature (any case). */
+    static boolean isSecretHeader(String name) {
+        if (name == null) {
+            return false;
+        }
+        String n = name.toLowerCase(Locale.ROOT);
+        for (String part : new String[] {"auth", "token", "secret", "password", "apikey", "api-key", "api_key",
+                "signature"}) {
+            if (n.contains(part)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     private ApplicationExport() {}
 
@@ -169,7 +181,7 @@ final class ApplicationExport {
                 secret(tls.trustStorePassword(), t.code() + "_TLS_TRUST_STORE_PASSWORD", replaced),
                 tls.keyStore(), secret(tls.keyStorePassword(), t.code() + "_TLS_KEY_STORE_PASSWORD", replaced));
         List<Header> headers = t.headers().stream()
-                .map(h -> SECRET_HEADER.matcher(h.name() == null ? "" : h.name()).matches()
+                .map(h -> isSecretHeader(h.name())
                         ? new Header(h.name(), secret(h.value(), t.code() + "_HEADER_" + h.name(), replaced)) : h)
                 .toList();
         return new Target(t.code(), t.baseUrl(), t.connectTimeoutMs(), t.readTimeoutMs(), t.bodyCodec(), t.enabled(),
