@@ -17,6 +17,8 @@ variables:
   DB_USER: ""
   DB_PASS: ""
   DB_URL: ""
+  # Testcontainers pulls Docker Hub images (postgres, s3mock, ryuk) through the Nexus Docker Hub proxy
+  TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: "nexus-dev.bni.co.id/docker-wdl/"
 
 default:
   tags:
