@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import javax.sql.DataSource;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -168,7 +169,7 @@ class StudioWriter {
     private long insert(String sql, Object... params) {
         KeyHolder key = new GeneratedKeyHolder();
         jdbc.sql(sql).params(params).update(key, keyColumn);
-        return key.getKeyAs(Number.class).longValue();
+        return Objects.requireNonNull(key.getKeyAs(Number.class), "no generated key returned").longValue();
     }
 
     /** Oracle reports unquoted identifiers in upper case, PostgreSQL in lower case. */

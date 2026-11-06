@@ -322,7 +322,7 @@ public class StudioAssistant {
         try {
             String url = r.getURL().toString();
             int i = url.lastIndexOf("assistant/");
-            String p = i < 0 ? r.getFilename() : url.substring(i + "assistant/".length());
+            String p = i < 0 ? String.valueOf(r.getFilename()) : url.substring(i + "assistant/".length());
             return p.startsWith("project/") ? p.substring("project/".length()) : p;
         } catch (IOException e) {
             return String.valueOf(r.getFilename());

@@ -1,5 +1,13 @@
 package com.mhamzah.gateway.routing;
 
+import static org.springframework.web.bind.annotation.RequestMethod.DELETE;
+import static org.springframework.web.bind.annotation.RequestMethod.GET;
+import static org.springframework.web.bind.annotation.RequestMethod.HEAD;
+import static org.springframework.web.bind.annotation.RequestMethod.OPTIONS;
+import static org.springframework.web.bind.annotation.RequestMethod.PATCH;
+import static org.springframework.web.bind.annotation.RequestMethod.POST;
+import static org.springframework.web.bind.annotation.RequestMethod.PUT;
+
 import com.mhamzah.gateway.config.GatewayProperties;
 import com.mhamzah.gateway.engine.ExecutionResult;
 import com.mhamzah.gateway.engine.InboundRequest;
@@ -55,13 +63,23 @@ public class GatewayController {
         this.maxRawBytes = properties.files().maxSize().toBytes();
     }
 
-    @RequestMapping("${gateway.api-base-path:/api}/**")
+    /**
+     * Read-only methods, kept apart from the state-changing ones below (Sonar S3752 / CSRF). A request without a body
+     * lands here whatever its Content-Type, with the body empty.
+     */
+    @RequestMapping(path = "${gateway.api-base-path:/api}/**", method = {GET, HEAD, OPTIONS})
+    public ResponseEntity<byte[]> handleRead(HttpServletRequest request, @RequestBody(required = false) String body) {
+        return route(request, body, null, Map.of());
+    }
+
+    @RequestMapping(path = "${gateway.api-base-path:/api}/**", method = {POST, PUT, PATCH, DELETE})
     public ResponseEntity<byte[]> handle(HttpServletRequest request, @RequestBody(required = false) String body) {
         return route(request, body, null, Map.of());
     }
 
     /** File uploads: text parts are the body fields, parts with a file name are files. */
-    @RequestMapping(path = "${gateway.api-base-path:/api}/**", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @RequestMapping(path = "${gateway.api-base-path:/api}/**", method = {POST, PUT, PATCH, DELETE},
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<byte[]> handleMultipart(HttpServletRequest request) throws IOException, ServletException {
         ObjectNode form = JsonNodeFactory.instance.objectNode();
         Map<String, InboundFile> files = new LinkedHashMap<>();
@@ -96,7 +114,8 @@ public class GatewayController {
     }
 
     /** HTML-style forms: the fields (not the query string's) are the body. */
-    @RequestMapping(path = "${gateway.api-base-path:/api}/**", consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+    @RequestMapping(path = "${gateway.api-base-path:/api}/**", method = {POST, PUT, PATCH, DELETE},
+            consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
     public ResponseEntity<byte[]> handleForm(HttpServletRequest request) {
         Map<String, String> query = parseQuery(request.getQueryString());
         ObjectNode form = JsonNodeFactory.instance.objectNode();
@@ -110,7 +129,8 @@ public class GatewayController {
     }
 
     /** A raw binary body (a PDF, an image, ...) is one file, field {@code body}. */
-    @RequestMapping(path = "${gateway.api-base-path:/api}/**", consumes = {MediaType.APPLICATION_OCTET_STREAM_VALUE,
+    @RequestMapping(path = "${gateway.api-base-path:/api}/**", method = {POST, PUT, PATCH, DELETE},
+            consumes = {MediaType.APPLICATION_OCTET_STREAM_VALUE,
             MediaType.APPLICATION_PDF_VALUE, "image/*", "audio/*", "video/*", "application/zip", "application/gzip",
             "text/csv", "application/msword", "application/vnd.ms-excel",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -121,7 +141,7 @@ public class GatewayController {
             throw new MaxUploadSizeExceededException(maxRawBytes);
         }
         if (bytes.length == 0) {
-            // no body at all: Spring matches a request without Content-Type (a plain GET) as octet-stream; not a file
+            // no body at all: Spring matches a request without Content-Type as octet-stream; not a file
             return route(request, "", null, Map.of());
         }
         String name = InboundFile.filenameOf(request.getHeader(HttpHeaders.CONTENT_DISPOSITION));
