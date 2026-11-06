@@ -8,6 +8,7 @@ import static org.springframework.web.bind.annotation.RequestMethod.PATCH;
 import static org.springframework.web.bind.annotation.RequestMethod.POST;
 import static org.springframework.web.bind.annotation.RequestMethod.PUT;
 
+import com.mhamzah.gateway.codec.FileCodec;
 import com.mhamzah.gateway.config.GatewayProperties;
 import com.mhamzah.gateway.engine.ExecutionResult;
 import com.mhamzah.gateway.engine.InboundRequest;
@@ -103,7 +104,7 @@ public class GatewayController {
      * any {@code +json} type) and parses, so its nested fields can be mapped; otherwise the text as it is.
      */
     static tools.jackson.databind.JsonNode formValue(String text, String contentType) {
-        if (contentType != null && contentType.toLowerCase(Locale.ROOT).matches("application/([a-z0-9.+-]*\\+)?json.*")) {
+        if (FileCodec.isJson(contentType)) {
             try {
                 return com.mhamzah.gateway.mapping.JsonValues.MAPPER.readTree(text);
             } catch (RuntimeException e) {
