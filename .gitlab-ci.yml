@@ -71,7 +71,13 @@ sonarqube:
   stage: sast
   tags:
     - docker-dev
-  image: nexus-dev.bni.co.id/docker-wdl-redhat/ubi9/openjdk-25:1.24-3.1792711405
+  image:
+    name: nexus-dev.bni.co.id/docker-wdl-redhat/ubi9/openjdk-25:1.24-3.1792711405
+    docker:
+      user: root # /var/run/docker.sock is root:docker 660; the image's default uid 185 can't open it
+  variables:
+    # Testcontainers pulls postgres / s3mock / ryuk through the Nexus Docker Hub proxy
+    TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: "nexus-dev.bni.co.id/docker-wdl/"
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"'
   before_script:
@@ -82,7 +88,7 @@ sonarqube:
   script:
     - |
       mvn -s ~/.m2/settings.xml \
-      clean verify -Pno-docker \
+      clean verify \
       -Dspring.profiles.active=test \
       org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
       -Dsonar.projectKey=$CI_PROJECT_NAME \
@@ -96,7 +102,13 @@ unit-test:
   stage: unit-test
   tags:
     - docker-dev
-  image: nexus-dev.bni.co.id/docker-wdl-redhat/ubi9/openjdk-25:1.24-3.1792711405
+  image:
+    name: nexus-dev.bni.co.id/docker-wdl-redhat/ubi9/openjdk-25:1.24-3.1792711405
+    docker:
+      user: root # /var/run/docker.sock is root:docker 660; the image's default uid 185 can't open it
+  variables:
+    # Testcontainers pulls postgres / s3mock / ryuk through the Nexus Docker Hub proxy
+    TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: "nexus-dev.bni.co.id/docker-wdl/"
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"'
   before_script:
@@ -108,7 +120,7 @@ unit-test:
     - echo "Running unit tests..."
     - |
       mvn -s ~/.m2/settings.xml \
-      clean test jacoco:report -Pno-docker \
+      clean test jacoco:report \
       -Dspring.profiles.active=test 2>&1 | tee test.log
 
     # Added: Print coverage to console so the 'coverage' regex can find it
