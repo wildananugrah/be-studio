@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.regex.Pattern;
 import javax.sql.DataSource;
@@ -51,7 +52,8 @@ public class MsUserRepository {
                         + " VALUES (?, ?, ?, ?, ?, ?, ?)")
                 .params(username, fullName, email, phone, status, now, now)
                 .update(key, keyColumn);
-        return findById(key.getKeyAs(Number.class).longValue()).orElseThrow();
+        return findById(Objects.requireNonNull(key.getKeyAs(Number.class), "no generated key returned").longValue())
+                .orElseThrow();
     }
 
     public Optional<MsUser> findById(long id) {

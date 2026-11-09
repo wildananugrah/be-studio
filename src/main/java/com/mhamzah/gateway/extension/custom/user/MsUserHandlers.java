@@ -154,7 +154,7 @@ public class MsUserHandlers {
 
     private static Fields fields(JsonNode body, List<String> errors) {
         String email = text(body, "email");
-        if (email != null && (email.length() > 100 || !email.matches("[^@\\s]+@[^@\\s]+\\.[^@\\s]+"))) {
+        if (email != null && (email.length() > 100 || !isEmail(email))) {
             errors.add("email is not a valid address");
         }
         String phone = text(body, "phone");
@@ -224,6 +224,20 @@ public class MsUserHandlers {
     private static String query(ExecutionContext ctx, String name) {
         JsonNode v = ctx.read("$.request.query." + name);
         return v == null || v.asString().isBlank() ? null : v.asString().trim();
+    }
+
+    /**
+     * {@code [^@\s]+@[^@\s]+\.[^@\s]+} without a backtracking regex (Sonar S5852): one '@', no whitespace, a local
+     * part, and a domain with a dot that is neither its first nor its last character.
+     */
+    static boolean isEmail(String email) {
+        int at = email.indexOf('@');
+        if (at <= 0 || email.indexOf('@', at + 1) >= 0 || email.chars().anyMatch(Character::isWhitespace)) {
+            return false;
+        }
+        String domain = email.substring(at + 1);
+        int dot = domain.indexOf('.', 1);
+        return dot > 0 && dot < domain.length() - 1;
     }
 
     private static String text(JsonNode body, String field) {

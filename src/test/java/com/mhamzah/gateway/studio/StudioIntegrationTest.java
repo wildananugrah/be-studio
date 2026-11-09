@@ -228,9 +228,9 @@ class StudioIntegrationTest {
     void addsANewFlowTheWayTheUiDoes() throws Exception {
         ObjectNode original = config();
         ObjectNode changed = original.deepCopy();
-        // exactly what "+ New flow" sends: no steps, no rules, every optional column null
+        // exactly what "+ New flow" sends: no steps, no rules, every optional column null, and a free service code
         ((ArrayNode) changed.get("flows")).add(JsonValues.MAPPER.readTree("""
-                {"code":"NEW_FLOW_1","name":"New flow","method":"GET","path":"/v1/new-1","requestSchema":null,
+                {"code":"NEW_FLOW_1","name":"New flow","method":"GET","path":"/v1/new-1","serviceCode":"99","requestSchema":null,
                  "responseSchema":null,"requestHandler":null,"responseHandler":null,"errorHandler":null,
                  "successStatus":200,"timeoutMs":null,"auditMode":"INHERIT","enabled":true,"steps":[],"response":[]}"""));
 

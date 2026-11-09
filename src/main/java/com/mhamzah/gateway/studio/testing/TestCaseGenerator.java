@@ -321,8 +321,8 @@ public final class TestCaseGenerator {
 
     private static java.math.BigDecimal guessNumber(String name, JsonNode s, boolean integer) {
         String n = name.toLowerCase(Locale.ROOT);
-        double v = n.matches(".*(amount|amt|bal|price|fee|total).*") ? 150000
-                : n.matches(".*(limit|size|count).*") ? 10 : n.matches(".*(page).*") ? 1 : 1;
+        double v = containsAny(n, "amount", "amt", "bal", "price", "fee", "total") ? 150000
+                : containsAny(n, "limit", "size", "count") ? 10 : 1;
         if (s.has("minimum")) {
             v = Math.max(v, s.get("minimum").asDouble());
         }
@@ -337,6 +337,28 @@ public final class TestCaseGenerator {
                 : new java.math.BigDecimal(java.math.BigDecimal.valueOf(v).stripTrailingZeros().toPlainString());
     }
 
+    /** Plain substring checks instead of {@code .*(a|b).*} regexes, which backtrack (Sonar S5852). */
+    static boolean containsAny(String text, String... parts) {
+        for (String p : parts) {
+            if (text.contains(p)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** {@code .*(to|beneficiary|dest).*acc.*}: one of the prefixes, then "acc" somewhere after it. */
+    static boolean accountAfter(String text, String... prefixes) {
+        int end = -1;
+        for (String p : prefixes) {
+            int i = text.indexOf(p);
+            if (i >= 0 && (end < 0 || i + p.length() < end)) {
+                end = i + p.length();
+            }
+        }
+        return end >= 0 && text.indexOf("acc", end) >= 0;
+    }
+
     static String guessText(String name, JsonNode s) {
         String format = s.path("format").asString("");
         String value = switch (format) {
@@ -348,19 +370,19 @@ public final class TestCaseGenerator {
         };
         if (value == null) {
             String n = name.toLowerCase(Locale.ROOT);
-            if (n.matches(".*(to|beneficiary|dest).*acc.*")) {
+            if (accountAfter(n, "to", "beneficiary", "dest")) {
                 value = "2002";
-            } else if (n.matches(".*acc.*|.*account.*|.*cif.*")) {
+            } else if (containsAny(n, "acc", "cif")) {
                 value = "1001";
             } else if (n.contains("channel")) {
                 value = "MOBILE";
-            } else if (n.matches(".*(currency|ccy).*")) {
+            } else if (containsAny(n, "currency", "ccy")) {
                 value = "IDR";
             } else if (n.contains("user")) {
                 value = "unit-tester";
-            } else if (n.matches(".*(phone|mobile|msisdn).*")) {
+            } else if (containsAny(n, "phone", "mobile", "msisdn")) {
                 value = "081234567890";
-            } else if (n.matches(".*(note|remark|desc|memo).*")) {
+            } else if (containsAny(n, "note", "remark", "desc", "memo")) {
                 value = "Unit test";
             } else if (n.contains("name")) {
                 value = "BUDI SANTOSO";
