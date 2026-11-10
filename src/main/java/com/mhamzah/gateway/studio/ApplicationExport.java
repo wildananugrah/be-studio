@@ -6,6 +6,7 @@ import com.mhamzah.gateway.config.ConfigRows.RuleRow;
 import com.mhamzah.gateway.config.ConfigRows.StepRow;
 import com.mhamzah.gateway.config.GatewayProperties;
 import com.mhamzah.gateway.mapping.JsonValues;
+import com.mhamzah.gateway.schema.CompiledSchema;
 import com.mhamzah.gateway.studio.StudioConfig.Application;
 import com.mhamzah.gateway.studio.StudioConfig.Flow;
 import com.mhamzah.gateway.studio.StudioConfig.Header;
@@ -18,7 +19,10 @@ import com.mhamzah.gateway.studio.StudioConfig.Target;
 import com.mhamzah.gateway.studio.StudioConfig.Tls;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -27,14 +31,16 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import tools.jackson.core.JacksonException;
 
 /**
  * One application's configuration, extracted for another environment: its flows (with steps and mapping rules) and
  * the shared target systems, lookups, JSON schemas and storages those flows use. Written as JSON (Studio imports it),
  * a SQL script or a Liquibase changelog. Applying one replaces the application and its flows; shared items are only
  * added when the target database does not have them yet, so an export never changes what other applications use.
+ * A flows export ({@link #flowsBundle}) carries only the chosen flows: applying it replaces just those flow codes and
+ * adds their applications only when missing, so the other flows of those applications stay as they are.
  * Secrets stored as plain text (TLS passwords, storage keys, credential-like headers) are replaced by
  * {@code ${...}} placeholders, listed in {@link Bundle#replacedSecrets()}.
  */
@@ -43,12 +49,34 @@ final class ApplicationExport {
     /** The SQL dialect of the generated script (booleans and long text differ). */
     enum Dialect { POSTGRES, ORACLE }
 
-    /** What gets exported. {@code requires} lists what must exist on the target gateway but is not exported. */
-    record Bundle(Application application, List<Flow> flows, List<Target> targets, List<Lookup> lookups,
+    /**
+     * What gets exported. {@code requires} lists what must exist on the target gateway but is not exported.
+     * {@code flowsOnly}: only these flows are replaced, the applications are shared items (added when missing).
+     */
+    record Bundle(List<Application> applications, List<Flow> flows, List<Target> targets, List<Lookup> lookups,
             List<Schema> schemas, List<Storage> storages, Map<String, List<String>> requires,
-            List<String> replacedSecrets) {}
+            List<String> replacedSecrets, boolean flowsOnly) {
 
-    private static final Pattern SECRET_HEADER = Pattern.compile("(?i).*(auth|token|secret|password|api[-_]?key|signature).*");
+        /** The (first) application: the exported one of an application export. */
+        Application application() {
+            return applications.getFirst();
+        }
+    }
+
+    /** Header names whose values are secrets: auth, token, secret, password, api key, signature (any case). */
+    static boolean isSecretHeader(String name) {
+        if (name == null) {
+            return false;
+        }
+        String n = name.toLowerCase(Locale.ROOT);
+        for (String part : new String[] {"auth", "token", "secret", "password", "apikey", "api-key", "api_key",
+                "signature"}) {
+            if (n.contains(part)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     private ApplicationExport() {}
 
@@ -56,16 +84,55 @@ final class ApplicationExport {
 
     /** @throws IllegalArgumentException when there is no application {@code code} */
     static Bundle bundle(StudioConfig config, String code) {
-        Application app = config.applications().stream().filter(a -> code.equals(a.code())).findFirst()
-                .orElseGet(() -> StudioRows.DEFAULT_APPLICATION.equals(code)
-                        ? new Application(code, "Default application", null) : null);
+        Application app = application(config, code);
         if (app == null) {
             throw new IllegalArgumentException("unknown application '" + code + "'");
         }
-        List<Flow> flows = config.flows().stream()
-                .filter(f -> code.equals(f.application() == null ? StudioRows.DEFAULT_APPLICATION : f.application()))
-                .toList();
+        List<Flow> flows = config.flows().stream().filter(f -> code.equals(applicationOf(f))).toList();
+        return collect(config, List.of(app), flows, false);
+    }
 
+    /**
+     * The flows with these codes (in configuration order), their applications and the shared items they use.
+     *
+     * @throws IllegalArgumentException for no codes, an unknown flow or a flow whose application is not defined
+     */
+    static Bundle flowsBundle(StudioConfig config, List<String> codes) {
+        Set<String> wanted = new LinkedHashSet<>();
+        codes.stream().filter(c -> c != null && !c.isBlank()).forEach(c -> wanted.add(c.strip()));
+        if (wanted.isEmpty()) {
+            throw new IllegalArgumentException("choose at least one flow");
+        }
+        List<Flow> flows = config.flows().stream().filter(f -> wanted.contains(f.code())).toList();
+        Set<String> unknown = new TreeSet<>(wanted);
+        flows.forEach(f -> unknown.remove(f.code()));
+        if (!unknown.isEmpty()) {
+            throw new IllegalArgumentException("unknown flow(s) " + unknown.stream().map(c -> "'" + c + "'")
+                    .collect(Collectors.joining(", ")));
+        }
+        List<Application> apps = new ArrayList<>();
+        for (String code : flows.stream().map(ApplicationExport::applicationOf).collect(Collectors.toCollection(LinkedHashSet::new))) {
+            Application app = application(config, code);
+            if (app == null) {
+                throw new IllegalArgumentException("application '" + code + "' of the chosen flows is not defined");
+            }
+            apps.add(app);
+        }
+        return collect(config, apps, flows, true);
+    }
+
+    private static Application application(StudioConfig config, String code) {
+        return config.applications().stream().filter(a -> code.equals(a.code())).findFirst()
+                .orElseGet(() -> StudioRows.DEFAULT_APPLICATION.equals(code)
+                        ? new Application(code, "Default application", null) : null);
+    }
+
+    private static String applicationOf(Flow f) {
+        return f.application() == null ? StudioRows.DEFAULT_APPLICATION : f.application();
+    }
+
+    /** The flows plus the shared items they use, and what they need on the target gateway. */
+    private static Bundle collect(StudioConfig config, List<Application> apps, List<Flow> flows, boolean flowsOnly) {
         Set<String> targetCodes = new TreeSet<>();
         Set<String> schemaCodes = new TreeSet<>();
         Set<String> lookupCodes = new TreeSet<>();
@@ -93,6 +160,7 @@ final class ApplicationExport {
                 s.rules().forEach(r -> rule(r, lookupCodes, handlers));
             }
         }
+        addReferencedSchemas(config, schemaCodes);
         List<String> secrets = new ArrayList<>();
         List<Target> targets = config.targets().stream().filter(t -> targetCodes.contains(t.code()))
                 .map(t -> withoutSecrets(t, secrets)).toList();
@@ -121,7 +189,29 @@ final class ApplicationExport {
         if (!missingLookups.isEmpty()) {
             requires.put("lookupsNotFound", List.copyOf(missingLookups));
         }
-        return new Bundle(app, flows, targets, lookups, schemas, storages, requires, secrets);
+        return new Bundle(List.copyOf(apps), flows, targets, lookups, schemas, storages, requires, secrets, flowsOnly);
+    }
+
+    /** Adds the schemas the given ones reference with gw:CODE, transitively; unknown codes stay for schemasNotFound. */
+    private static void addReferencedSchemas(StudioConfig config, Set<String> schemaCodes) {
+        Map<String, String> texts = new HashMap<>();
+        config.schemas().forEach(s -> texts.put(s.code(), s.text()));
+        Deque<String> pending = new ArrayDeque<>(schemaCodes);
+        while (!pending.isEmpty()) {
+            String text = texts.get(pending.poll());
+            if (text == null || text.isBlank()) {
+                continue;
+            }
+            try {
+                for (String code : CompiledSchema.referencedCodes(JsonValues.MAPPER.readTree(text))) {
+                    if (schemaCodes.add(code)) {
+                        pending.add(code);
+                    }
+                }
+            } catch (JacksonException e) {
+                // not JSON: no references to follow
+            }
+        }
     }
 
     private static void rule(Rule r, Set<String> lookups, Set<String> handlers) {
@@ -141,7 +231,7 @@ final class ApplicationExport {
                 secret(tls.trustStorePassword(), t.code() + "_TLS_TRUST_STORE_PASSWORD", replaced),
                 tls.keyStore(), secret(tls.keyStorePassword(), t.code() + "_TLS_KEY_STORE_PASSWORD", replaced));
         List<Header> headers = t.headers().stream()
-                .map(h -> SECRET_HEADER.matcher(h.name() == null ? "" : h.name()).matches()
+                .map(h -> isSecretHeader(h.name())
                         ? new Header(h.name(), secret(h.value(), t.code() + "_HEADER_" + h.name(), replaced)) : h)
                 .toList();
         return new Target(t.code(), t.baseUrl(), t.connectTimeoutMs(), t.readTimeoutMs(), t.bodyCodec(), t.enabled(),
@@ -166,19 +256,22 @@ final class ApplicationExport {
 
     /** The bundle as a config Studio can merge (flows, shared items) plus what it needs. */
     static StudioConfig asConfig(Bundle b) {
-        return new StudioConfig(null, b.flows(), b.targets(), b.lookups(), b.schemas(), b.storages(),
-                List.of(b.application()));
+        return new StudioConfig(null, b.flows(), b.targets(), b.lookups(), b.schemas(), b.storages(), b.applications());
     }
 
     // ------------------------------------------------------------------ JSON
 
     static String json(Bundle b, String exportedFrom) {
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("format", "json-gateway-application");
+        out.put("format", b.flowsOnly() ? "json-gateway-flows" : "json-gateway-application");
         out.put("formatVersion", 1);
         out.put("exportedAt", OffsetDateTime.now().toString());
         out.put("exportedFrom", exportedFrom);
-        out.put("application", b.application());
+        if (b.flowsOnly()) {
+            out.put("applications", b.applications());
+        } else {
+            out.put("application", b.application());
+        }
         out.put("flows", b.flows());
         out.put("targets", b.targets());
         out.put("lookups", b.lookups());
@@ -211,16 +304,30 @@ final class ApplicationExport {
      */
     private record Shared(String id, String missingCheck, List<Insert> inserts) {}
 
-    private record Plan(String app, List<String> flowCodes, List<Insert> application, List<Shared> shared,
+    /**
+     * {@code app}: an application that exists once the script has run its first part, the row source of the guarded
+     * inserts. {@code flowWhere}: the flows to replace. {@code application}: the application rows to replace (none for
+     * a flows export, whose applications are shared items).
+     */
+    private record Plan(String app, String flowWhere, List<Insert> application, List<Shared> shared,
             List<Insert> flows) {}
+
+    private static Insert applicationInsert(Application a) {
+        return new Insert("application", List.of(Col.v("code", a.code()), Col.v("name", a.name()),
+                Col.v("description", a.description())));
+    }
 
     private static Plan plan(Bundle b) {
         ConfigRows rows = StudioRows.toRows(asConfig(b));
         String app = b.application().code();
-        List<Insert> application = List.of(new Insert("application", List.of(Col.v("code", app),
-                Col.v("name", b.application().name()), Col.v("description", b.application().description()))));
+        List<Insert> application = b.flowsOnly() ? List.of() : List.of(applicationInsert(b.application()));
 
         List<Shared> shared = new ArrayList<>();
+        if (b.flowsOnly()) {
+            // first: the other shared items' guarded inserts select from the application table
+            b.applications().forEach(a -> shared.add(new Shared("application-" + a.code(),
+                    "SELECT COUNT(*) FROM {application} WHERE code = " + quote(a.code()), List.of(applicationInsert(a)))));
+        }
         for (ConfigRows.TargetRow t : rows.targets()) {
             List<Insert> inserts = new ArrayList<>();
             inserts.add(new Insert("target_system", List.of(Col.v("code", t.code()), Col.v("base_url", t.baseUrl()),
@@ -268,7 +375,7 @@ final class ApplicationExport {
                     Col.v("request_handler", f.requestHandler()), Col.v("response_handler", f.responseHandler()),
                     Col.v("error_handler", f.errorHandler()), Col.v("success_status", f.successStatus()),
                     Col.v("timeout_ms", f.timeoutMs()), Col.v("audit_mode", f.auditMode()), Col.v("enabled", f.enabled()),
-                    Col.v("application_code", app), Col.v("service_code", f.serviceCode())),
+                    Col.v("application_code", f.applicationCode()), Col.v("service_code", f.serviceCode())),
                     "schema_validation", f.schemaValidation())));
         }
         for (StepRow s : rows.steps()) {
@@ -303,7 +410,8 @@ final class ApplicationExport {
                     Col.v("field_handler", r.fieldHandler()), Col.v("required", r.required()),
                     Col.v("response_name", r.responseName()))));
         }
-        return new Plan(app, rows.flows().stream().map(FlowRow::code).toList(), application, shared, flows);
+        List<String> flowCodes = rows.flows().stream().map(FlowRow::code).toList();
+        return new Plan(app, b.flowsOnly() ? codeIn(flowCodes) : flowsOfApp(app, flowCodes), application, shared, flows);
     }
 
     /** The columns plus {@code name} when it is set: an export without overrides still runs on a schema without it. */
@@ -321,9 +429,12 @@ final class ApplicationExport {
     }
 
     /** The flows to replace: this application's, and any flow (of another application) with an exported code. */
-    private static String flowsOfApp(Plan p) {
-        return "application_code = " + quote(p.app()) + (p.flowCodes().isEmpty() ? ""
-                : " OR code IN (" + p.flowCodes().stream().map(ApplicationExport::quote).collect(Collectors.joining(", ")) + ")");
+    private static String flowsOfApp(String app, List<String> flowCodes) {
+        return "application_code = " + quote(app) + (flowCodes.isEmpty() ? "" : " OR " + codeIn(flowCodes));
+    }
+
+    private static String codeIn(List<String> flowCodes) {
+        return "code IN (" + flowCodes.stream().map(ApplicationExport::quote).collect(Collectors.joining(", ")) + ")";
     }
 
     static String quote(String s) {
@@ -336,21 +447,28 @@ final class ApplicationExport {
         Plan p = plan(b);
         Map<String, String> t = tables.byLogicalName();
         StringBuilder out = new StringBuilder();
-        out.append("-- Application ").append(p.app()).append(" (").append(Objects.toString(b.application().name(), ""))
-                .append("), exported ").append(OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME))
+        out.append("-- ").append(title(b)).append(", exported ")
+                .append(OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME))
                 .append(" from ").append(exportedFrom).append('\n')
                 .append("-- For ").append(dialect == Dialect.ORACLE ? "Oracle" : "PostgreSQL")
-                .append(". Run it in one transaction, then reload the gateway (POST /admin/config/reload).\n")
-                .append("-- The application and its flows are replaced; shared target systems, lookups, schemas and\n")
-                .append("-- storages are only inserted when missing (existing ones are left as they are).\n");
+                .append(". Run it in one transaction, then reload the gateway (POST /admin/config/reload).\n");
+        if (b.flowsOnly()) {
+            out.append("-- Only these flows are replaced; their applications, shared target systems, lookups, schemas\n")
+                    .append("-- and storages are only inserted when missing (existing ones are left as they are).\n");
+        } else {
+            out.append("-- The application and its flows are replaced; shared target systems, lookups, schemas and\n")
+                    .append("-- storages are only inserted when missing (existing ones are left as they are).\n");
+        }
         notes(b, "-- ", out);
-        out.append("\n-- 1. Remove the application and its flows\n");
-        String flows = "(SELECT id FROM " + t.get("flow") + " WHERE " + flowsOfApp(p) + ")";
+        out.append(b.flowsOnly() ? "\n-- 1. Remove these flows\n" : "\n-- 1. Remove the application and its flows\n");
+        String flows = "(SELECT id FROM " + t.get("flow") + " WHERE " + p.flowWhere() + ")";
         out.append("DELETE FROM ").append(t.get("mapping_rule")).append(" WHERE flow_id IN ").append(flows).append(";\n");
         out.append("DELETE FROM ").append(t.get("flow_step")).append(" WHERE flow_id IN ").append(flows).append(";\n");
         out.append("DELETE FROM ").append(t.get("flow_response")).append(" WHERE flow_id IN ").append(flows).append(";\n");
-        out.append("DELETE FROM ").append(t.get("flow")).append(" WHERE ").append(flowsOfApp(p)).append(";\n");
-        out.append("DELETE FROM ").append(t.get("application")).append(" WHERE code = ").append(quote(p.app())).append(";\n");
+        out.append("DELETE FROM ").append(t.get("flow")).append(" WHERE ").append(p.flowWhere()).append(";\n");
+        if (!b.flowsOnly()) {
+            out.append("DELETE FROM ").append(t.get("application")).append(" WHERE code = ").append(quote(p.app())).append(";\n");
+        }
         p.application().forEach(i -> out.append(insertSql(i, dialect, t)));
 
         out.append("\n-- 2. Shared items, only when missing\n");
@@ -362,6 +480,16 @@ final class ApplicationExport {
             List<List<Insert>> groups = new ArrayList<>(byTable.values());
             java.util.Collections.reverse(groups);
             for (List<Insert> group : groups) {
+                if (group.getFirst().table().equals("application")) {
+                    // the application itself cannot select from the application table: no row source
+                    Insert i = group.getFirst();
+                    out.append("INSERT INTO ").append(t.get(i.table())).append(" (")
+                            .append(i.cols().stream().map(Col::name).collect(Collectors.joining(", "))).append(")\nSELECT ")
+                            .append(i.cols().stream().map(c -> value(c, dialect, t)).collect(Collectors.joining(", ")))
+                            .append(dialect == Dialect.ORACLE ? " FROM DUAL" : "").append(" WHERE (").append(check)
+                            .append(") = 0;\n");
+                    continue;
+                }
                 if (group.size() == 1) {
                     out.append(guardedSql(group.getFirst(), check, p.app(), dialect, t));
                     continue;
@@ -431,6 +559,12 @@ final class ApplicationExport {
         return out;
     }
 
+    /** "Application CODE (name)" or "Flows A, B". */
+    private static String title(Bundle b) {
+        return b.flowsOnly() ? "Flows " + b.flows().stream().map(Flow::code).collect(Collectors.joining(", "))
+                : "Application " + b.application().code() + " (" + Objects.toString(b.application().name(), "") + ")";
+    }
+
     private static void notes(Bundle b, String prefix, StringBuilder out) {
         b.requires().forEach((what, items) -> {
             if (!items.isEmpty()) {
@@ -449,19 +583,22 @@ final class ApplicationExport {
     static String liquibase(Bundle b, String exportedFrom) {
         Plan p = plan(b);
         String stamp = OffsetDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
-        String id = "app-" + p.app().toLowerCase(Locale.ROOT) + "-" + stamp;
+        String id = b.flowsOnly()
+                ? "flows-" + b.flows().getFirst().code().toLowerCase(Locale.ROOT) + "-" + stamp
+                : "app-" + p.app().toLowerCase(Locale.ROOT) + "-" + stamp;
         StringBuilder out = new StringBuilder();
         out.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<databaseChangeLog\n")
                 .append("        xmlns=\"http://www.liquibase.org/xml/ns/dbchangelog\"\n")
                 .append("        xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n")
                 .append("        xsi:schemaLocation=\"http://www.liquibase.org/xml/ns/dbchangelog\n")
                 .append("            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd\">\n\n")
-                .append("    <!--\n        Application ").append(xml(p.app())).append(" (")
-                .append(xml(Objects.toString(b.application().name(), ""))).append("), exported ")
+                .append("    <!--\n        ").append(xml(title(b))).append(", exported ")
                 .append(OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)).append(" from ")
                 .append(xml(exportedFrom)).append(".\n")
                 .append("        Include it from db.changelog-master.xml (it uses the tbl.* table name properties).\n")
-                .append("        Shared items are only inserted when missing; the application and its flows are replaced.\n");
+                .append(b.flowsOnly()
+                        ? "        Only these flows are replaced; their applications and shared items are only inserted when missing.\n"
+                        : "        Shared items are only inserted when missing; the application and its flows are replaced.\n");
         StringBuilder notes = new StringBuilder();
         notes(b, "        ", notes);
         out.append(notes.toString().replace("--", "- -")).append("    -->\n");
@@ -474,13 +611,15 @@ final class ApplicationExport {
             s.inserts().forEach(i -> out.append(insertXml(i)));
             out.append("    </changeSet>\n\n");
         }
-        String flows = "(SELECT id FROM ${tbl.flow} WHERE " + flowsOfApp(p) + ")";
+        String flows = "(SELECT id FROM ${tbl.flow} WHERE " + p.flowWhere() + ")";
         out.append("    <changeSet id=\"").append(xml(id + "-flows")).append("\" author=\"json-gateway-studio\">\n");
         out.append(deleteXml("mapping_rule", "flow_id IN " + flows));
         out.append(deleteXml("flow_step", "flow_id IN " + flows));
         out.append(deleteXml("flow_response", "flow_id IN " + flows));
-        out.append(deleteXml("flow", flowsOfApp(p)));
-        out.append(deleteXml("application", "code = " + quote(p.app())));
+        out.append(deleteXml("flow", p.flowWhere()));
+        if (!b.flowsOnly()) {
+            out.append(deleteXml("application", "code = " + quote(p.app())));
+        }
         p.application().forEach(i -> out.append(insertXml(i)));
         p.flows().forEach(i -> out.append(insertXml(i)));
         out.append("    </changeSet>\n</databaseChangeLog>\n");

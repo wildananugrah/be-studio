@@ -19,13 +19,22 @@ import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * SNAP success responses. Set {@code gw_flow.response_handler = snapResponseHandler}: the body the flow's rules
- * built gets {@code responseCode} ({@code <status><service code>00}, e.g. {@code 2002400}) and {@code responseMessage}
- * (the catalog's {@code <status>.00}, e.g. "Successful" or "Request In Progress") first, and {@code additionalInfo}
- * last. {@code additionalInfo} is optional: it is sent only when the flow's rules set {@code $.additionalInfo.*} or
- * the flow has the named response {@code additionalInfo} (the same one {@link SnapErrorHandler} uses; its keys win).
- * Values the rules already set for {@code responseCode} or {@code responseMessage} are kept. A status that cannot
- * carry a body (204, 205, 304, 1xx) is sent as {@code gateway.snap.no-body-status} (200), with {@code responseCode}
+ * SNAP success responses. Set
+ * {@code gw_flow.response_handler = snapResponseHandler}: the body the flow's
+ * rules
+ * built gets {@code responseCode} ({@code <status><service code>00}, e.g.
+ * {@code 2002400}) and {@code responseMessage}
+ * (the catalog's {@code <status>.00}, e.g. "Successful" or "Request In
+ * Progress") first, and {@code additionalInfo}
+ * last. {@code additionalInfo} is optional: it is sent only when the flow's
+ * rules set {@code $.additionalInfo.*} or
+ * the flow has the named response {@code additionalInfo} and its rules produce
+ * at least one field (the same one
+ * {@link SnapErrorHandler} uses; its keys win).
+ * Values the rules already set for {@code responseCode} or
+ * {@code responseMessage} are kept. A status that cannot
+ * carry a body (204, 205, 304, 1xx) is sent as
+ * {@code gateway.snap.no-body-status} (200), with {@code responseCode}
  * still telling the original one ({@code 204G000}).
  */
 @Component(SnapResponseHandler.BEAN_NAME)

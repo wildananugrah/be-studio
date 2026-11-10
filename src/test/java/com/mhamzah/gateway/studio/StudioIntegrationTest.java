@@ -228,9 +228,9 @@ class StudioIntegrationTest {
     void addsANewFlowTheWayTheUiDoes() throws Exception {
         ObjectNode original = config();
         ObjectNode changed = original.deepCopy();
-        // exactly what "+ New flow" sends: no steps, no rules, every optional column null
+        // exactly what "+ New flow" sends: no steps, no rules, every optional column null, and a free service code
         ((ArrayNode) changed.get("flows")).add(JsonValues.MAPPER.readTree("""
-                {"code":"NEW_FLOW_1","name":"New flow","method":"GET","path":"/v1/new-1","requestSchema":null,
+                {"code":"NEW_FLOW_1","name":"New flow","method":"GET","path":"/v1/new-1","serviceCode":"99","requestSchema":null,
                  "responseSchema":null,"requestHandler":null,"responseHandler":null,"errorHandler":null,
                  "successStatus":200,"timeoutMs":null,"auditMode":"INHERIT","enabled":true,"steps":[],"response":[]}"""));
 
@@ -386,5 +386,40 @@ class StudioIntegrationTest {
         assertThat(call("GET", "/studio/api/audit/does-not-exist", "studio-token", null).status()).isEqualTo(404);
         assertThat(call("GET", "/studio/api/audit", null, null).status()).isEqualTo(401);
         assertThat(call("GET", "/studio/api/audit/status", "studio-token", null).json().get("auditEnabled").asBoolean()).isTrue();
+    }
+
+    @Test
+    void auditTrailOpensEachCallSharingACorrelationId() throws Exception {
+        // a flow calling the gateway's own flows passes its correlation ID on: one transaction per call, same ID
+        String id = "AUDIT-SHARED-" + System.nanoTime();
+        for (String account : new String[] {"1001", "9999"}) {
+            HTTP.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v1/accounts/" + account))
+                    .header("X-Correlation-Id", id).build(), HttpResponse.BodyHandlers.ofString());
+        }
+        JsonNode list = null;
+        for (int i = 0; i < 50; i++) {
+            list = call("GET", "/studio/api/audit?q=" + id, "studio-token", null).json();
+            if (list.get("totalElements").asLong() == 2) {
+                break;
+            }
+            Thread.sleep(100);
+        }
+        assertThat(list.get("totalElements").asLong()).isEqualTo(2);
+        long newest = list.get("content").get(0).get("id").asLong();
+        long oldest = list.get("content").get(1).get("id").asLong();
+
+        JsonNode byDefault = call("GET", "/studio/api/audit/" + id, "studio-token", null).json();
+        assertThat(byDefault.get("transaction").get("id").asLong()).isEqualTo(newest);
+        assertThat(byDefault.get("related").size()).isEqualTo(2);
+        assertThat(byDefault.get("related").get(0).get("id").asLong()).isEqualTo(oldest);
+        assertThat(byDefault.get("related").get(0).has("request_payload")).isFalse();
+
+        JsonNode first = call("GET", "/studio/api/audit/" + id + "?id=" + oldest, "studio-token", null).json();
+        assertThat(first.get("transaction").get("id").asLong()).isEqualTo(oldest);
+        assertThat(first.get("transaction").get("path").asString()).endsWith("/accounts/1001");
+        assertThat(first.get("steps").get(0).get("url").asString()).contains("/core/accounts/1001");
+
+        // an id of another correlation ID is not found
+        assertThat(call("GET", "/studio/api/audit/" + id + "-OTHER?id=" + oldest, "studio-token", null).status()).isEqualTo(404);
     }
 }

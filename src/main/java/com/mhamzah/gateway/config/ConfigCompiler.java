@@ -1,5 +1,6 @@
 package com.mhamzah.gateway.config;
 
+import com.mhamzah.gateway.codec.FileCodec;
 import com.mhamzah.gateway.codec.JsonCodec;
 import com.mhamzah.gateway.condition.Condition;
 import com.mhamzah.gateway.config.ConfigRows.FlowRow;
@@ -271,9 +272,10 @@ public class ConfigCompiler {
             }
         }
 
-        /** The {@link BodyCodec} bean {@code name}; {@code jsonCodec} always resolves, even without a bean. */
+        /** The {@link BodyCodec} bean {@code name}; {@code jsonCodec} and {@code fileCodec} always resolve, even without a bean. */
         private BodyCodec codec(String name, String where, String column) {
-            return JsonCodec.BEAN_NAME.equals(name) ? JsonCodec.INSTANCE : handler(name, BodyCodec.class, where, column);
+            return JsonCodec.BEAN_NAME.equals(name) ? JsonCodec.INSTANCE
+                    : FileCodec.BEAN_NAME.equals(name) ? FileCodec.INSTANCE : handler(name, BodyCodec.class, where, column);
         }
 
         private String resolve(String text, String where) {
@@ -434,15 +436,13 @@ public class ConfigCompiler {
         }
 
         private Map<String, CompiledSchema> compileSchemas(List<SchemaRow> rows) {
-            Map<String, CompiledSchema> out = new HashMap<>();
-            for (SchemaRow s : rows) {
-                try {
-                    out.put(s.code(), CompiledSchema.compile(s.code(), s.schemaText()));
-                } catch (IllegalArgumentException e) {
-                    errors.add("json schema '" + s.code() + "': " + e.getMessage());
-                }
-            }
-            return out;
+            // compiled together, so gw:CODE references between them resolve
+            Map<String, String> texts = new LinkedHashMap<>();
+            rows.forEach(s -> texts.put(s.code(), s.schemaText()));
+            CompiledSchema.Compilation compilation = CompiledSchema.compileAll(texts);
+            compilation.errors().forEach((code, messages) ->
+                    messages.forEach(m -> errors.add("json schema '" + code + "': " + m)));
+            return compilation.schemas();
         }
 
         private Map<String, LookupTable> buildLookups(List<LookupRow> rows) {
@@ -566,6 +566,8 @@ public class ConfigCompiler {
                     .toList();
             Map<Long, List<RuleRow>> stepRules = new HashMap<>();
             List<CompiledRule> responseRules = new ArrayList<>();
+            // "<response name>\0<step>" of each FILE rule, to the rule's description
+            Map<String, String> fileRules = new LinkedHashMap<>();
             Set<Long> enabledStepIds = enabledSteps.stream().map(StepRow::id).collect(Collectors.toSet());
             for (RuleRow r : sortedRules) {
                 String rw = "mapping rule " + r.id() + " of " + where;
@@ -584,13 +586,16 @@ public class ConfigCompiler {
                         errors.add(rw + ": FLOW_RESPONSE rule must not have step_id");
                         continue;
                     }
-                    CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.HEADER, TargetType.STATUS), FLOW_RESPONSE);
+                    CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.HEADER, TargetType.STATUS,
+                            TargetType.FILE), FLOW_RESPONSE);
                     if (r.responseName() != null && !namedRules.containsKey(r.responseName())) {
                         errors.add(rw + ": response '" + r.responseName() + "' is not a response of this flow");
                     } else if (rule != null && FlowDefinition.ADDITIONAL_INFO_RESPONSE.equals(r.responseName())
                             && rule.targetType() != TargetType.BODY) {
                         errors.add(rw + ": the response '" + FlowDefinition.ADDITIONAL_INFO_RESPONSE
                                 + "' builds additionalInfo of SNAP responses and takes BODY rules only");
+                    } else if (rule != null && rule.targetType() == TargetType.FILE && !fileRule(rule, r, rw, fileRules)) {
+                        continue;
                     } else if (rule != null) {
                         checkStepRefs(rule.source(), stepOrders, Integer.MAX_VALUE, null, rw);
                         (r.responseName() == null ? responseRules : namedRules.get(r.responseName())).add(rule);
@@ -618,6 +623,16 @@ public class ConfigCompiler {
                     groups.computeIfAbsent(s.stepOrder(), k -> new ArrayList<>()).add(def);
                 }
             }
+            // a FILE rule sends what its step downloaded: only a fileCodec step downloads files
+            Map<String, StepDefinition> byName = new HashMap<>();
+            groups.values().forEach(g -> g.forEach(d -> byName.put(d.name(), d)));
+            fileRules.forEach((key, rw) -> {
+                StepDefinition d = byName.get(key.substring(key.indexOf('\0') + 1));
+                if (d != null && d.bodyCodec() != FileCodec.INSTANCE) {
+                    errors.add(rw + ": step '" + d.name() + "' does not download files (set its body_codec to "
+                            + FileCodec.BEAN_NAME + ")");
+                }
+            });
             String errorResponse = mappedErrors ? errorHandlerName.substring(StepDefinition.RESPOND.length()) : null;
             if (mappedErrors && !flowResponses.containsKey(errorResponse)) {
                 errors.add(where + ": error_handler '" + errorHandlerName + "' is not a response of this flow");
@@ -1059,7 +1074,7 @@ public class ConfigCompiler {
             JsonPath target = null;
             if (targetType == TargetType.BODY) {
                 target = path(r.targetPath(), where, "target_path");
-            } else if (targetType != null && targetType != TargetType.STATUS
+            } else if (targetType != null && targetType != TargetType.STATUS && targetType != TargetType.FILE
                     && (r.targetPath() == null || r.targetPath().isBlank())) {
                 errors.add(where + ": target_path must be a " + targetType + " name");
             }
@@ -1106,6 +1121,25 @@ public class ConfigCompiler {
                     targetType == TargetType.BODY ? null : r.targetPath(), source,
                     JsonValues.parseLiteral(r.constantValue()), JsonValues.parseLiteral(r.defaultValue()),
                     converter, lookup, fieldHandler, r.fieldHandler(), r.required());
+        }
+
+        /**
+         * A FILE rule: {@code source_path = $.steps.<name>}, at most one per response. Records it in {@code fileRules}
+         * (the step's codec is checked once the steps are compiled); false when it is invalid.
+         */
+        private boolean fileRule(CompiledRule rule, RuleRow r, String where, Map<String, String> fileRules) {
+            JsonPath source = rule.source();
+            if (source == null || !"steps".equals(source.firstField()) || source.fieldNames().size() != 2) {
+                errors.add(where + ": a FILE rule takes source_path $.steps.<step> (the step that downloads the file)");
+                return false;
+            }
+            String response = r.responseName() == null ? "" : r.responseName();
+            if (fileRules.keySet().stream().anyMatch(k -> k.startsWith(response + "\0"))) {
+                errors.add(where + ": a response sends at most one file (one FILE rule)");
+                return false;
+            }
+            fileRules.put(response + "\0" + source.secondField(), where);
+            return true;
         }
 
         /**

@@ -280,11 +280,23 @@ Every flow belongs to an application, so one application's configuration can be 
 
 | Format | Use |
 |---|---|
-| `json` | Studio → Flows → **Import application…** on another gateway (loaded as unsaved changes, saved with Save & reload) |
+| `json` | Studio → Flows → **Import…** on another gateway (loaded as unsaved changes, saved with Save & reload) |
 | `sql` | A script for this gateway's database type (PostgreSQL or Oracle); run it in one transaction, then reload |
 | `liquibase` | A changelog using the `tbl.*` table name properties; include it from `db.changelog-master.xml` |
 
 Applying an export replaces the application and its flows (also a flow with the same code in another application). Shared items are only added when the target does not have them; existing ones are left as they are, so an export never changes what other applications use. Secrets written as plain text (TLS store passwords, storage keys, credential-like target headers) become `${NAME}` placeholders; set those environment variables on the target. Handler and codec beans, and target systems, SQL datasources and storages from `application.yml`, are not exported; the file lists them under "requires".
+
+**Export selected flows** (Studio → Flows → tick flows → Export only these, or `GET /studio/api/flows/export?codes=A,B&format=json|sql|liquibase`) is the same in the same three formats, but carries only the chosen flows. Applying it deletes and re-inserts just those flow codes (`WHERE code IN (...)`); the other flows of their applications are not touched. Their applications are shared items too: added when missing, never replaced. Use it to promote one new or changed flow to UAT without the rest of its application. The JSON format is `json-gateway-flows`; **Import…** recognises both kinds.
+
+To deploy an export with Liquibase, put it in `src/main/resources/db/changelog/changes/flows/`; `db.changelog-master.xml` includes that folder as a whole (`includeAll`), so nothing else changes. `scripts/flow-changelog.sh` does it and names the file `<yyyyMMdd-HHmmss>_<codes>.xml` after the export time (the folder is applied in file-name order):
+
+```bash
+scripts/flow-changelog.sh add ~/Downloads/FLOWS_TRADE_CALLBACK_20261109-1545.xml   # a file from the Studio button
+scripts/flow-changelog.sh export TRADE_CALLBACK,OTHER_FLOW                         # straight from a running Studio
+# same with make: make add-flow-changelog FILE=... / make export-flows CODES=... [STUDIO_URL=...]
+```
+
+`export` uses `STUDIO_URL` (default `http://localhost:8080`) and `ADMIN_TOKEN`; adding the same export twice is refused. On the next start Liquibase applies the file, records it in `gw_db_changelog` and never runs it again. Each export has new changeSet ids (they end with a timestamp), so exporting a flow again after an edit gives a changelog that applies again. Change flows only in the source environment: anything edited directly in the target is overwritten by the next export of that flow.
 
 ### 3.2 `gw_flow_step`
 
@@ -444,11 +456,35 @@ INSERT INTO gw_lookup_entry (lookup_code, source_value, target_value) VALUES ('A
 
 | Column | Meaning |
 |---|---|
-| `code` | Referenced by `request_schema_code` / `response_schema_code` |
+| `code` | Referenced by `request_schema_code` / `response_schema_code`, and by other schemas as `gw:<code>` |
 | `schema_text` | JSON Schema, **draft 2020-12**. Checked when config is loaded; an invalid schema is a config error. |
 | `description` | Free text |
 
 Validation messages are returned to the client in `details`, e.g. `"$.amount: must have an exclusive minimum value of 0"`.
+
+**Referencing another schema.** Inside `schema_text`, `{"$ref": "gw:CODE"}` stands for the whole schema with that `code`, and `{"$ref": "gw:CODE#/$defs/money"}` for a part of it (a JSON pointer starting with `/`, pointing to a schema; `#name` anchors are not supported). Codes and the `gw:` prefix are case-sensitive. Every `gw:` reference is checked when config is loaded: a code without a `gw_json_schema` row, or a fragment that points to nothing, is a config error. Schemas may reference each other in a cycle (a tree of `children`, for example). When a schema is validated (see `schema_validation`), references follow the standard JSON Schema rules; with `oneOf` the body must match **exactly one** option, with `anyOf` at least one.
+
+**A router's request: one of its sub-routes' bodies.** A flow whose steps call other flows of this gateway (sub-routes) can document its body as "one of" theirs, reusing their schemas instead of copying them:
+
+```sql
+-- the sub-routes' own schemas (already used by their flows)
+INSERT INTO gw_json_schema (code, schema_text) VALUES ('TRANSFER_REQUEST',
+ '{"type":"object","required":["fromAccount","amount"],
+   "properties":{"fromAccount":{"type":"string"},"amount":{"type":"number"}}}');
+INSERT INTO gw_json_schema (code, schema_text) VALUES ('TOPUP_REQUEST',
+ '{"type":"object","required":["phoneNo","amount"],
+   "properties":{"phoneNo":{"type":"string"},"amount":{"type":"number"}}}');
+
+-- the router's schema: one of them
+INSERT INTO gw_json_schema (code, schema_text) VALUES ('PAYMENT_REQUEST',
+ '{"oneOf":[{"$ref":"gw:TRANSFER_REQUEST"},{"$ref":"gw:TOPUP_REQUEST"}]}');
+
+-- validation stays with the sub-routes; the router's schema documents it
+INSERT INTO gw_flow (code, name, http_method, path_pattern, request_schema_code, schema_validation)
+VALUES ('PAYMENT', 'Payment router', 'POST', '/v1/payments', 'PAYMENT_REQUEST', 'NONE');
+```
+
+Swagger (`/docs`) shows the body as one of `TRANSFER_REQUEST` / `TOPUP_REQUEST` (each a named schema under `components`), and Studio's API specification lists every option with its fields and an example.
 
 ### 3.6 Expressions (`condition_expr`, `success_expr`)
 
@@ -1523,6 +1559,8 @@ Reload (and startup) report every problem at once. The common ones:
 | `path_pattern ... must start with '/'` | Missing leading slash | Add it |
 | `references unknown schema` | `*_schema_code` without a `gw_json_schema` row | Insert the schema or fix the code |
 | `json schema 'X': ... not a valid draft 2020-12 schema` | Broken schema JSON | Fix `schema_text` |
+| `json schema 'X': $ref 'gw:Y' references unknown schema 'Y'` | A `gw:` reference to a code without a `gw_json_schema` row (often a typo or a renamed schema) | Insert schema `Y` or fix the reference |
+| `json schema 'X': $ref 'gw:Y#/...' points to nothing in schema 'Y'` | The fragment after `#` does not exist in schema `Y` | Fix the fragment, e.g. `#/$defs/money` |
 | `is not a FieldHandler / MessageHandler / ErrorHandler bean` | Bean name typo, or the class isn't deployed | Fix the name or deploy the class |
 | `target_system 'X' is not configured` | Unknown target system | Fix the name or add a `gw_target_system` row ([4.13](#413-downstream-systems-add-one-change-its-ip--port)) |
 | `target system 'X': base_url '...' must start with http:// or https://` / `has no host` / `must not contain a query` | Bad address, e.g. `10.1.1.1:9080` without `http://` | Write the full URL: `http://10.1.1.1:9080` |

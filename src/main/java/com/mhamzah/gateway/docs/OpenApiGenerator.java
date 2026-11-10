@@ -304,27 +304,42 @@ public final class OpenApiGenerator {
         return F.objectNode().put("type", "object");
     }
 
-    /** Adds the gw_json_schema to components (once) and returns a $ref to it. */
+    /** Adds the gw_json_schema and the schemas it references (gw:CODE) to components (once) and returns a $ref to it. */
     private static ObjectNode ref(CompiledSchema schema, ObjectNode schemas) {
-        String pointer = "#/components/schemas/" + schema.code().replace("~", "~0").replace("/", "~1");
+        component(schema, schemas);
+        schema.references().forEach(r -> component(r, schemas));
+        return F.objectNode().put("$ref", pointer(schema.code()));
+    }
+
+    private static void component(CompiledSchema schema, ObjectNode schemas) {
         if (!schemas.has(schema.code())) {
             JsonNode json = schema.json();
             if (json instanceof ObjectNode o) {
                 o.remove("$schema");
                 o.remove("$id");
-                rewriteRefs(o, pointer);
+                rewriteRefs(o, pointer(schema.code()));
             }
             schemas.set(schema.code(), json);
         }
-        return F.objectNode().put("$ref", pointer);
     }
 
-    /** Local refs ({@code #/$defs/x}) point into the schema document, which now lives under {@code pointer}. */
+    private static String pointer(String code) {
+        return "#/components/schemas/" + code.replace("~", "~0").replace("/", "~1");
+    }
+
+    /**
+     * Local refs ({@code #/$defs/x}) point into the schema document, which now lives under {@code pointer}; refs to
+     * other gateway schemas ({@code gw:CODE#/$defs/x}) point to their components.
+     */
     private static void rewriteRefs(JsonNode node, String pointer) {
         if (node instanceof ObjectNode o) {
             JsonNode ref = o.get("$ref");
             if (ref != null && ref.isString() && ref.asString().startsWith("#")) {
                 o.put("$ref", pointer + ref.asString().substring(1));
+            } else if (ref != null && ref.isString() && ref.asString().startsWith(CompiledSchema.REF_PREFIX)) {
+                String target = ref.asString().substring(CompiledSchema.REF_PREFIX.length());
+                int hash = target.indexOf('#');
+                o.put("$ref", hash < 0 ? pointer(target) : pointer(target.substring(0, hash)) + target.substring(hash + 1));
             }
             o.properties().forEach(e -> rewriteRefs(e.getValue(), pointer));
         } else if (node instanceof ArrayNode a) {

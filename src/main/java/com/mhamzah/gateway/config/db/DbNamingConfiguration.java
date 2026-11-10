@@ -59,7 +59,11 @@ public class DbNamingConfiguration {
                     liquibase.setDatabaseChangeLogTable(db.liquibaseTables().changelog());
                     liquibase.setDatabaseChangeLogLockTable(db.liquibaseTables().changelogLock());
                     Map<String, String> params = new HashMap<>(userParameters);
-                    db.tables().byLogicalName().forEach((logical, table) -> params.put("tbl." + logical, table));
+                    db.tables().byLogicalName().forEach((logical, table) -> {
+                        params.put("tbl." + logical, table);
+                        // schema.table for raw SQL (sqlCheck, sql): unlike tableName attributes, it gets no default schema
+                        params.put("tblq." + logical, db.qualify(table));
+                    });
                     liquibase.setChangeLogParameters(params);
                 }
                 return bean;

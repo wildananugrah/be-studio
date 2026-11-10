@@ -1,6 +1,7 @@
 // Gateway Studio: edits gw_flow, gw_flow_step, gw_mapping_rule, gw_target_system(_header) and gw_lookup_entry
 // through /studio/api (StudioController). Everything is edited in memory; "Save & reload" writes it in one go.
 import { html, render, Component } from './vendor/htm-preact.js';
+import { toks, flowOverview } from './flow-fields.js';
 
 const C = { in: 'oklch(0.56 0.13 255)', call: 'oklch(0.62 0.17 42)', step: 'oklch(0.53 0.15 300)', out: 'oklch(0.55 0.12 160)', err: 'oklch(0.57 0.19 25)', flow: 'oklch(0.45 0.02 260)', java: 'oklch(0.7 0.13 85)', sql: 'oklch(0.52 0.12 200)', file: 'oklch(0.55 0.14 135)', tf: 'oklch(0.5 0.13 330)', cond: 'oklch(0.5 0.14 285)' };
 const MC = { GET: 'oklch(0.52 0.11 160)', POST: 'oklch(0.6 0.17 42)', PUT: 'oklch(0.52 0.13 255)', PATCH: 'oklch(0.5 0.15 300)', DELETE: 'oklch(0.55 0.19 25)' };
@@ -71,10 +72,28 @@ function fromApi(c) {
 
 /** JSON schema texts by code (from the draft), so sample data can follow a flow's request schema. */
 let SCHEMA_TEXT = {};
-/** A sample value per field of a JSON schema, placed under {@code base} (e.g. $.request.body); depth-limited. */
+/** {code, frag} of a reference to another gateway schema ({"$ref": "gw:CODE#/$defs/x"}), else null. */
+const gwRef = ref => typeof ref === 'string' && ref.startsWith('gw:') ? { code: ref.slice(3).split('#')[0], frag: ref.includes('#') ? ref.slice(ref.indexOf('#') + 1) : '' } : null;
+/** The parsed schema of a code (SCHEMA_TEXT), undefined when missing or invalid. */
+const gwDoc = code => { try { return JSON.parse(SCHEMA_TEXT[code]); } catch (e) { return undefined; } };
+/** The node a JSON pointer (/$defs/x) points to in doc. */
+const atPointer = (doc, frag) => frag.split('/').filter(Boolean).map(k => k.replace(/~1/g, '/').replace(/~0/g, '~')).reduce((n, k) => (n == null ? n : n[k]), doc);
+/** Whether a schema text references code with gw:code. */
+const refsTo = (text, code) => String(text || '').includes('"gw:' + code + '"') || String(text || '').includes('"gw:' + code + '#');
+/**
+ * A sample value per field of a JSON schema, placed under {@code base} (e.g. $.request.body); depth-limited (which also
+ * ends reference cycles). gw:CODE references are followed; oneOf / anyOf / allOf merge every option's fields.
+ */
 function schemaSample(ctx, schema, base, lookups, depth = 0, root = schema) {
   if (!schema || typeof schema !== 'object' || depth > 6) return;
   if (schema.$ref && /^#\/(\$defs|definitions)\//.test(schema.$ref)) { const k = schema.$ref.split('/'); return schemaSample(ctx, (root[k[1]] || {})[k[2]], base, lookups, depth + 1, root); }
+  const gw = gwRef(schema.$ref);
+  if (gw) { const doc = gwDoc(gw.code); return schemaSample(ctx, atPointer(doc, gw.frag), base, lookups, depth + 1, doc); }
+  const options = ['oneOf', 'anyOf', 'allOf'].flatMap(x => (Array.isArray(schema[x]) ? schema[x] : []));
+  if (options.length) {
+    options.forEach(o => schemaSample(ctx, o, base, lookups, depth + 1, root));
+    if (!schema.properties && !schema.type) return;
+  }
   const type = Array.isArray(schema.type) ? schema.type.find(x => x !== 'null') : schema.type;
   if (type === 'object' || schema.properties) {
     Object.entries(schema.properties || {}).forEach(([k, sub]) => schemaSample(ctx, sub, base + (/^[A-Za-z0-9_]+$/.test(k) ? '.' + k : "['" + k + "']"), lookups, depth + 1, root));
@@ -235,8 +254,7 @@ function tlsOut(t) {
   return { mode: x.mode === 'INSECURE' ? 'INSECURE' : null, trustStore: null, trustStorePassword: null, keyStore: null, keyStorePassword: null };
 }
 
-// ---------- JSON paths and sample data ----------
-function toks(p) { const t = []; const s = String(p || '').replace(/^\$/, ''); const re = /\.([A-Za-z0-9_-]+)|\['([^']*)'\]|\[(\*|\d+)\]/g; let m; while ((m = re.exec(s))) t.push(m[1] !== undefined ? m[1] : m[2] !== undefined ? m[2] : (m[3] === '*' ? '*' : Number(m[3]))); return t; }
+// ---------- JSON paths and sample data (toks: flow-fields.js) ----------
 function place(root, path, value) {
   const t = toks(path); if (!t.length || !['request', 'steps'].includes(t[0])) return;
   let o = root;
@@ -398,10 +416,11 @@ function inferSchema(v) {
 }
 const schemaDoc = v => pretty({ $schema: 'https://json-schema.org/draft/2020-12/schema', ...inferSchema(v) });
 const jsonError = t => { try { JSON.parse(t); return ''; } catch (e) { return e.message; } };
-/** Where a schema code is referenced: ['TRANSFER request', 'TRANSFER step debit', ...]. */
-const schemaUses = (cfg, code) => cfg.flows.flatMap(f => [
+/** Where a schema code is referenced: ['TRANSFER request', 'TRANSFER step debit', 'schema PAYMENT_REQUEST', ...]. */
+const schemaUses = (cfg, code) => [...cfg.flows.flatMap(f => [
   ...(f.reqSchema === code ? [f.code + ' request'] : []), ...(f.respSchema === code ? [f.code + ' response'] : []),
-  ...f.steps.filter(st => st.respSchema === code).map(st => f.code + ' step ' + st.name)]);
+  ...f.steps.filter(st => st.respSchema === code).map(st => f.code + ' step ' + st.name)]),
+  ...cfg.schemas.filter(x => x.code !== code && refsTo(x.text, code)).map(x => 'schema ' + x.code)];
 
 // ---------- generated SQL (Rows tab) ----------
 function flowSql(f, lookupsUsed) {
@@ -714,7 +733,7 @@ class App extends Component {
     if (m[1] === 'flow') {
       const i = this.state.cfg.flows.findIndex(f => f.code === decodeURIComponent(m[2] || ''));
       if (i < 0) return null;
-      return { screen: 'flow', cur: i, tab: ['pipeline', 'mapping', 'tests', 'rows'].includes(m[3]) ? m[3] : 'pipeline', sel: { kind: 'flow' }, scope: 'resp', preview: null };
+      return { screen: 'flow', cur: i, tab: ['pipeline', 'mapping', 'schemas', 'tests', 'rows'].includes(m[3]) ? m[3] : 'pipeline', sel: { kind: 'flow' }, scope: 'resp', preview: null };
     }
     return ['flows', 'targets', 'lookups', 'schemas', 'storages', 'audit'].includes(m[1]) ? { screen: m[1] } : null;
   }
@@ -1231,18 +1250,66 @@ class App extends Component {
     if (err) this.setState({ toast: { status: 'Export', title: 'Export ' + code, color: 'oklch(0.72 0.15 25)', body: err, note: '' } });
   }
 
+  /** Only the chosen flows (and the shared items they use): applying it leaves the other flows as they are. */
+  async exportFlows(codes, format) {
+    const name = (codes.length === 1 ? codes[0] : codes.length + '-flows') + '.' + (format === 'liquibase' ? 'xml' : format);
+    const err = await this.download('api/flows/export?format=' + format + '&codes=' + codes.map(encodeURIComponent).join(','), name);
+    if (err) this.setState({ toast: { status: 'Export', title: 'Export ' + codes.join(', '), color: 'oklch(0.72 0.15 25)', body: err, note: '' } });
+  }
+
+  /** An application export or a flows export (JSON), told apart by its format. */
+  importFile(text) {
+    let d; try { d = JSON.parse(text); } catch (e) { d = null; }
+    if (d && d.format === 'json-gateway-flows') this.importFlows(d); else this.importApp(d);
+  }
+
+  /** Shared items of an import: added when missing, kept (with a note) when this gateway has a different one. */
+  mergeShared(cfg, inc, notes) {
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const merge = (list, item, what) => { const e = list.find(x => x.code === item.code); if (!e) { list.push(item); notes.push(what + ' ' + item.code + ' added'); } else if (!same(e, item)) notes.push(what + ' ' + item.code + ' already exists here and differs: kept this gateway\'s'); };
+    inc.targets.forEach(t => merge(cfg.targets, t, 'target system'));
+    inc.schemas.forEach(x => merge(cfg.schemas, x, 'schema'));
+    inc.storages.forEach(x => merge(cfg.storages = cfg.storages || [], x, 'storage'));
+    Object.keys(inc.lookups).forEach(code => { if (!cfg.lookups[code]) { cfg.lookups[code] = inc.lookups[code]; notes.push('lookup ' + code + ' added'); } else if (!same(cfg.lookups[code], inc.lookups[code])) notes.push('lookup ' + code + ' already exists here and differs: kept this gateway\'s'); });
+  }
+
+  /** What an import still needs on this gateway, as toast lines. */
+  importNeeds(d) {
+    return [...Object.entries(d.requires || {}).filter(([, v]) => v && v.length).map(([k, v]) => 'needs ' + k + ': ' + v.join(', ')),
+      ...(d.replacedSecrets && d.replacedSecrets.length ? ['set these environment variables: ' + d.replacedSecrets.join(', ')] : [])];
+  }
+
+  /**
+   * Loads exported flows (JSON) as unsaved changes: each replaces the flow with the same code, the other flows stay;
+   * their applications and shared items are added when missing. Nothing is written until Save & reload.
+   */
+  importFlows(d) {
+    const inc = fromApi({ flows: d.flows || [], targets: d.targets || [], lookups: d.lookups || [], schemas: d.schemas || [], storages: d.storages || [], applications: d.applications || [] });
+    const notes = []; let added = 0, replaced = 0;
+    this.mutCfg(cfg => {
+      cfg.applications = cfg.applications || [];
+      inc.applications.forEach(a => { if (!cfg.applications.some(x => x.code === a.code)) { cfg.applications.push(a); notes.push('application ' + a.code + ' added'); } });
+      inc.flows.forEach(f => {
+        const i = cfg.flows.findIndex(x => x.code === f.code);
+        if (i >= 0) { if ((cfg.flows[i].application || 'DEFAULT') !== (f.application || 'DEFAULT')) notes.push('flow ' + f.code + ' moved here from ' + cfg.flows[i].application); cfg.flows[i] = f; replaced++; } else { cfg.flows.push(f); added++; }
+      });
+      this.mergeShared(cfg, inc, notes);
+    });
+    this.setState({ toast: { status: 'Imported', title: 'Import ' + inc.flows.map(f => f.code).join(', ') + ' · not saved yet', color: 'oklch(0.78 0.13 155)',
+      body: [added + ' flow(s) added, ' + replaced + ' replaced; other flows unchanged', ...notes, ...this.importNeeds(d)].join('\n'),
+      note: 'Review, then Save & reload: the save validates it like any edit.' } });
+  }
+
   /**
    * Loads an exported application (JSON) into the page as unsaved changes: the application and its flows replace
    * those with the same codes (its other flows are removed), shared items are added when missing and kept when this
    * gateway already has them. Nothing is written until Save & reload, which validates it like any edit.
    */
-  importApp(text) {
-    let d; try { d = JSON.parse(text); } catch (e) { d = null; }
+  importApp(d) {
     const fail = msg => this.setState({ toast: { status: 'Import', title: 'Import application', color: 'oklch(0.72 0.15 25)', body: msg, note: '' } });
-    if (!d || d.format !== 'json-gateway-application' || !d.application || !d.application.code) { fail('Not an application export (a JSON file from Flows → Export → JSON).'); return; }
+    if (!d || d.format !== 'json-gateway-application' || !d.application || !d.application.code) { fail('Not an export (a JSON file from Flows → Export → JSON).'); return; }
     const inc = fromApi({ flows: d.flows || [], targets: d.targets || [], lookups: d.lookups || [], schemas: d.schemas || [], storages: d.storages || [], applications: [d.application] });
     const app = inc.applications[0]; const notes = []; let added = 0, replaced = 0, removed = 0;
-    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     this.mutCfg(cfg => {
       cfg.applications = cfg.applications || [];
       const ex = cfg.applications.find(a => a.code === app.code);
@@ -1254,26 +1321,26 @@ class App extends Component {
         f.application = app.code; const i = cfg.flows.findIndex(x => x.code === f.code);
         if (i >= 0) { if ((cfg.flows[i].application || 'DEFAULT') !== app.code) notes.push('flow ' + f.code + ' moved here from ' + cfg.flows[i].application); cfg.flows[i] = f; replaced++; } else { cfg.flows.push(f); added++; }
       });
-      const merge = (list, item, what) => { const e = list.find(x => x.code === item.code); if (!e) { list.push(item); notes.push(what + ' ' + item.code + ' added'); } else if (!same(e, item)) notes.push(what + ' ' + item.code + ' already exists here and differs: kept this gateway\'s'); };
-      inc.targets.forEach(t => merge(cfg.targets, t, 'target system'));
-      inc.schemas.forEach(x => merge(cfg.schemas, x, 'schema'));
-      inc.storages.forEach(x => merge(cfg.storages = cfg.storages || [], x, 'storage'));
-      Object.keys(inc.lookups).forEach(code => { if (!cfg.lookups[code]) { cfg.lookups[code] = inc.lookups[code]; notes.push('lookup ' + code + ' added'); } else if (!same(cfg.lookups[code], inc.lookups[code])) notes.push('lookup ' + code + ' already exists here and differs: kept this gateway\'s'); });
+      this.mergeShared(cfg, inc, notes);
     });
-    const req = Object.entries(d.requires || {}).filter(([, v]) => v && v.length).map(([k, v]) => k + ': ' + v.join(', '));
     this.setState({ toast: { status: 'Imported', title: 'Import ' + app.code + ' · not saved yet', color: 'oklch(0.78 0.13 155)',
-      body: [added + ' flow(s) added, ' + replaced + ' replaced' + (removed ? ', ' + removed + ' removed (not in the file)' : ''), ...notes, ...req.map(r => 'needs ' + r),
-        ...(d.replacedSecrets && d.replacedSecrets.length ? ['set these environment variables: ' + d.replacedSecrets.join(', ')] : [])].join('\n'),
+      body: [added + ' flow(s) added, ' + replaced + ' replaced' + (removed ? ', ' + removed + ' removed (not in the file)' : ''), ...notes, ...this.importNeeds(d)].join('\n'),
       note: 'Review, then Save & reload: the save validates it like any edit.' } });
   }
 
   renderFlows() {
     const s = this.state; const base = s.catalog.apiBasePath; const dirty = this.dirty();
     const open = i => () => this.setState({ screen: 'flow', tab: 'pipeline', cur: i, sel: { kind: 'flow' }, scope: 'resp', preview: null });
-    const grid = 'display:grid;grid-template-columns:minmax(0,2.4fr) minmax(0,1.4fr) 70px minmax(0,1.5fr) 80px 90px;gap:12px';
+    const grid = 'display:grid;grid-template-columns:18px minmax(0,2.4fr) minmax(0,1.4fr) 70px minmax(0,1.5fr) 80px 90px;gap:12px';
+    // flows ticked for "export selected"; a code no longer in the configuration (deleted, renamed) drops out
+    const sel = (s.flowSel || []).filter(c => s.cfg.flows.some(f => f.code === c));
+    const setSel = codes => this.setState({ flowSel: codes });
+    const tick = (codes, on) => setSel(on ? [...new Set([...sel, ...codes])] : sel.filter(c => !codes.includes(c)));
+    const box = (codes, title) => { const on = codes.length > 0 && codes.every(c => sel.includes(c));
+      return html`<input type="checkbox" class="ro-ok" title=${title} checked=${on} disabled=${codes.length === 0} onClick=${e => { e.stopPropagation(); tick(codes, !on); }} style="margin:0;cursor:pointer;accent-color:#17181C"/>`; };
     const other = s.problems.filter(m => !s.cfg.flows.some(f => m.includes(`flow '${f.code}'`)) && !/^(target system|lookup|json schema|storage) '/.test(m));
     const small = (label, onClick, disabled, title, cls = 'btn-line') => html`<button class=${cls} disabled=${disabled} title=${title || ''} onClick=${onClick} style="border:1px solid #E4E1D8;background:#fff;color:#17181C;border-radius:7px;padding:5px 10px;cursor:pointer;font-weight:500;font-size:12px;white-space:nowrap">${label}</button>`;
-    const pickFile = () => { const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json'; inp.onchange = async () => { const f = inp.files && inp.files[0]; if (f) this.importApp(await f.text()); }; inp.click(); };
+    const pickFile = () => { const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json'; inp.onchange = async () => { const f = inp.files && inp.files[0]; if (f) this.importFile(await f.text()); }; inp.click(); };
     const q = (s.flowQ || '').trim().toLowerCase();
     const has = v => String(v == null ? '' : v).toLowerCase().includes(q);
     const flowHit = x => has(x.code) || has(x.name) || has(x.method + ' ' + base + x.path) || has(x.path) || has(x.errorHandler || 'defaultErrorHandler')
@@ -1294,11 +1361,21 @@ class App extends Component {
             <span style=${`font:11.5px ${MONO};color:#9A9CA2`}>${q ? shown + ' of ' + total : total} flow${total === 1 ? '' : 's'}${q ? ' in ' + sections.length + ' application' + (sections.length === 1 ? '' : 's') : ''}</span>
           </div>
           <div style="margin-top:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:#6A6D75">
-            <span class="ro-hide" style="display:flex;gap:8px">${small('+ New application', () => this.openAppModal('new'))}${small('Import application…', pickFile, false, 'Load a JSON export as unsaved changes')}</span>
+            <span class="ro-hide" style="display:flex;gap:8px">${small('+ New application', () => this.openAppModal('new'))}${small('Import…', pickFile, false, 'Load a JSON export (an application or selected flows) as unsaved changes')}</span>
             <span style="flex:1"></span>
             <span title="One document for every live endpoint, built from the API description (Swagger)">API specification of all endpoints</span>
             ${['docx:Word', 'pdf:PDF', 'md:Markdown'].map(x => { const [fmt, label] = x.split(':'); return small(label, () => this.openSpecModal(fmt), dirty, dirty ? 'Save & reload first: the spec comes from the live configuration' : 'Choose the applications and endpoints, then generate'); })}
           </div>
+          ${sel.length > 0 && html`
+          <div style="margin-top:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 14px;background:#F4F2EC;border:1px solid #E4E1D8;border-radius:9px;font-size:12px">
+            <span style=${`font:600 12px ${MONO}`}>${sel.length} flow${sel.length === 1 ? '' : 's'} selected</span>
+            <span title=${sel.join(', ')} style=${`font:11.5px ${MONO};color:#6A6D75;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:420px`}>${sel.join(', ')}</span>
+            <span style="flex:1"></span>
+            <span style="display:flex;align-items:center;gap:6px;color:#6A6D75">Export only these
+              ${[['json', 'JSON'], ['sql', 'SQL'], ['liquibase', 'Liquibase']].map(([fmt, label]) => small(label, () => this.exportFlows(sel, fmt), dirty, dirty ? 'Save & reload first: the export reads the saved configuration' : 'Applying it replaces only these flows; the other flows stay as they are'))}
+            </span>
+            ${small('Clear', () => setSel([]))}
+          </div>`}
           ${sections.map(({ app, flows }) => html`
           <div style="margin-top:18px;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:auto">
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px;background:#FAF9F6;border-bottom:1px solid #EFEDE6;min-width:760px">
@@ -1319,13 +1396,14 @@ class App extends Component {
             </div>
             ${app.description && html`<div style="padding:8px 16px;font-size:12px;color:#6A6D75;border-bottom:1px solid #F3F1EC;min-width:760px">${app.description}</div>`}
             ${flows.length > 0 && html`<div style=${`${grid};min-width:760px;padding:8px 16px;font:600 10px ${MONO};letter-spacing:.06em;color:#9A9CA2;border-bottom:1px solid #EFEDE6`}>
-              <span>ENDPOINT</span><span>CODE</span><span>STEPS</span><span>ERROR HANDLER</span><span>AUDIT</span><span>ENABLED</span>
+              ${box(flows.map(({ f }) => f.code), 'Select all flows of ' + app.code + ' shown here')}<span>ENDPOINT</span><span>CODE</span><span>STEPS</span><span>ERROR HANDLER</span><span>AUDIT</span><span>ENABLED</span>
             </div>`}
             ${flows.length === 0 && html`<div style="padding:16px;color:#6A6D75;font-size:12.5px;min-width:760px">No flows yet. <b>+ Flow</b> adds one to this application.</div>`}
             ${flows.map(({ f: x, i }) => {
               const np = this.flowProblems(x).length;
               return html`
               <div class="row" onClick=${open(i)} style=${`${grid};min-width:760px;align-items:center;padding:12px 16px;border-bottom:1px solid #F3F1EC;cursor:pointer`}>
+                ${box([x.code], 'Select for export')}
                 <div style="display:flex;align-items:center;gap:9px;min-width:0">
                   <span style=${`width:48px;text-align:center;flex:none;font:600 10px ${MONO};color:#fff;background:${MC[x.method] || '#555'};padding:3px 0;border-radius:4px`}>${x.method}</span>
                   <span style=${`font:12.5px ${MONO};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>${base}${x.path}</span>
@@ -1590,10 +1668,11 @@ class App extends Component {
     if (this.auditState().auto && this.state.screen === 'audit') this.timers.audit = setTimeout(() => { if (this.state.screen === 'audit') this.loadAudit(); }, 5000);
   }
 
-  async openAuditDetail(id) {
+  /** One transaction by its row id: a flow calling the gateway's own flows records several under one correlation ID. */
+  async openAuditDetail(correlationId, id) {
     this.setAudit(x => { x.sel = id; x.detail = null; x.detailError = ''; });
     try {
-      const r = await this.api('GET', 'audit/' + encodeURIComponent(id));
+      const r = await this.api('GET', 'audit/' + encodeURIComponent(correlationId) + '?id=' + encodeURIComponent(id));
       this.setAudit(x => { if (x.sel !== id) return; if (r.status === 200) x.detail = r.json; else x.detailError = (r.json.errors || ['HTTP ' + r.status]).join('; '); });
     } catch (e) { /* api() */ }
   }
@@ -1668,8 +1747,8 @@ class App extends Component {
           <div style=${`min-height:0;display:${a.wide ? 'none' : 'flex'};flex-direction:column;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:hidden`}>
             <div style="flex:1;min-height:0;overflow:auto">
               ${a.data && rows.length === 0 && html`<div style="padding:24px;text-align:center;color:#6A6D75;font-size:12.5px">No calls match. Call an endpoint (e.g. ${mono('make demo')} or the Tests tab of a flow), then Refresh.</div>`}
-              ${rows.map(r => { const on = a.sel === r.correlation_id; return html`
-                <div class="row" onClick=${() => this.openAuditDetail(r.correlation_id)} style=${`display:flex;flex-direction:column;gap:4px;padding:9px 12px;border-bottom:1px solid #F3F1EC;cursor:pointer;background:${on ? 'oklch(0.97 0.03 50)' : ''};box-shadow:${on ? 'inset 3px 0 0 ' + C.call : 'none'}`}>
+              ${rows.map(r => { const on = a.sel === r.id; return html`
+                <div class="row" onClick=${() => this.openAuditDetail(r.correlation_id, r.id)} style=${`display:flex;flex-direction:column;gap:4px;padding:9px 12px;border-bottom:1px solid #F3F1EC;cursor:pointer;background:${on ? 'oklch(0.97 0.03 50)' : ''};box-shadow:${on ? 'inset 3px 0 0 ' + C.call : 'none'}`}>
                   <div style="display:flex;align-items:center;gap:8px;min-width:0">
                     ${statusChip(r.client_status)}
                     <span style=${`font:600 10px ${MONO};color:#fff;background:${MC[r.http_method] || '#555'};padding:2px 5px;border-radius:4px;flex:none`}>${r.http_method}</span>
@@ -1711,6 +1790,21 @@ class App extends Component {
                   <span style="color:#9A9CA2">started</span><span>${tx.started_at} · ${tx.duration_ms} ms</span>
                   ${(tx.error_type || tx.error_code) && html`<span style="color:#9A9CA2">error</span><span style="color:oklch(0.5 0.17 25)">${[tx.error_type, tx.error_code].filter(Boolean).join(' · ')}</span>`}
                 </div>
+                ${d.related && d.related.length > 1 && html`
+                  <div style="display:flex;flex-direction:column;gap:4px">
+                    <div style=${`font:600 10px ${MONO};letter-spacing:.06em;color:#6A6D75;text-transform:uppercase`}>${d.related.length} calls share this correlation ID <span style="color:#9A9CA2;font-weight:400;text-transform:none;letter-spacing:0">· a flow calling the gateway's own flows · in start order</span></div>
+                    <div style="border:1px solid #E4E1D8;border-radius:7px;overflow:hidden">
+                      ${d.related.map((r, i) => { const on = r.id === tx.id; return html`
+                        <div class="row" onClick=${() => { if (!on) this.openAuditDetail(r.correlation_id, r.id); }} style=${`display:flex;align-items:center;gap:8px;padding:5px 9px;font:11px ${MONO};cursor:${on ? 'default' : 'pointer'};border-top:${i ? '1px solid #F3F1EC' : '0'};background:${on ? 'oklch(0.97 0.03 50)' : ''};box-shadow:${on ? 'inset 3px 0 0 ' + C.call : 'none'}`}>
+                          <span style="color:#9A9CA2;flex:none">${i + 1}</span>
+                          ${statusChip(r.client_status)}
+                          <span style=${`font:600 10px ${MONO};color:#fff;background:${MC[r.http_method] || '#555'};padding:2px 5px;border-radius:4px;flex:none`}>${r.http_method}</span>
+                          <span class="hscroll" style="flex:1;min-width:0">${r.path}</span>
+                          <span style="flex:none;color:#3E4047">${r.flow_code || '(no flow)'}</span>
+                          <span style="flex:none;color:#9A9CA2">${r.started_at} · ${r.duration_ms} ms</span>
+                        </div>`; })}
+                    </div>
+                  </div>`}
 
                 <div style="display:flex;flex-direction:column;gap:12px;border-left:2px solid #E4E1D8;padding-left:14px;margin-left:4px">
                   <div style="display:flex;flex-direction:column;gap:6px">
@@ -1853,13 +1947,16 @@ class App extends Component {
       if (!v || (v !== old && cfg.schemas.some(x => x.code === v))) return;
       cfg.schemas[i].code = v;
       cfg.flows.forEach(f => { if (f.reqSchema === old) f.reqSchema = v; if (f.respSchema === old) f.respSchema = v; f.steps.forEach(st => { if (st.respSchema === old) st.respSchema = v; }); });
+      // gw:OLD references in schema texts, as text (keeps their formatting; gw:OLD_X is another code and stays)
+      cfg.schemas.forEach(x => { x.text = String(x.text || '').split('"gw:' + old + '"').join('"gw:' + v + '"').split('"gw:' + old + '#').join('"gw:' + v + '#'); });
       setTimeout(() => this.setState({ focusSchema: v }), 0);
     });
     const ex = s.example || {};
     const q = (s.schQ || '').trim().toLowerCase();
     const has = v => String(v == null ? '' : v).toLowerCase().includes(q);
     // every property name in a schema (nested ones too), for the FIELDS column and the search
-    const fieldsOf = text => { const out = []; const walk = (n, d) => { if (!n || typeof n !== 'object' || d > 8) return; if (n.properties) Object.keys(n.properties).forEach(k => { out.push({ k, d }); walk(n.properties[k], d + 1); }); if (n.items) walk(n.items, d); ['$defs', 'definitions'].forEach(x => n[x] && Object.values(n[x]).forEach(v => walk(v, d))); }; try { walk(JSON.parse(text), 0); } catch (e) { /* invalid: shown in its editor */ } return out; };
+    // (also of the options of oneOf / anyOf / allOf and of the schemas it references with gw:CODE, each once)
+    const fieldsOf = text => { const out = []; const seen = new Set(); const walk = (n, d) => { if (!n || typeof n !== 'object' || d > 8) return; if (n.properties) Object.keys(n.properties).forEach(k => { out.push({ k, d }); walk(n.properties[k], d + 1); }); if (n.items) walk(n.items, d); ['$defs', 'definitions'].forEach(x => n[x] && Object.values(n[x]).forEach(v => walk(v, d))); ['oneOf', 'anyOf', 'allOf'].forEach(x => Array.isArray(n[x]) && n[x].forEach(v => walk(v, d))); const g = gwRef(n.$ref); if (g && !seen.has(n.$ref)) { seen.add(n.$ref); walk(atPointer(gwDoc(g.code), g.frag), d); } }; try { walk(JSON.parse(text), 0); } catch (e) { /* invalid: shown in its editor */ } return out; };
     const rows = s.cfg.schemas.map((x, i) => ({ x, i, fields: fieldsOf(x.text), uses: schemaUses(s.cfg, x.code) }))
       .filter(r => !q || has(r.x.code) || has(r.x.desc) || r.uses.some(has) || r.fields.some(f => has(f.k)));
     const grid = 'display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1.6fr) minmax(0,2fr) minmax(0,1.6fr);gap:12px;align-items:center';
@@ -1882,7 +1979,7 @@ class App extends Component {
               const errs = s.problems.filter(m => m.includes(`json schema '${x.code}'`) || m.includes(`Schema '${x.code}'`));
               const parseErr = jsonError(x.text);
               const focused = s.focusSchema === x.code; const exOpen = ex.i === i; const open = focused;
-              const top = fields.filter(f => f.d === 0).map(f => f.k); const hitFields = q ? fields.filter(f => has(f.k)).map(f => f.k) : [];
+              const top = [...new Set(fields.filter(f => f.d === 0).map(f => f.k))]; const hitFields = q ? [...new Set(fields.filter(f => has(f.k)).map(f => f.k))] : [];
               const shownFields = hitFields.length ? hitFields : top;
               return html`
               <div id=${'schema-' + x.code} class="row" onClick=${() => this.setState({ focusSchema: open ? null : x.code })} style=${`${grid};min-width:860px;padding:11px 16px;border-bottom:1px solid #F3F1EC;cursor:pointer;scroll-margin-top:16px;background:${open ? '#FAF9F6' : ''}`}>
@@ -1917,7 +2014,7 @@ class App extends Component {
                   <button class="ro-hide" disabled=${!!parseErr} onClick=${() => upd(i, y => { y.text = pretty(JSON.parse(y.text)); })} style="border:1px solid #E4E1D8;background:#fff;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#3E4047">Format</button>
                   ${!exOpen && html`<button class="ro-hide" onClick=${() => this.setState({ example: { i, text: '' } })} style="border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">Generate from example JSON…</button>`}
                   <span style="flex:1"></span>
-                  <button class="del" onClick=${() => this.ask(`Delete schema ${x.code || '(unnamed)'}?`, (uses.length ? `Still used by ${uses.join(', ')}: the save will be rejected until those references are removed.` : 'No flow or step uses it.') + ` Nothing changes in the database until Save & reload.`, () => this.mutCfg(cfg => { cfg.schemas.splice(i, 1); }))} title=${uses.length ? 'Still used: the save will be rejected until the references are removed' : ''} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px">Delete schema</button>
+                  <button class="del" onClick=${() => this.ask(`Delete schema ${x.code || '(unnamed)'}?`, (uses.length ? `Still used by ${uses.join(', ')}: the save will be rejected until those references are removed.` : 'Nothing uses it.') + ` Nothing changes in the database until Save & reload.`, () => this.mutCfg(cfg => { cfg.schemas.splice(i, 1); }))} title=${uses.length ? 'Still used: the save will be rejected until the references are removed' : ''} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px">Delete schema</button>
                 </div>
               </div>`}`;
             })}
@@ -1929,7 +2026,7 @@ class App extends Component {
   // ---------- one flow ----------
   renderFlow(f) {
     const s = this.state;
-    const tabs = [['Pipeline', 'pipeline'], ['Mapping', 'mapping'], ['Tests', 'tests'], ['Rows (SQL)', 'rows']];
+    const tabs = [['Pipeline', 'pipeline'], ['Mapping', 'mapping'], ['Schemas', 'schemas'], ['Tests', 'tests'], ['Rows (SQL)', 'rows']];
     return html`
       <div style="flex:1;min-height:0;display:flex;flex-direction:column">
         <div style="height:48px;flex:none;display:flex;align-items:center;gap:12px;padding:0 16px;background:#FFFFFF;border-bottom:1px solid #E4E1D8;overflow:hidden">
@@ -1949,6 +2046,7 @@ class App extends Component {
         </div>
         ${s.tab === 'pipeline' && this.renderPipeline(f)}
         ${s.tab === 'mapping' && this.renderMapping(f)}
+        ${s.tab === 'schemas' && this.renderSchemasTab(f)}
         ${s.tab === 'rows' && this.renderRows(f)}
         ${s.tab === 'tests' && this.renderTests(f)}
       </div>`;
@@ -2694,7 +2792,7 @@ class App extends Component {
       });
     };
     const ruleAccept = d => ['src', 'conv', 'lookup', 'fh'].includes(d.kind);
-    const types = scopeStep ? (isSql(scopeStep) || isTransform(scopeStep) ? ['BODY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes.filter(t => t !== 'STATUS')) : respSel && isInfoResp(respSel) ? ['BODY'] : ['BODY', 'HEADER', 'STATUS'];
+    const types = scopeStep ? (isSql(scopeStep) || isTransform(scopeStep) ? ['BODY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes.filter(t => t !== 'STATUS' && t !== 'FILE')) : respSel && isInfoResp(respSel) ? ['BODY'] : ['BODY', 'HEADER', 'STATUS', 'FILE'];
 
     const pv = s.preview && s.preview.key === f.code + '/' + (scopeStep ? scopeStep.name : respSel ? '@' + respSel.name : '') ? s.preview : null;
     const resText = (r, i) => {
@@ -2825,10 +2923,10 @@ class App extends Component {
               <div ...${zoneProps(z)} style="position:relative;background:#fff;border:1px solid #E4E1D8;border-radius:9px;padding:9px 10px;display:flex;flex-direction:column;gap:7px">
                 <div style="display:flex;align-items:center;gap:8px">
                   <span style=${`width:18px;text-align:right;font:11px ${MONO};color:#9A9CA2`}>${i + 1}</span>
-                  <select value=${r.type} onChange=${e => { const v = e.currentTarget.value; updRule(r.id, x => { x.type = v; if (v === 'STATUS') { x.target = 'status'; return; } if (v !== 'BODY' && x.target.startsWith('$.')) x.target = x.target.slice(2); if (v === 'BODY' && !x.target.startsWith('$')) x.target = '$.' + x.target; }); }} style=${`height:28px;border:1px solid #E4E1D8;border-radius:5px;background:#FAF9F6;font:600 10.5px ${MONO};padding:0 4px`}>
+                  <select value=${r.type} onChange=${e => { const v = e.currentTarget.value; updRule(r.id, x => { x.type = v; if (v === 'STATUS') { x.target = 'status'; return; } if (v === 'FILE') { x.target = 'file'; return; } if (v !== 'BODY' && x.target.startsWith('$.')) x.target = x.target.slice(2); if (v === 'BODY' && !x.target.startsWith('$')) x.target = '$.' + x.target; }); }} style=${`height:28px;border:1px solid #E4E1D8;border-radius:5px;background:#FAF9F6;font:600 10.5px ${MONO};padding:0 4px`}>
                     ${withType(types, r.type).map(o => html`<option value=${o}>${o}</option>`)}
                   </select>
-                  <input class="inp" value=${r.type === 'STATUS' ? 'HTTP status (100-599)' : r.target} readOnly=${r.type === 'STATUS'} title=${r.type === 'STATUS' ? 'Sets the HTTP status of this response, e.g. from $.steps.<step>.status; wins over the fixed status' : ''} onInput=${set('target')} style=${`flex:1;min-width:120px;height:28px;border:1px solid #E4E1D8;border-radius:5px;padding:0 8px;font:12px ${MONO};background:${r.type === 'STATUS' ? '#FAF9F6' : '#fff'};color:${r.type === 'STATUS' ? '#6A6D75' : 'inherit'}`}/>
+                  <input class="inp" value=${r.type === 'STATUS' ? 'HTTP status (100-599)' : r.type === 'FILE' ? 'the file of the step (source $.steps.<step>)' : r.target} readOnly=${r.type === 'STATUS' || r.type === 'FILE'} title=${r.type === 'FILE' ? 'Sends the file a step with body_codec fileCodec downloaded, with its Content-Type; BODY rules and the response handler do not apply' : r.type === 'STATUS' ? 'Sets the HTTP status of this response, e.g. from $.steps.<step>.status; wins over the fixed status' : ''} onInput=${set('target')} style=${`flex:1;min-width:120px;height:28px;border:1px solid #E4E1D8;border-radius:5px;padding:0 8px;font:12px ${MONO};background:${r.type === 'STATUS' || r.type === 'FILE' ? '#FAF9F6' : '#fff'};color:${r.type === 'STATUS' || r.type === 'FILE' ? '#6A6D75' : 'inherit'}`}/>
                   <span style="color:#ADA99E">←</span>
                   ${r.source ? html`
                     <div style=${`flex:1.25;min-width:0;height:28px;display:flex;align-items:center;gap:6px;padding:0 4px 0 9px;border-radius:5px;background:oklch(0.96 0.025 255);font:11.5px ${MONO};color:oklch(0.38 0.12 255)`}>
@@ -2940,7 +3038,7 @@ class App extends Component {
       const parts = nav.getAttribute('data-nav').replace(/^studio:/, '').split('/');
       if (parts[0] === 'flow') {
         const i = this.state.cfg.flows.findIndex(f => f.code === parts[1]);
-        if (i >= 0) this.setState({ screen: 'flow', cur: i, tab: ['pipeline', 'mapping', 'tests', 'rows'].includes(parts[2]) ? parts[2] : 'pipeline', sel: { kind: 'flow' }, scope: 'resp', preview: null }, () => this.changed());
+        if (i >= 0) this.setState({ screen: 'flow', cur: i, tab: ['pipeline', 'mapping', 'schemas', 'tests', 'rows'].includes(parts[2]) ? parts[2] : 'pipeline', sel: { kind: 'flow' }, scope: 'resp', preview: null }, () => this.changed());
       } else if (['flows', 'targets', 'lookups', 'schemas'].includes(parts[0])) this.setState({ screen: parts[0] });
       return;
     }
@@ -3185,6 +3283,67 @@ class App extends Component {
             <button id="spec-ok" class="btn-dark" disabled=${busy || !chosen} onClick=${() => this.generateSpec()} style=${`display:flex;align-items:center;gap:8px;border:0;background:#17181C;color:#fff;border-radius:7px;padding:8px 14px;cursor:pointer;font-weight:600${busy ? ';opacity:1' : ''}`}>
               ${busy && html`<span class="spin"></span>`}${busy ? 'Generating ' + label + '…' : 'Generate ' + label}</button>
           </div>
+        </div>
+      </div>`;
+  }
+
+  /** Read-only overview of the fields a flow takes and gives, and of what each external call sends and receives. */
+  renderSchemasTab(f) {
+    const blocks = flowOverview(f, { texts: SCHEMA_TEXT, isExternal: st => !isSql(st) && !isStore(st) && !isTransform(st) && !isCondition(st) });
+    const accent = b => (b.key === 'request' ? C.in : b.key === 'response' || b.key.startsWith('resp:') ? C.out : C.call);
+    const toMap = scope => this.setState({ tab: 'mapping', scope, preview: null }, () => this.changed());
+    const source = src => {
+      const style = `font:600 10.5px ${MONO};padding:2px 7px;border-radius:4px;white-space:nowrap;border:0;background:#EFEDE6;color:#3E4047`;
+      if (src.schema) return html`<button class="btn-line" title="Open this schema" onClick=${() => this.openSchema(src.schema)} style=${style + ';cursor:pointer'}>${src.label} →</button>`;
+      if (src.scope) return html`<button class="btn-line" title="Open this mapping" onClick=${() => toMap(src.scope)} style=${style + ';cursor:pointer'}>${src.label} →</button>`;
+      return html`<span style=${style}>${src.label}</span>`;
+    };
+    // why a column lists no fields, in its own terms
+    const empty = col => (col.params.length ? 'No body fields.'
+      : col.source.schema ? 'The schema declares no fields (e.g. a single value, a list of values or a free-form object).'
+      : col.source.label === 'response example' ? 'The example has no fields.'
+      : col.source.label === 'mapping rules' ? 'No rules write body fields (or one rule passes a whole body through).'
+      : 'Nothing in the flow reads a field of it.');
+    const rows = (fields, depth) => fields.map(fd => html`
+      <div title=${fd.notes} style=${`display:grid;grid-template-columns:minmax(0,1fr) auto 18px;gap:10px;padding:2px 0 2px ${depth * 14}px;font:11.5px ${MONO};border-bottom:1px dashed #EFEDE6`}>
+        <span style=${`overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${fd.name === '…' ? '#9A9CA2' : '#17181C'}`}>${fd.name}${fd.notes && fd.name !== '…' ? html`<span style="color:#B5B3AB"> ⓘ</span>` : ''}</span>
+        <span style="color:#6A6D75">${fd.type}</span>
+        <span style=${`color:${fd.required ? 'oklch(0.5 0.15 25)' : '#9A9CA2'};text-align:right`}>${fd.required === null ? '' : fd.required ? 'M' : 'O'}</span>
+      </div>
+      ${rows(fd.children, depth + 1)}`);
+    const column = col => html`
+      <div style="flex:1;min-width:280px;display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style=${`font:600 10px ${MONO};letter-spacing:.08em;color:#6A6D75;text-transform:uppercase`}>${col.heading}</span>
+          ${source(col.source)}
+        </div>
+        ${col.params.map(p => html`<div style=${`font:11px ${MONO};color:#6A6D75`}><b style="font-weight:600;color:#3E4047">${p.type}</b> ${p.names.join(', ')}</div>`)}
+        ${col.shape.problem && html`<div style="font-size:12px;color:oklch(0.5 0.18 25)">${col.shape.problem}</div>`}
+        ${col.shape.note && html`<div style="font-size:12px;color:#6A6D75">${col.shape.note}</div>`}
+        ${!col.shape.problem && !col.shape.note && (col.shape.options.every(o => !o.fields.length && !o.problem)
+          ? html`<div style="font-size:12px;color:#9A9CA2">${empty(col)}</div>`
+          : html`<div style="display:flex;gap:14px;flex-wrap:wrap">${col.shape.options.map((o, i) => html`
+              <div style="flex:1;min-width:220px">
+                ${o.label && html`<div style=${`font:600 11px ${MONO};color:${C.in};margin-bottom:3px`}>${col.shape.options.length > 1 && !/^Option \d+$/.test(o.label) ? 'option ' + (i + 1) + ' · ' : ''}${o.label}</div>`}
+                ${o.problem && html`<div style="font-size:12px;color:oklch(0.5 0.18 25)">${o.problem}</div>`}
+                ${rows(o.fields, 0)}
+              </div>`)}</div>`)}
+      </div>`;
+    return html`
+      <div style="flex:1;min-height:0;overflow:auto;padding:22px 28px 60px">
+        <div style="max-width:1100px;margin:0 auto;display:flex;flex-direction:column;gap:14px">
+          <div>
+            <div style="font-size:18px;font-weight:600;letter-spacing:-0.01em">Schemas</div>
+            <div style="font-size:12.5px;color:#6A6D75;margin-top:4px">The fields this flow takes and gives, and what each external call sends and receives, in pipeline order. Read-only; follows unsaved edits. Hover a field marked ⓘ for its description.</div>
+          </div>
+          ${blocks.map(b => html`
+            <div style=${`background:#fff;border:1px solid #E4E1D8;border-left:3px solid ${accent(b)};border-radius:9px;padding:12px 16px 14px`}>
+              <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+                <span style="font-weight:600;font-size:13.5px">${b.title}</span>
+                ${b.detail && html`<span style=${`font:11.5px ${MONO};color:#6A6D75`}>${b.detail}</span>`}
+              </div>
+              <div style="display:flex;gap:24px;flex-wrap:wrap">${b.columns.map(column)}</div>
+            </div>`)}
         </div>
       </div>`;
   }

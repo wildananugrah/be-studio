@@ -24,7 +24,9 @@ import org.springframework.web.bind.annotation.RestController;
  * GET /studio/api/audit/status                 {auditEnabled, storePayloads, zone}
  * GET /studio/api/audit?flow=&amp;status=2xx|4xx|5xx|errors&amp;q=&amp;from=&amp;to=&amp;page=1&amp;size=50
  *                                              newest first; q = correlation ID, or part of the path / error code
- * GET /studio/api/audit/{correlationId}        transaction + steps (with payloads) + buffered log lines
+ * GET /studio/api/audit/{correlationId}?id=    transaction + steps (with payloads) + buffered log lines; id picks one of
+ *                                              the transactions sharing the correlation ID (default newest), related
+ *                                              lists them all
  * </pre>
  */
 @RestController
@@ -84,13 +86,14 @@ public class StudioAuditController {
 
     @GetMapping("/{correlationId}")
     public ResponseEntity<Object> detail(@RequestHeader(name = "X-Admin-Token", required = false) String supplied,
-            @PathVariable String correlationId) {
+            @PathVariable String correlationId, @RequestParam(required = false) Long id) {
         if (!authorized(supplied)) {
             return UNAUTHORIZED;
         }
-        Map<String, Object> detail = audit.detail(correlationId);
+        Map<String, Object> detail = audit.detail(correlationId, id);
         return detail == null
-                ? ResponseEntity.status(404).body(Map.of("errors", List.of("no audit row for correlation ID '" + correlationId + "'")))
+                ? ResponseEntity.status(404).body(Map.of("errors", List.of("no audit row for correlation ID '" + correlationId + "'"
+                        + (id == null ? "" : " with id " + id))))
                 : ResponseEntity.ok(detail);
     }
 

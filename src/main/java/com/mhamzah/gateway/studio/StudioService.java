@@ -128,9 +128,24 @@ public class StudioService {
      * @throws IllegalArgumentException for an unknown application or format
      */
     public Export exportApplication(String code, String format, String exportedFrom) {
-        ApplicationExport.Bundle bundle = ApplicationExport.bundle(load(), code);
+        return export(ApplicationExport.bundle(load(), code), "APP_" + code, format, exportedFrom);
+    }
+
+    /**
+     * Only the flows with these codes (and the shared items they use), in the same formats as
+     * {@link #exportApplication}: applying it replaces just these flows, the other flows of their applications stay.
+     *
+     * @throws IllegalArgumentException for no or an unknown flow code, or an unknown format
+     */
+    public Export exportFlows(List<String> codes, String format, String exportedFrom) {
+        ApplicationExport.Bundle bundle = ApplicationExport.flowsBundle(load(), codes);
+        String name = bundle.flows().size() == 1 ? bundle.flows().getFirst().code() : bundle.flows().size() + "-flows";
+        return export(bundle, "FLOWS_" + name, format, exportedFrom);
+    }
+
+    private Export export(ApplicationExport.Bundle bundle, String prefix, String format, String exportedFrom) {
         String stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmm"));
-        String base = "APP_" + code + "_" + stamp;
+        String base = prefix + "_" + stamp;
         return switch (format == null ? "" : format.toLowerCase(java.util.Locale.ROOT)) {
             case "json" -> new Export(base + ".json", "application/json", ApplicationExport.json(bundle, exportedFrom));
             case "sql" -> new Export(base + "_" + dialect.name().toLowerCase(java.util.Locale.ROOT) + ".sql",
@@ -346,6 +361,7 @@ public class StudioService {
                 case QUERY -> text(m.query().get(rule.targetName()));
                 case PATH -> text(m.pathVariables().get(rule.targetName()));
                 case STATUS -> m.status() == null ? null : JsonNodeFactory.instance.numberNode(m.status());
+                case FILE -> m.fileStep() == null ? null : JsonNodeFactory.instance.stringNode("file of step " + m.fileStep());
             };
             return new RuleResult(value, value != null, null);
         }

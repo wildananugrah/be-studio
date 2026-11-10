@@ -27,6 +27,7 @@ public final class TestCaseGenerator {
     private static final JsonNodeFactory F = JsonNodeFactory.instance;
     private static final int MAX_NEGATIVE = 8;
     private static final Set<String> SKIPPED_HEADERS = Set.of("x-correlation-id");
+    private static final String COMPONENT = "#/components/schemas/";
 
     private final JsonNode doc;
 
@@ -50,6 +51,36 @@ public final class TestCaseGenerator {
     /** The schema with local {@code $ref}s followed and {@code allOf} merged. */
     static JsonNode resolve(JsonNode openApi, JsonNode schema) {
         return new TestCaseGenerator(openApi).resolve(schema);
+    }
+
+    /** One alternative body of a {@code oneOf} / {@code anyOf} schema; {@code label} is null for a plain schema. */
+    record Option(String label, JsonNode schema) {}
+
+    /**
+     * The alternatives of a schema whose {@code $ref}s lead to a {@code oneOf} / {@code anyOf} (e.g. a router's request:
+     * one of its sub-routes' bodies), each resolved and labelled with its component name, else its title, else
+     * "Option n"; a single unlabelled option otherwise.
+     */
+    static List<Option> options(JsonNode openApi, JsonNode schema) {
+        TestCaseGenerator g = new TestCaseGenerator(openApi);
+        JsonNode s = schema;
+        for (int i = 0; i < 10 && s != null && s.has("$ref"); i++) {
+            String ref = s.get("$ref").asString();
+            s = ref.startsWith("#") ? openApi.at(ref.substring(1)) : null;
+        }
+        JsonNode choices = s == null ? null : s.has("oneOf") ? s.get("oneOf") : s.get("anyOf");
+        if (choices == null || !choices.isArray() || choices.isEmpty()) {
+            return List.of(new Option(null, g.resolve(schema)));
+        }
+        List<Option> out = new ArrayList<>();
+        for (JsonNode choice : choices) {
+            String ref = choice.path("$ref").asString("");
+            String label = ref.startsWith(COMPONENT) && ref.indexOf('/', COMPONENT.length()) < 0
+                    ? ref.substring(COMPONENT.length()).replace("~1", "/").replace("~0", "~")
+                    : choice.path("title").asString("");
+            out.add(new Option(label.isEmpty() ? "Option " + (out.size() + 1) : label, g.resolve(choice)));
+        }
+        return out;
     }
 
     static String typeOf(JsonNode schema) {
@@ -116,8 +147,12 @@ public final class TestCaseGenerator {
                     method, path, values(query, true), values(headers, true), minimal, ok));
         }
 
+        // a body that is one of several (a router's) and not validated: without a field it may still match another
+        // option, or the sub-route answers, so a missing field does not mean 400
+        boolean choice = op.has("requestBody")
+                && options(doc, op.path("requestBody").path("content").path("application/json").path("schema")).size() > 1;
         int negatives = 0;
-        if (full instanceof ObjectNode body) {
+        if (full instanceof ObjectNode body && (validated || !choice)) {
             for (String field : required(bodySchema)) {
                 if (negatives++ >= MAX_NEGATIVE) {
                     break;
@@ -181,20 +216,27 @@ public final class TestCaseGenerator {
 
     /** Follows local {@code $ref}s and merges {@code allOf}. */
     private JsonNode resolve(JsonNode schema) {
+        return resolve(schema, 0);
+    }
+
+    /** {@code depth} ends reference cycles through allOf / oneOf / anyOf (schemas may reference each other). */
+    private JsonNode resolve(JsonNode schema, int depth) {
         JsonNode s = schema;
         for (int i = 0; i < 10 && s != null && s.has("$ref"); i++) {
             String ref = s.get("$ref").asString();
             s = ref.startsWith("#") ? doc.at(ref.substring(1)) : null;
         }
-        if (s == null || s.isMissingNode()) {
+        if (s == null || s.isMissingNode() || depth > 10) {
             return F.objectNode();
         }
         if (s.has("allOf")) {
             ObjectNode merged = F.objectNode().put("type", "object");
             ObjectNode props = merged.putObject("properties");
             ArrayNode req = merged.putArray("required");
-            for (JsonNode part : s.get("allOf")) {
-                JsonNode p = resolve(part);
+            List<JsonNode> parts = new ArrayList<>();
+            s.get("allOf").forEach(part -> parts.add(resolve(part, depth + 1)));
+            parts.add(s); // its own properties, next to the allOf
+            for (JsonNode p : parts) {
                 p.path("properties").properties().forEach(e -> props.set(e.getKey(), e.getValue()));
                 p.path("required").forEach(req::add);
             }
@@ -202,7 +244,7 @@ public final class TestCaseGenerator {
         }
         if (s.has("oneOf") || s.has("anyOf")) {
             JsonNode first = (s.has("oneOf") ? s.get("oneOf") : s.get("anyOf")).path(0);
-            return first.isMissingNode() ? s : resolve(first);
+            return first.isMissingNode() ? s : resolve(first, depth + 1);
         }
         return s;
     }
@@ -279,8 +321,8 @@ public final class TestCaseGenerator {
 
     private static java.math.BigDecimal guessNumber(String name, JsonNode s, boolean integer) {
         String n = name.toLowerCase(Locale.ROOT);
-        double v = n.matches(".*(amount|amt|bal|price|fee|total).*") ? 150000
-                : n.matches(".*(limit|size|count).*") ? 10 : n.matches(".*(page).*") ? 1 : 1;
+        double v = containsAny(n, "amount", "amt", "bal", "price", "fee", "total") ? 150000
+                : containsAny(n, "limit", "size", "count") ? 10 : 1;
         if (s.has("minimum")) {
             v = Math.max(v, s.get("minimum").asDouble());
         }
@@ -295,6 +337,28 @@ public final class TestCaseGenerator {
                 : new java.math.BigDecimal(java.math.BigDecimal.valueOf(v).stripTrailingZeros().toPlainString());
     }
 
+    /** Plain substring checks instead of {@code .*(a|b).*} regexes, which backtrack (Sonar S5852). */
+    static boolean containsAny(String text, String... parts) {
+        for (String p : parts) {
+            if (text.contains(p)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** {@code .*(to|beneficiary|dest).*acc.*}: one of the prefixes, then "acc" somewhere after it. */
+    static boolean accountAfter(String text, String... prefixes) {
+        int end = -1;
+        for (String p : prefixes) {
+            int i = text.indexOf(p);
+            if (i >= 0 && (end < 0 || i + p.length() < end)) {
+                end = i + p.length();
+            }
+        }
+        return end >= 0 && text.indexOf("acc", end) >= 0;
+    }
+
     static String guessText(String name, JsonNode s) {
         String format = s.path("format").asString("");
         String value = switch (format) {
@@ -306,19 +370,19 @@ public final class TestCaseGenerator {
         };
         if (value == null) {
             String n = name.toLowerCase(Locale.ROOT);
-            if (n.matches(".*(to|beneficiary|dest).*acc.*")) {
+            if (accountAfter(n, "to", "beneficiary", "dest")) {
                 value = "2002";
-            } else if (n.matches(".*acc.*|.*account.*|.*cif.*")) {
+            } else if (containsAny(n, "acc", "cif")) {
                 value = "1001";
             } else if (n.contains("channel")) {
                 value = "MOBILE";
-            } else if (n.matches(".*(currency|ccy).*")) {
+            } else if (containsAny(n, "currency", "ccy")) {
                 value = "IDR";
             } else if (n.contains("user")) {
                 value = "unit-tester";
-            } else if (n.matches(".*(phone|mobile|msisdn).*")) {
+            } else if (containsAny(n, "phone", "mobile", "msisdn")) {
                 value = "081234567890";
-            } else if (n.matches(".*(note|remark|desc|memo).*")) {
+            } else if (containsAny(n, "note", "remark", "desc", "memo")) {
                 value = "Unit test";
             } else if (n.contains("name")) {
                 value = "BUDI SANTOSO";

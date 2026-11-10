@@ -23,10 +23,15 @@ public final class AuditRows {
         return out;
     }
 
-    /** A column of a raw JDBC row whatever the case of its name. */
+    /** A column of a raw JDBC row whatever the case of its name; null when absent or SQL NULL. */
     public static Object column(Map<String, Object> raw, String name) {
-        return raw.entrySet().stream().filter(e -> e.getKey().equalsIgnoreCase(name)).map(Map.Entry::getValue)
-                .findFirst().orElse(null);
+        // not stream().map(getValue).findFirst(): findFirst throws on a null element, and SQL NULLs are common
+        for (Map.Entry<String, Object> e : raw.entrySet()) {
+            if (e.getKey().equalsIgnoreCase(name)) {
+                return e.getValue();
+            }
+        }
+        return null;
     }
 
     static Object value(Object v) {

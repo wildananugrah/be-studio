@@ -1,5 +1,14 @@
 package com.mhamzah.gateway.routing;
 
+import static org.springframework.web.bind.annotation.RequestMethod.DELETE;
+import static org.springframework.web.bind.annotation.RequestMethod.GET;
+import static org.springframework.web.bind.annotation.RequestMethod.HEAD;
+import static org.springframework.web.bind.annotation.RequestMethod.OPTIONS;
+import static org.springframework.web.bind.annotation.RequestMethod.PATCH;
+import static org.springframework.web.bind.annotation.RequestMethod.POST;
+import static org.springframework.web.bind.annotation.RequestMethod.PUT;
+
+import com.mhamzah.gateway.codec.FileCodec;
 import com.mhamzah.gateway.config.GatewayProperties;
 import com.mhamzah.gateway.engine.ExecutionResult;
 import com.mhamzah.gateway.engine.InboundRequest;
@@ -16,8 +25,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -32,7 +39,8 @@ import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * Catch-all endpoint under {@code gateway.api-base-path}; every request is routed by method + path. The body is
+ * Catch-all endpoint under {@code gateway.api-base-path} (the prefix comes from {@link GatewayWebConfiguration});
+ * every request is routed by method + path. The body is
  * read by its content type:
  * <ul>
  *   <li>JSON (or anything not listed below): parsed as JSON into {@code $.request.body}.</li>
@@ -46,8 +54,6 @@ import tools.jackson.databind.node.ObjectNode;
 public class GatewayController {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayController.class);
-    private static final Pattern DISPOSITION_FILENAME = Pattern.compile("filename\\*?=(?:UTF-8'')?\"?([^\";]+)\"?",
-            Pattern.CASE_INSENSITIVE);
 
     private final GatewayService service;
     private final String basePath;
@@ -59,14 +65,24 @@ public class GatewayController {
         this.maxRawBytes = properties.files().maxSize().toBytes();
     }
 
-    @RequestMapping("${gateway.api-base-path:/api}/**")
-    public ResponseEntity<String> handle(HttpServletRequest request, @RequestBody(required = false) String body) {
+    /**
+     * Read-only methods, kept apart from the state-changing ones below (Sonar S3752 / CSRF). A request without a body
+     * lands here whatever its Content-Type, with the body empty.
+     */
+    @RequestMapping(path = "/**", method = {GET, HEAD, OPTIONS})
+    public ResponseEntity<byte[]> handleRead(HttpServletRequest request, @RequestBody(required = false) String body) {
+        return route(request, body, null, Map.of());
+    }
+
+    @RequestMapping(path = "/**", method = {POST, PUT, PATCH, DELETE})
+    public ResponseEntity<byte[]> handle(HttpServletRequest request, @RequestBody(required = false) String body) {
         return route(request, body, null, Map.of());
     }
 
     /** File uploads: text parts are the body fields, parts with a file name are files. */
-    @RequestMapping(path = "${gateway.api-base-path:/api}/**", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<String> handleMultipart(HttpServletRequest request) throws IOException, ServletException {
+    @RequestMapping(path = "/**", method = {POST, PUT, PATCH, DELETE},
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<byte[]> handleMultipart(HttpServletRequest request) throws IOException, ServletException {
         ObjectNode form = JsonNodeFactory.instance.objectNode();
         Map<String, InboundFile> files = new LinkedHashMap<>();
         for (Part part : request.getParts()) {
@@ -89,7 +105,7 @@ public class GatewayController {
      * any {@code +json} type) and parses, so its nested fields can be mapped; otherwise the text as it is.
      */
     static tools.jackson.databind.JsonNode formValue(String text, String contentType) {
-        if (contentType != null && contentType.toLowerCase(Locale.ROOT).matches("application/([a-z0-9.+-]*\\+)?json.*")) {
+        if (FileCodec.isJson(contentType)) {
             try {
                 return com.mhamzah.gateway.mapping.JsonValues.MAPPER.readTree(text);
             } catch (RuntimeException e) {
@@ -100,8 +116,9 @@ public class GatewayController {
     }
 
     /** HTML-style forms: the fields (not the query string's) are the body. */
-    @RequestMapping(path = "${gateway.api-base-path:/api}/**", consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
-    public ResponseEntity<String> handleForm(HttpServletRequest request) {
+    @RequestMapping(path = "/**", method = {POST, PUT, PATCH, DELETE},
+            consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+    public ResponseEntity<byte[]> handleForm(HttpServletRequest request) {
         Map<String, String> query = parseQuery(request.getQueryString());
         ObjectNode form = JsonNodeFactory.instance.objectNode();
         request.getParameterMap().forEach((name, values) -> {
@@ -114,34 +131,31 @@ public class GatewayController {
     }
 
     /** A raw binary body (a PDF, an image, ...) is one file, field {@code body}. */
-    @RequestMapping(path = "${gateway.api-base-path:/api}/**", consumes = {MediaType.APPLICATION_OCTET_STREAM_VALUE,
+    @RequestMapping(path = "/**", method = {POST, PUT, PATCH, DELETE},
+            consumes = {MediaType.APPLICATION_OCTET_STREAM_VALUE,
             MediaType.APPLICATION_PDF_VALUE, "image/*", "audio/*", "video/*", "application/zip", "application/gzip",
             "text/csv", "application/msword", "application/vnd.ms-excel",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
-    public ResponseEntity<String> handleBinary(HttpServletRequest request) throws IOException {
-        byte[] bytes = request.getInputStream().readNBytes((int) Math.min(Integer.MAX_VALUE - 8, maxRawBytes + 1));
+    public ResponseEntity<byte[]> handleBinary(HttpServletRequest request) throws IOException {
+        byte[] bytes = request.getInputStream().readNBytes((int) Math.min(Integer.MAX_VALUE - 8L, maxRawBytes + 1));
         if (bytes.length > maxRawBytes) {
             throw new MaxUploadSizeExceededException(maxRawBytes);
         }
         if (bytes.length == 0) {
-            // no body at all: Spring matches a request without Content-Type (a plain GET) as octet-stream; not a file
+            // no body at all: Spring matches a request without Content-Type as octet-stream; not a file
             return route(request, "", null, Map.of());
         }
-        String name = request.getHeader("X-File-Name");
-        String disposition = request.getHeader(HttpHeaders.CONTENT_DISPOSITION);
-        if (disposition != null) {
-            Matcher m = DISPOSITION_FILENAME.matcher(disposition);
-            if (m.find()) {
-                name = URLDecoder.decode(m.group(1), StandardCharsets.UTF_8);
-            }
+        String name = InboundFile.filenameOf(request.getHeader(HttpHeaders.CONTENT_DISPOSITION));
+        if (name == null) {
+            name = request.getHeader("X-File-Name");
         }
         InboundFile file = new InboundFile("body", name, request.getContentType(), bytes);
         log.info("upload field=body filename={} contentType={} size={}", file.filename(), file.contentType(), file.size());
         return route(request, null, JsonNodeFactory.instance.objectNode(), Map.of("body", file));
     }
 
-    private ResponseEntity<String> route(HttpServletRequest request, String body, ObjectNode form,
+    private ResponseEntity<byte[]> route(HttpServletRequest request, String body, ObjectNode form,
             Map<String, InboundFile> files) {
         Map<String, String> headers = new LinkedHashMap<>();
         for (String name : Collections.list(request.getHeaderNames())) {
@@ -174,12 +188,16 @@ public class GatewayController {
         return query;
     }
 
-    private static ResponseEntity<String> toResponseEntity(GatewayResponse response) {
+    /** JSON, or the file a FILE rule sends (as received, with its own Content-Type). */
+    private static ResponseEntity<byte[]> toResponseEntity(GatewayResponse response) {
         HttpHeaders headers = new HttpHeaders();
         response.headers().forEach(headers::set);
+        if (response.file() != null) {
+            return ResponseEntity.status(response.status()).headers(headers).body(response.file().bytes());
+        }
         headers.setContentType(MediaType.APPLICATION_JSON);
         return ResponseEntity.status(response.status())
                 .headers(headers)
-                .body(response.body() == null ? null : response.body().toString());
+                .body(response.body() == null ? null : response.body().toString().getBytes(StandardCharsets.UTF_8));
     }
 }

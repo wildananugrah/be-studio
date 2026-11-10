@@ -55,7 +55,12 @@ gateway:
   default-flow-timeout-ms: 30000
   default-step-timeout-ms: 10000
   admin:
-    token: ${GATEWAY_ADMIN_TOKEN:}
+    token: ${GATEWAY_ADMIN_TOKEN:dev-admin-token}
+  snap:
+    # two characters, each a digit or an upper-case letter: 00-99 and 0A-ZZ (1,296 codes per application)
+    service-code-pattern: ${GATEWAY_SNAP_SERVICE_CODE_PATTERN:[0-9A-Z]{2}[a-z]?}
+    # 204 / 205 / 304 cannot carry a body: such a SNAP response is sent with this status, responseCode keeps 204G000
+    no-body-status: ${GATEWAY_SNAP_NO_BODY_STATUS:200}
   # API documentation generated from the flow configuration: Swagger UI at /docs, OpenAPI at /docs/openapi.json.
   # Off unless enabled; it lists every endpoint, so think twice before enabling it in production.
   docs:
@@ -91,17 +96,18 @@ gateway:
     # gw_audit_transaction / gw_audit_step are partitioned by time (PostgreSQL: the gateway creates the partitions;
     # Oracle: INTERVAL partitioning). Dropping a whole partition is instant, unlike DELETE.
     partition:
-      interval: ${GATEWAY_AUDIT_PARTITION_INTERVAL:MONTH}   # DAY | MONTH
-      premake: 3                                              # future partitions kept ready (PostgreSQL)
-      retention: ${GATEWAY_AUDIT_RETENTION:}                  # e.g. 6m, 90d, 1y; empty = keep everything
-      maintenance-cron: "${GATEWAY_AUDIT_MAINTENANCE_CRON:0 1 0 1 * *}"  # 00:01 on the 1st of each month; also at startup
+      interval: ${GATEWAY_AUDIT_PARTITION_INTERVAL:MONTH} # DAY | MONTH
+      premake: 3 # future partitions kept ready (PostgreSQL)
+      retention: ${GATEWAY_AUDIT_RETENTION:} # e.g. 6m, 90d, 1y; empty = keep everything
+      maintenance-cron: "${GATEWAY_AUDIT_MAINTENANCE_CRON:0 1 0 1 * *}" # 00:01 on the 1st of each month; also at startup
   # SNAP responses (response_handler snapResponseHandler, error_handler snapErrorHandler). service-code-pattern: what
-  # gw_flow.service_code may be, checked on every reload; default "[0-9]{2}" (two digits, as SNAP defines it),
-  # "[0-9A-Z]{2}" also allows letters. Env: GATEWAY_SNAP_SERVICE_CODE_PATTERN.
+  # gw_flow.service_code may be (up to 4 characters), checked on every reload; default "[0-9]{2}([0-9]{2})?" (two or
+  # four digits), "[0-9A-Z]{4}" requires four and allows letters. Only the first two characters go into responseCode
+  # (2401 -> 2002400). Env: GATEWAY_SNAP_SERVICE_CODE_PATTERN.
   # no-body-status: the status a SNAP response is sent with instead of 204 / 205 / 304 / 1xx, which cannot carry a
   # body; responseCode keeps the original (204G000). Env: GATEWAY_SNAP_NO_BODY_STATUS.
   #snap:
-  #  service-code-pattern: ${GATEWAY_SNAP_SERVICE_CODE_PATTERN:[0-9]{2}}
+  #  service-code-pattern: ${GATEWAY_SNAP_SERVICE_CODE_PATTERN:[0-9]{2}([0-9]{2})?}
   #  no-body-status: ${GATEWAY_SNAP_NO_BODY_STATUS:200}
   masking:
     # comma-separated; GATEWAY_MASKING_FIELDS replaces the whole list, so repeat the defaults you still want
@@ -133,7 +139,7 @@ gateway:
     max-rows: 1000
     datasources:
       GATEWAY_DB:
-        url: ${GATEWAY_SQL_DB_URL:}         # empty = the gateway's own database
+        url: ${GATEWAY_SQL_DB_URL:} # empty = the gateway's own database
         read-only: ${GATEWAY_SQL_DB_READ_ONLY:true}
       # REPORTING:
       #   url: jdbc:postgresql://reporting-db:5432/reports
@@ -145,7 +151,7 @@ gateway:
   # $.request.files.<field>), application/x-www-form-urlencoded (fields -> $.request.body) and raw binary bodies
   # (PDF, images, Office files, zip, octet-stream -> $.request.files.body). Larger uploads get 413 GW-413-FILE.
   files:
-    max-size: ${GATEWAY_FILES_MAX_SIZE:20MB}            # one file (or one raw body)
+    max-size: ${GATEWAY_FILES_MAX_SIZE:20MB} # one file (or one raw body)
     max-request-size: ${GATEWAY_FILES_MAX_REQUEST_SIZE:25MB}
   # Where file storage steps put files, besides the storages in the database (Studio > Storages, gw_storage, which
   # win on the same name). A step whose target_system is one of these is a file storage step (http_method PUT stores,
@@ -184,10 +190,10 @@ custom:
   channel-guard:
     allowed: ${GATEWAY_CHANNEL_GUARD_ALLOWED:MOBILE,ATM,WEB}
   request-signer:
-    secret: ${REQUEST_SIGNER_SECRET:dev-signing-secret}   # set REQUEST_SIGNER_SECRET outside dev
+    secret: ${REQUEST_SIGNER_SECRET:dev-signing-secret} # set REQUEST_SIGNER_SECRET outside dev
   partner-soap:
     username: ${PARTNER_SOAP_USERNAME:dev-user}
-    password: ${PARTNER_SOAP_PASSWORD:dev-password}   # set PARTNER_SOAP_PASSWORD outside dev
+    password: ${PARTNER_SOAP_PASSWORD:dev-password} # set PARTNER_SOAP_PASSWORD outside dev
 
 logging:
   pattern:

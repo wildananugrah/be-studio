@@ -176,7 +176,7 @@ public final class ReportRenderers {
                         p.setSpacingAfter(80);
                         p.setKeepNext(true);
                         CTPPr ppr = p.getCTP().isSetPPr() ? p.getCTP().getPPr() : p.getCTP().addNewPPr();
-                        ppr.addNewOutlineLvl().setVal(BigInteger.valueOf(h.level() - 1)); // Word's navigation pane
+                        ppr.addNewOutlineLvl().setVal(BigInteger.valueOf(h.level() - 1L)); // Word's navigation pane
                         if (h.anchor() != null) {
                             CTBookmark mark = p.getCTP().addNewBookmarkStart();
                             mark.setName(h.anchor());
@@ -486,7 +486,7 @@ public final class ReportRenderers {
             float leading = 14;
             for (Contents.Entry e : c.entries()) {
                 PDType1Font font = e.level() == 1 ? bold : regular;
-                float indent = (e.level() - 1) * 16;
+                float indent = (e.level() - 1) * 16f;
                 float[] at = known.get(e.anchor());
                 String number = at == null ? "" : String.valueOf((int) at[0] + 1);
                 float numberWidth = width(number, font, size);

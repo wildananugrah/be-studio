@@ -189,6 +189,29 @@ public class StudioController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("errors", List.of(e.getMessage())));
         }
+        return download(export);
+    }
+
+    /** Only the chosen flows ({@code codes=A,B}) and the shared items they use, in the same formats. */
+    @GetMapping("/flows/export")
+    public ResponseEntity<Object> exportFlows(
+            @RequestHeader(name = "X-Admin-Token", required = false) String supplied,
+            @org.springframework.web.bind.annotation.RequestParam(defaultValue = "") List<String> codes,
+            @org.springframework.web.bind.annotation.RequestParam(defaultValue = "json") String format,
+            jakarta.servlet.http.HttpServletRequest request) {
+        if (!authorized(supplied)) {
+            return UNAUTHORIZED;
+        }
+        StudioService.Export export;
+        try {
+            export = studio.exportFlows(codes, format, request.getServerName() + ":" + request.getServerPort());
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("errors", List.of(e.getMessage())));
+        }
+        return download(export);
+    }
+
+    private static ResponseEntity<Object> download(StudioService.Export export) {
         return ResponseEntity.ok()
                 .header(org.springframework.http.HttpHeaders.CONTENT_TYPE, export.contentType() + "; charset=utf-8")
                 .header(org.springframework.http.HttpHeaders.CONTENT_DISPOSITION, org.springframework.http.ContentDisposition

@@ -1,0 +1,468 @@
+stages:
+  - sast
+  - unit-test
+  - query-analysis
+  - build
+  - image-scan
+  - deploy
+
+variables:
+  IMAGE_TAG:
+    value: ""
+    description: "Docker image tag"
+  NS_NAME: ""
+  OCP_CLUSTER: ""
+  OCP_USER: ""
+  OCP_PASS: ""
+  DB_USER: ""
+  DB_PASS: ""
+  DB_URL: ""
+
+default:
+  tags:
+    - docker-dev
+
+trivy_dependency_scan:
+  stage: sast
+  image:
+    name: nexus-dev.bni.co.id/docker-wdl/aquasec/trivy:latest
+    entrypoint: [""]
+  tags:
+    - docker-dev
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"'
+  variables:
+    TRIVY_NO_PROGRESS: "true"
+    HTTP_PROXY: $PROXY
+    HTTPS_PROXY: $PROXY
+    NO_PROXY: "${DEV_REGISTRY_HOSTS},gitlab-dc.bni.co.id,127.0.0.1,localhost"
+  before_script:
+    # Create Maven config directory
+    - mkdir -p ~/.m2
+    # Copy settings.xml to Maven default location
+    - cp settings.xml ~/.m2/settings.xml
+  script:
+    - mkdir -p reports
+    - echo "Running Trivy Dependency Scan..."
+
+    - |
+      trivy fs \
+        --scanners vuln \
+        --format json \
+        --output reports/trivy-dependency-report.json \
+        .
+
+    - |
+      trivy fs \
+        --scanners vuln \
+        --format template \
+        --template "@/contrib/gitlab.tpl" \
+        --output reports/gl-dependency-report.json \
+        .
+  artifacts:
+    when: always
+    paths:
+      - reports/trivy-dependency-report.json
+    reports:
+      dependency_scanning: reports/gl-dependency-report.json
+    expire_in: 7 days
+
+sonarqube:
+  stage: sast
+  tags:
+    - docker-dev
+  image:
+    name: nexus-dev.bni.co.id/docker-wdl-redhat/ubi9/openjdk-25:1.24-3.1792711405
+    docker:
+      user: root # /var/run/docker.sock is root:docker 660; the image's default uid 185 can't open it
+  variables:
+    # Testcontainers pulls postgres / s3mock / ryuk through the Nexus Docker Hub proxy
+    TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: "nexus-dev.bni.co.id/docker-wdl/"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"'
+  before_script:
+    # Create Maven config directory
+    - mkdir -p ~/.m2
+    # Copy settings.xml to Maven default location
+    - cp settings.xml ~/.m2/settings.xml
+  script:
+    - |
+      mvn -B -ntp -s ~/.m2/settings.xml \
+      clean verify \
+      -Dmaven.test.redirectTestOutputToFile=true \
+      -Dspring.profiles.active=test \
+      org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
+      -Dsonar.projectKey=$CI_PROJECT_NAME \
+      -Dsonar.projectName=$CI_PROJECT_NAME \
+      -Dsonar.host.url=$SONARQUBE_URL \
+      -Dsonar.token=$SONARQUBE_TOKEN \
+      -Dsonar.branch.name=$CI_COMMIT_REF_NAME \
+      -Dsonar.scm.revision=$CI_COMMIT_SHA
+
+unit-test:
+  stage: unit-test
+  tags:
+    - docker-dev
+  image:
+    name: nexus-dev.bni.co.id/docker-wdl-redhat/ubi9/openjdk-25:1.24-3.1792711405
+    docker:
+      user: root # /var/run/docker.sock is root:docker 660; the image's default uid 185 can't open it
+  variables:
+    # Testcontainers pulls postgres / s3mock / ryuk through the Nexus Docker Hub proxy
+    TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: "nexus-dev.bni.co.id/docker-wdl/"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"'
+  before_script:
+    # Create Maven config directory
+    - mkdir -p ~/.m2
+    # Copy settings.xml to Maven default location
+    - cp settings.xml ~/.m2/settings.xml
+  script:
+    - echo "Running unit tests..."
+    - |
+      mvn -B -ntp -s ~/.m2/settings.xml \
+      clean test jacoco:report \
+      -Dmaven.test.redirectTestOutputToFile=true \
+      -Dspring.profiles.active=test 2>&1 | tee test.log
+
+    # The tests' own log output went to target/surefire-reports/*-output.txt (keeps the job log under GitLab's 4 MB)
+    - cat target/surefire-reports/*-output.txt >> test.log 2>/dev/null || true
+
+    # Added: Print coverage to console so the 'coverage' regex can find it
+    - |
+      if [ -f target/site/jacoco/index.html ]; then
+        echo "Extracting coverage percentage..."
+        # This parses the 'Total' row from the JaCoCo HTML report
+        grep -oP "Total.*?([0-9]{1,3})%" target/site/jacoco/index.html | head -1
+      fi
+
+    # Extract Hibernate SQL queries
+    - echo "===== Extracting SQL Queries ====="
+    - |
+      if [ -f test.log ]; then
+        # Extract multi-line SQL queries after "Hibernate:" marker
+        awk '
+          /Hibernate:/ { 
+            in_query=1; 
+            query=""; 
+            next 
+          }
+          in_query {
+            if (/^[[:space:]]*$/ && query != "") {
+              print query;
+              in_query=0;
+              query="";
+            } else if (/^[[:space:]]/) {
+              gsub(/^[[:space:]]+/, "");
+              gsub(/[[:space:]]+$/, "");
+              if ($0 != "") query = query " " $0;
+            } else {
+              if (query != "") print query;
+              in_query=0;
+              query="";
+            }
+          }
+          END { if (query != "") print query; }
+        ' test.log | sort -u > queries.sql
+
+        if [ -s queries.sql ]; then
+          echo "Found $(wc -l < queries.sql) unique queries"
+        else
+          echo "No queries found"
+        fi
+      else
+        echo "Warning: test.log not found"
+        touch queries.sql
+      fi
+  after_script:
+    # On failure: which test classes failed, and the first Docker / Testcontainers errors (full logs are in the artifacts)
+    - |
+      grep -hE "Tests run:.*(Failures|Errors): [1-9]" target/surefire-reports/*.txt 2>/dev/null | head -40 || true
+    - |
+      grep -hiE "testcontainers|docker" target/surefire-reports/*-output.txt 2>/dev/null | grep -iE "error|fail|refused|denied|not found|unknown" | sort -u | head -30 || true
+  coverage: "/Total.*?([0-9]{1,3})%/"
+  artifacts:
+    when: always
+    paths:
+      - target/surefire-reports/
+      - target/site/jacoco/
+      - queries.sql
+    reports:
+      junit: target/surefire-reports/TEST-*.xml
+      coverage_report:
+        coverage_format: jacoco
+        path: target/site/jacoco/jacoco.xml
+    expire_in: 1 week
+  allow_failure: false
+
+explain_sql_queries:
+  image: jtl-tkgiharbor.hq.bni.co.id/wss-dev/sqlplus
+  tags:
+    - docker-dev
+  stage: query-analysis
+  variables:
+    GIT_STRATEGY: none
+  needs:
+    - job: unit-test
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"'
+      when: manual
+  script:
+    - echo "Generating execution plans..."
+    - set -e # Move this to its own line
+    - |
+      if [ ! -f queries.sql ]; then
+        echo "Error: queries.sql not found"
+        exit 1
+      fi
+
+      query_count=$(wc -l < queries.sql)
+      echo "Found $query_count queries to analyze"
+
+      if [ "$query_count" -eq 0 ]; then
+        echo "No queries to process"
+        echo "No SQL queries found in test logs" > execution-plan.txt
+        exit 0
+      fi
+
+      > execution-plan.txt  # Clear the file
+
+      line_number=0
+      processed_count=0
+
+      # Read file line by line
+      while IFS= read -r line || [ -n "$line" ]; do
+        line_number=$((line_number + 1))
+
+        # Remove leading/trailing whitespace
+        query=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+        # Skip empty lines
+        if [ -z "$query" ]; then
+          echo "Line $line_number: Empty line, skipping"
+          continue
+        fi
+
+        echo "Line $line_number: Found query (${#query} chars)"
+        # Check if it's a valid query type
+        if echo "$query" | grep -iE "^(INSERT|UPDATE|SELECT|DELETE)" > /dev/null; then
+          processed_count=$((processed_count + 1))
+          echo "Processing query $processed_count from line $line_number"
+
+          # Replace parameters with dummy values
+          fixed_query=$(echo "$query" | sed "s/?/'DUMMY'/g")
+
+          # Create temp SQL file for explain plan
+          echo "SET PAGESIZE 0" > explain_tmp.sql
+          echo "SET LINESIZE 1000" >> explain_tmp.sql
+          echo "SET FEEDBACK OFF" >> explain_tmp.sql
+          echo "SET HEADING OFF" >> explain_tmp.sql
+          echo "EXPLAIN PLAN FOR $fixed_query;" >> explain_tmp.sql
+          echo "SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY());" >> explain_tmp.sql
+          echo "EXIT;" >> explain_tmp.sql
+
+          echo "=== EXECUTION PLAN #$processed_count ===" >> execution-plan.txt
+          echo "Line: $line_number" >> execution-plan.txt
+          echo "Query: $query" >> execution-plan.txt
+          echo "" >> execution-plan.txt
+
+          # Execute SQL*Plus with timeout
+          if timeout 30 sqlplus -s "${DB_USER}/${DB_PASS}@${DB_URL}" @explain_tmp.sql >> execution-plan.txt 2>&1; then
+            echo "✓ Successfully processed query $processed_count"
+          else
+            echo "✗ Failed to process query $processed_count"
+            echo "ERROR: Failed to generate execution plan" >> execution-plan.txt
+          fi
+          echo -e "\n----------------------------\n" >> execution-plan.txt
+          rm -f explain_tmp.sql
+        else
+          echo "Skipping non-standard query: $query"
+        fi
+      done < queries.sql
+
+      echo "=== SUMMARY ==="
+      echo "Total lines: $line_number"
+      echo "Processed queries: $processed_count"
+      echo "Results saved to execution-plan.txt"
+  dependencies:
+    - unit-test
+  artifacts:
+    paths:
+      - execution-plan.txt
+    expire_in: 1 week
+
+build_image:
+  image: jtl-tkgiharbor.hq.bni.co.id/wss-dev/docker:20.10.24-cli
+  tags:
+    - docker-dev
+  stage: build
+  rules:
+    - if: '$CI_COMMIT_REF_NAME == "development" && $CI_PIPELINE_SOURCE == "push"'
+      when: manual
+  script:
+    - echo "$DEV_REGISTRY_PASS" | docker login $DEV_REGISTRY_HOSTS -u "$DEV_REGISTRY_USER" --password-stdin
+    - DOCKER_BUILDKIT=0 docker build -t $DEV_REGISTRY_HOSTS/$DEV_REGISTRY_PROJECT/$CI_PROJECT_NAME:$IMAGE_TAG .
+    - docker push $DEV_REGISTRY_HOSTS/$DEV_REGISTRY_PROJECT/$CI_PROJECT_NAME:$IMAGE_TAG
+    - docker logout $DEV_REGISTRY_HOSTS
+
+tenable_scan_image:
+  stage: image-scan
+  tags:
+    - docker-dev
+  image:
+    name: nexus-dev.bni.co.id/docker-wdl/tenable/cloud-security-scanner:latest
+    entrypoint: [""]
+  rules:
+    - if: '$CI_COMMIT_REF_NAME == "development" && $CI_PIPELINE_SOURCE == "push"'
+      when: manual
+  # TENABLE_API_URL / TENABLE_API_TOKEN come from Settings > CI/CD > Variables; don't redeclare them here
+  # (TENABLE_API_URL: $TENABLE_API_URL leaves the literal text "$TENABLE_API_URL" when the variable isn't available)
+  variables:
+    TENABLE_PIPELINE_RUN_ID: $CI_PIPELINE_ID
+    TENABLE_PIPELINE_RUN_TRIGGER: "gitlab_ci"
+    TENABLE_PIPELINE_RUN_URL: "$CI_PIPELINE_URL"
+    HTTP_PROXY: $PROXY
+    HTTPS_PROXY: $PROXY
+    NO_PROXY: "${DEV_REGISTRY_HOSTS},gitlab-dc.bni.co.id,127.0.0.1,localhost,jtl-tkgiharbor.hq.bni.co.id"
+  script:
+    - |
+      if [ -z "${TENABLE_API_URL:-}" ] || [ -z "${TENABLE_API_TOKEN:-}" ]; then
+        echo "TENABLE_API_URL / TENABLE_API_TOKEN not available to this job: check Settings > CI/CD > Variables (Protected flag, environment scope)"
+        exit 1
+      fi
+    - IMAGE_NAME="${DEV_REGISTRY_HOSTS}/${DEV_REGISTRY_PROJECT}/${CI_PROJECT_NAME}:${IMAGE_TAG}"
+    - echo "Starting Tenable Image Scan for $IMAGE_NAME"
+    - |
+      tenable container-image scan \
+        --name $IMAGE_NAME \
+        --code-branch $CI_COMMIT_BRANCH \
+        --output-file-formats JUnit \
+        --registry-username $DEV_REGISTRY_USER \
+        --registry-password $DEV_REGISTRY_PASS \
+        --server-certificate-validation-enabled=false \
+        --output-path .
+  artifacts:
+    when: always
+    reports:
+      junit: "*.xml"
+    paths:
+      - "*.xml"
+    expire_in: 7 days
+
+tag_image:
+  image: jtl-tkgiharbor.hq.bni.co.id/wss-dev/ubi8/skopeo
+  tags:
+    - docker-dev
+  stage: build
+  variables:
+    GIT_STRATEGY: none
+  rules:
+    - if: '$CI_COMMIT_REF_NAME == "testing" && $CI_PIPELINE_SOURCE == "push"'
+      when: manual
+  script:
+    - |
+      skopeo copy \
+        --src-tls-verify=false \
+        --dest-tls-verify=false \
+        --src-creds $DEV_REGISTRY_USER:$DEV_REGISTRY_PASS \
+        --dest-creds $TEST_REGISTRY_USER:$TEST_REGISTRY_PASS \
+        docker://$DEV_REGISTRY_HOSTS/$DEV_REGISTRY_PROJECT/$CI_PROJECT_NAME:$IMAGE_TAG \
+        docker://$TEST_REGISTRY_HOSTS/$TEST_REGISTRY_PROJECT/$CI_PROJECT_NAME:$IMAGE_TAG
+
+deploy_non_prod:
+  image: jtl-tkgiharbor.hq.bni.co.id/wss-dev/oc-client:latest
+  tags:
+    - docker-dev
+  stage: deploy
+  rules:
+    - if: '$CI_COMMIT_REF_NAME == "development" && $CI_PIPELINE_SOURCE == "push"'
+      when: manual
+      variables:
+        REGISTRY_HOST: $DEV_REGISTRY_HOSTS
+        REGISTRY_PROJECT: $DEV_REGISTRY_PROJECT
+    - if: '$CI_COMMIT_REF_NAME == "testing" && $CI_PIPELINE_SOURCE == "push"'
+      when: manual
+      variables:
+        REGISTRY_HOST: $TEST_REGISTRY_HOSTS
+        REGISTRY_PROJECT: $TEST_REGISTRY_PROJECT
+  script:
+    - oc login -u $OCP_USER -p $OCP_PASS -s $OCP_CLUSTER --insecure-skip-tls-verify=true
+    - oc project $NS_NAME
+    - |
+      # 1. apply deployment yaml
+      oc process -f oc-template.yaml \
+      -p NS_NAME=$NS_NAME \
+      -p IMAGE_NAME=$REGISTRY_HOST/$REGISTRY_PROJECT/$CI_PROJECT_NAME:$IMAGE_TAG \
+      -p APP_NAME=$CI_PROJECT_NAME | oc apply -f -
+
+      # 2. Check if deployment exists, then trigger rollout restart
+      if oc get deployment $CI_PROJECT_NAME >/dev/null 2>&1; then
+        echo "Deployment $CI_PROJECT_NAME exists. Triggering rollout restart..."
+        oc rollout restart deployment/$CI_PROJECT_NAME
+        oc rollout status deployment/$CI_PROJECT_NAME --timeout=5m
+      else
+        echo "Deployment $CI_PROJECT_NAME does not exist yet. Skipping restart."
+      fi
+
+tag_image_prod:
+  image: jtl-tkgiharbor.hq.bni.co.id/wss-dev/ubi8/skopeo
+  tags:
+    - docker-prod
+  stage: build
+  variables:
+    GIT_DEPTH: 0
+  rules:
+    - if: "$CI_COMMIT_TAG =~ /^CR.*$/"
+      when: manual
+  before_script:
+    - BRANCH_NAME=$(git branch -r --contains "$CI_COMMIT_SHA" | grep 'origin/master' || true)
+    - |
+      if [[ -z "$BRANCH_NAME" ]]; then
+        echo "This tag was NOT created from master branch"
+        exit 1
+      fi
+  script:
+    - |
+      skopeo copy \
+        --src-tls-verify=false \
+        --dest-tls-verify=false \
+        --src-creds $TEST_REGISTRY_USER:$TEST_REGISTRY_PASS \
+        --dest-creds $PROD_REGISTRY_USER:$PROD_REGISTRY_PASS \
+        docker://$TEST_REGISTRY_HOSTS/$TEST_REGISTRY_PROJECT/$CI_PROJECT_NAME:$IMAGE_TAG \
+        docker://$PROD_REGISTRY_HOSTS/$PROD_REGISTRY_PROJECT/$CI_PROJECT_NAME:$IMAGE_TAG
+
+deploy_prod:
+  image: jtl-tkgiharbor.hq.bni.co.id/wss-dev/oc-client:latest
+  tags:
+    - docker-prod
+  stage: deploy
+  variables:
+    GIT_DEPTH: 0
+  rules:
+    - if: "$CI_COMMIT_TAG =~ /^CR.*$/"
+      when: manual
+  before_script:
+    - BRANCH_NAME=$(git branch -r --contains "$CI_COMMIT_SHA" | grep 'origin/master' || true)
+    - |
+      if [[ -z "$BRANCH_NAME" ]]; then
+        echo "This tag was NOT created from master branch"
+        exit 1
+      fi
+  script:
+    - oc login -u $OCP_USER -p $OCP_PASS -s $OCP_CLUSTER --insecure-skip-tls-verify=true
+    - oc project $NS_NAME
+    - |
+      # 1. apply deployment yaml
+      oc process -f oc-template.yaml \
+      -p NS_NAME=$NS_NAME \
+      -p IMAGE_NAME=$PROD_REGISTRY_HOSTS/$PROD_REGISTRY_PROJECT/$CI_PROJECT_NAME:$IMAGE_TAG \
+      -p APP_NAME=$CI_PROJECT_NAME | oc apply -f -
+
+      # 2. Check if deployment exists, then trigger rollout restart
+      if oc get deployment $CI_PROJECT_NAME >/dev/null 2>&1; then
+        echo "Deployment $CI_PROJECT_NAME exists. Triggering rollout restart..."
+        oc rollout restart deployment/$CI_PROJECT_NAME
+        oc rollout status deployment/$CI_PROJECT_NAME --timeout=5m
+      else
+        echo "Deployment $CI_PROJECT_NAME does not exist yet. Skipping restart."
+      fi
