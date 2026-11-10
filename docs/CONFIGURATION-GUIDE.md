@@ -280,11 +280,23 @@ Every flow belongs to an application, so one application's configuration can be 
 
 | Format | Use |
 |---|---|
-| `json` | Studio → Flows → **Import application…** on another gateway (loaded as unsaved changes, saved with Save & reload) |
+| `json` | Studio → Flows → **Import…** on another gateway (loaded as unsaved changes, saved with Save & reload) |
 | `sql` | A script for this gateway's database type (PostgreSQL or Oracle); run it in one transaction, then reload |
 | `liquibase` | A changelog using the `tbl.*` table name properties; include it from `db.changelog-master.xml` |
 
 Applying an export replaces the application and its flows (also a flow with the same code in another application). Shared items are only added when the target does not have them; existing ones are left as they are, so an export never changes what other applications use. Secrets written as plain text (TLS store passwords, storage keys, credential-like target headers) become `${NAME}` placeholders; set those environment variables on the target. Handler and codec beans, and target systems, SQL datasources and storages from `application.yml`, are not exported; the file lists them under "requires".
+
+**Export selected flows** (Studio → Flows → tick flows → Export only these, or `GET /studio/api/flows/export?codes=A,B&format=json|sql|liquibase`) is the same in the same three formats, but carries only the chosen flows. Applying it deletes and re-inserts just those flow codes (`WHERE code IN (...)`); the other flows of their applications are not touched. Their applications are shared items too: added when missing, never replaced. Use it to promote one new or changed flow to UAT without the rest of its application. The JSON format is `json-gateway-flows`; **Import…** recognises both kinds.
+
+To deploy an export with Liquibase, put it in `src/main/resources/db/changelog/changes/flows/`; `db.changelog-master.xml` includes that folder as a whole (`includeAll`), so nothing else changes. `scripts/flow-changelog.sh` does it and names the file `<yyyyMMdd-HHmmss>_<codes>.xml` after the export time (the folder is applied in file-name order):
+
+```bash
+scripts/flow-changelog.sh add ~/Downloads/FLOWS_TRADE_CALLBACK_20261109-1545.xml   # a file from the Studio button
+scripts/flow-changelog.sh export TRADE_CALLBACK,OTHER_FLOW                         # straight from a running Studio
+# same with make: make add-flow-changelog FILE=... / make export-flows CODES=... [STUDIO_URL=...]
+```
+
+`export` uses `STUDIO_URL` (default `http://localhost:8080`) and `ADMIN_TOKEN`; adding the same export twice is refused. On the next start Liquibase applies the file, records it in `gw_db_changelog` and never runs it again. Each export has new changeSet ids (they end with a timestamp), so exporting a flow again after an edit gives a changelog that applies again. Change flows only in the source environment: anything edited directly in the target is overwritten by the next export of that flow.
 
 ### 3.2 `gw_flow_step`
 

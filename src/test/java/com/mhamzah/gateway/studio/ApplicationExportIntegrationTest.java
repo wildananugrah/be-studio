@@ -129,17 +129,9 @@ class ApplicationExportIntegrationTest {
         assertThat(transfer()).isEqualTo(200);
     }
 
-    @Test
-    void liquibaseChangelogAppliesWithTheTableNameProperties() throws Exception {
-        String xml = get("/studio/api/applications/CORE_BANKING_API/export?format=liquibase").body();
-        assertThat(xml).contains("<sqlCheck expectedResult=\"0\">SELECT COUNT(*) FROM ${tbl.target_system} WHERE code = 'CORE_BANKING'",
-                "tableName=\"${tbl.flow_step}\"", "valueComputed=\"(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')\"");
-        // ${...} values are kept as text, not filled in by Liquibase
-        assertThat(xml).contains("'$' || '{steps.debit.body.responseCode} == ''00'''");
-        Path file = dir.resolve("app.xml");
+    private void applyLiquibase(String xml, String name) throws Exception {
+        Path file = dir.resolve(name);
         Files.writeString(file, xml);
-        int flowsBefore = jdbc.queryForObject("SELECT COUNT(*) FROM gw_flow", Integer.class);
-
         SpringLiquibase liquibase = new SpringLiquibase();
         liquibase.setDataSource(dataSource);
         liquibase.setResourceLoader(new DefaultResourceLoader());
@@ -150,6 +142,60 @@ class ApplicationExportIntegrationTest {
         properties.db().tables().byLogicalName().forEach((logical, table) -> params.put("tbl." + logical, table));
         liquibase.setChangeLogParameters(params);
         liquibase.afterPropertiesSet();
+    }
+
+    private String flowName(String code) {
+        return jdbc.queryForObject("SELECT name FROM gw_flow WHERE code = ?", String.class, code);
+    }
+
+    @Test
+    void flowsExportReplacesOnlyTheChosenFlows() throws Exception {
+        HttpResponse<String> json = get("/studio/api/flows/export?codes=TRANSFER_WITH_REVERSAL&format=json");
+        assertThat(json.statusCode()).as(json.body()).isEqualTo(200);
+        assertThat(json.headers().firstValue("Content-Disposition").orElse("")).contains("FLOWS_TRANSFER_WITH_REVERSAL_");
+        JsonNode d = JsonValues.MAPPER.readTree(json.body());
+        assertThat(d.get("format").asString()).isEqualTo("json-gateway-flows");
+        assertThat(d.get("flows")).hasSize(1);
+        assertThat(d.get("applications").toString()).contains("CORE_BANKING_API");
+        assertThat(get("/studio/api/flows/export?codes=NOPE&format=sql").statusCode()).isEqualTo(400);
+        assertThat(get("/studio/api/flows/export?format=sql").statusCode()).isEqualTo(400);
+
+        String sql = get("/studio/api/flows/export?codes=TRANSFER_WITH_REVERSAL&format=sql").body();
+        String xml = get("/studio/api/flows/export?codes=TRANSFER_WITH_REVERSAL&format=liquibase").body();
+        assertThat(sql).contains("DELETE FROM gw_flow WHERE code IN ('TRANSFER_WITH_REVERSAL');")
+                .doesNotContain("application_code = 'CORE_BANKING_API'");
+        String original = flowName("TRANSFER_WITH_REVERSAL");
+        String inquiry = flowName("ACCOUNT_INQUIRY");
+        int flowsBefore = jdbc.queryForObject("SELECT COUNT(*) FROM gw_flow", Integer.class);
+        // edits in this database: the chosen flow's is undone by the export, the other flow's stays
+        jdbc.update("UPDATE gw_flow SET name = 'edited here' WHERE code IN ('TRANSFER_WITH_REVERSAL', 'ACCOUNT_INQUIRY')");
+
+        for (int i = 0; i < 2; i++) {
+            ScriptUtils.executeSqlScript(dataSource.getConnection(), new ByteArrayResource(sql.getBytes(StandardCharsets.UTF_8)));
+        }
+        assertThat(flowName("TRANSFER_WITH_REVERSAL")).isEqualTo(original);
+        assertThat(flowName("ACCOUNT_INQUIRY")).isEqualTo("edited here");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM gw_flow", Integer.class)).isEqualTo(flowsBefore);
+
+        jdbc.update("UPDATE gw_flow SET name = 'edited again' WHERE code = 'TRANSFER_WITH_REVERSAL'");
+        applyLiquibase(xml, "flows.xml");
+        assertThat(flowName("TRANSFER_WITH_REVERSAL")).isEqualTo(original);
+        assertThat(flowName("ACCOUNT_INQUIRY")).isEqualTo("edited here");
+        jdbc.update("UPDATE gw_flow SET name = ? WHERE code = 'ACCOUNT_INQUIRY'", inquiry);
+        assertThat(reload()).isEqualTo(200);
+        assertThat(transfer()).isEqualTo(200);
+    }
+
+    @Test
+    void liquibaseChangelogAppliesWithTheTableNameProperties() throws Exception {
+        String xml = get("/studio/api/applications/CORE_BANKING_API/export?format=liquibase").body();
+        assertThat(xml).contains("<sqlCheck expectedResult=\"0\">SELECT COUNT(*) FROM ${tbl.target_system} WHERE code = 'CORE_BANKING'",
+                "tableName=\"${tbl.flow_step}\"", "valueComputed=\"(SELECT id FROM ${tbl.flow} WHERE code = 'TRANSFER')\"");
+        // ${...} values are kept as text, not filled in by Liquibase
+        assertThat(xml).contains("'$' || '{steps.debit.body.responseCode} == ''00'''");
+        int flowsBefore = jdbc.queryForObject("SELECT COUNT(*) FROM gw_flow", Integer.class);
+
+        applyLiquibase(xml, "app.xml");
 
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM gw_flow", Integer.class)).isEqualTo(flowsBefore);
         assertThat(jdbc.queryForObject("SELECT success_expr FROM gw_flow_step s JOIN gw_flow f ON f.id = s.flow_id"

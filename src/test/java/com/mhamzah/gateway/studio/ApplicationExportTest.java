@@ -1,7 +1,9 @@
 package com.mhamzah.gateway.studio;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.mhamzah.gateway.config.GatewayProperties;
 import com.mhamzah.gateway.studio.StudioConfig.Flow;
 import com.mhamzah.gateway.studio.StudioConfig.Schema;
 import java.util.List;
@@ -51,5 +53,58 @@ class ApplicationExportTest {
         assertThat(headers.get(0).value()).isNotEqualTo("k-123");
         assertThat(headers.get(1).value()).isEqualTo("WEB");
         assertThat(bundle.replacedSecrets()).isNotEmpty();
+    }
+
+    private static final GatewayProperties.Tables TABLES = new GatewayProperties.Tables("gw_flow", "gw_flow_step",
+            "gw_mapping_rule", "gw_lookup_entry", "gw_json_schema", "gw_audit_transaction", "gw_audit_step",
+            "gw_target_system", "gw_target_system_header", "gw_storage", "gw_application", "gw_flow_response");
+
+    private static StudioConfig twoFlowsOfPay() {
+        return new StudioConfig(null,
+                List.of(flow("PAYMENT", "PAYMENT_REQUEST", null), flow("REFUND", "REFUND_REQUEST", null)), List.of(),
+                List.of(), List.of(new Schema("PAYMENT_REQUEST", null, "{\"type\":\"object\"}"),
+                        new Schema("REFUND_REQUEST", null, "{\"type\":\"object\"}")),
+                List.of(), List.of(new StudioConfig.Application("PAY", "Payments", null)));
+    }
+
+    @Test
+    void flowsExportCarriesOnlyTheChosenFlowsAndWhatTheyUse() {
+        ApplicationExport.Bundle bundle = ApplicationExport.flowsBundle(twoFlowsOfPay(), List.of("REFUND"));
+
+        assertThat(bundle.flowsOnly()).isTrue();
+        assertThat(bundle.flows()).extracting(Flow::code).containsExactly("REFUND");
+        assertThat(bundle.schemas()).extracting(Schema::code).containsExactly("REFUND_REQUEST");
+        assertThat(bundle.applications()).extracting(StudioConfig.Application::code).containsExactly("PAY");
+        assertThat(ApplicationExport.json(bundle, "test")).contains("\"format\" : \"json-gateway-flows\"", "\"applications\"");
+    }
+
+    @Test
+    void flowsSqlReplacesOnlyThoseFlowsAndAddsTheApplicationWhenMissing() {
+        ApplicationExport.Bundle bundle = ApplicationExport.flowsBundle(twoFlowsOfPay(), List.of("REFUND"));
+
+        for (ApplicationExport.Dialect dialect : ApplicationExport.Dialect.values()) {
+            String sql = ApplicationExport.sql(bundle, dialect, TABLES, "test");
+            assertThat(sql).contains("DELETE FROM gw_flow WHERE code IN ('REFUND');",
+                    "SELECT COUNT(*) FROM gw_application WHERE code = 'PAY') = 0;", "'REFUND'")
+                    .doesNotContain("application_code = 'PAY'", "DELETE FROM gw_application", "'PAYMENT'");
+            assertThat(sql.contains("FROM DUAL WHERE")).isEqualTo(dialect == ApplicationExport.Dialect.ORACLE);
+        }
+    }
+
+    @Test
+    void flowsLiquibaseReplacesOnlyThoseFlows() {
+        String xml = ApplicationExport.liquibase(ApplicationExport.flowsBundle(twoFlowsOfPay(), List.of("REFUND")), "test");
+
+        assertThat(xml).contains("id=\"flows-refund-", "<where>code IN ('REFUND')</where>",
+                "SELECT COUNT(*) FROM ${tbl.application} WHERE code = 'PAY'")
+                .doesNotContain("application_code = 'PAY'", "<delete tableName=\"${tbl.application}\">");
+    }
+
+    @Test
+    void flowsExportRejectsNoOrUnknownFlows() {
+        assertThatThrownBy(() -> ApplicationExport.flowsBundle(twoFlowsOfPay(), List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> ApplicationExport.flowsBundle(twoFlowsOfPay(), List.of("REFUND", "NOPE")))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("'NOPE'");
     }
 }

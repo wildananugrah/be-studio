@@ -1250,18 +1250,66 @@ class App extends Component {
     if (err) this.setState({ toast: { status: 'Export', title: 'Export ' + code, color: 'oklch(0.72 0.15 25)', body: err, note: '' } });
   }
 
+  /** Only the chosen flows (and the shared items they use): applying it leaves the other flows as they are. */
+  async exportFlows(codes, format) {
+    const name = (codes.length === 1 ? codes[0] : codes.length + '-flows') + '.' + (format === 'liquibase' ? 'xml' : format);
+    const err = await this.download('api/flows/export?format=' + format + '&codes=' + codes.map(encodeURIComponent).join(','), name);
+    if (err) this.setState({ toast: { status: 'Export', title: 'Export ' + codes.join(', '), color: 'oklch(0.72 0.15 25)', body: err, note: '' } });
+  }
+
+  /** An application export or a flows export (JSON), told apart by its format. */
+  importFile(text) {
+    let d; try { d = JSON.parse(text); } catch (e) { d = null; }
+    if (d && d.format === 'json-gateway-flows') this.importFlows(d); else this.importApp(d);
+  }
+
+  /** Shared items of an import: added when missing, kept (with a note) when this gateway has a different one. */
+  mergeShared(cfg, inc, notes) {
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const merge = (list, item, what) => { const e = list.find(x => x.code === item.code); if (!e) { list.push(item); notes.push(what + ' ' + item.code + ' added'); } else if (!same(e, item)) notes.push(what + ' ' + item.code + ' already exists here and differs: kept this gateway\'s'); };
+    inc.targets.forEach(t => merge(cfg.targets, t, 'target system'));
+    inc.schemas.forEach(x => merge(cfg.schemas, x, 'schema'));
+    inc.storages.forEach(x => merge(cfg.storages = cfg.storages || [], x, 'storage'));
+    Object.keys(inc.lookups).forEach(code => { if (!cfg.lookups[code]) { cfg.lookups[code] = inc.lookups[code]; notes.push('lookup ' + code + ' added'); } else if (!same(cfg.lookups[code], inc.lookups[code])) notes.push('lookup ' + code + ' already exists here and differs: kept this gateway\'s'); });
+  }
+
+  /** What an import still needs on this gateway, as toast lines. */
+  importNeeds(d) {
+    return [...Object.entries(d.requires || {}).filter(([, v]) => v && v.length).map(([k, v]) => 'needs ' + k + ': ' + v.join(', ')),
+      ...(d.replacedSecrets && d.replacedSecrets.length ? ['set these environment variables: ' + d.replacedSecrets.join(', ')] : [])];
+  }
+
+  /**
+   * Loads exported flows (JSON) as unsaved changes: each replaces the flow with the same code, the other flows stay;
+   * their applications and shared items are added when missing. Nothing is written until Save & reload.
+   */
+  importFlows(d) {
+    const inc = fromApi({ flows: d.flows || [], targets: d.targets || [], lookups: d.lookups || [], schemas: d.schemas || [], storages: d.storages || [], applications: d.applications || [] });
+    const notes = []; let added = 0, replaced = 0;
+    this.mutCfg(cfg => {
+      cfg.applications = cfg.applications || [];
+      inc.applications.forEach(a => { if (!cfg.applications.some(x => x.code === a.code)) { cfg.applications.push(a); notes.push('application ' + a.code + ' added'); } });
+      inc.flows.forEach(f => {
+        const i = cfg.flows.findIndex(x => x.code === f.code);
+        if (i >= 0) { if ((cfg.flows[i].application || 'DEFAULT') !== (f.application || 'DEFAULT')) notes.push('flow ' + f.code + ' moved here from ' + cfg.flows[i].application); cfg.flows[i] = f; replaced++; } else { cfg.flows.push(f); added++; }
+      });
+      this.mergeShared(cfg, inc, notes);
+    });
+    this.setState({ toast: { status: 'Imported', title: 'Import ' + inc.flows.map(f => f.code).join(', ') + ' · not saved yet', color: 'oklch(0.78 0.13 155)',
+      body: [added + ' flow(s) added, ' + replaced + ' replaced; other flows unchanged', ...notes, ...this.importNeeds(d)].join('\n'),
+      note: 'Review, then Save & reload: the save validates it like any edit.' } });
+  }
+
   /**
    * Loads an exported application (JSON) into the page as unsaved changes: the application and its flows replace
    * those with the same codes (its other flows are removed), shared items are added when missing and kept when this
    * gateway already has them. Nothing is written until Save & reload, which validates it like any edit.
    */
-  importApp(text) {
-    let d; try { d = JSON.parse(text); } catch (e) { d = null; }
+  importApp(d) {
     const fail = msg => this.setState({ toast: { status: 'Import', title: 'Import application', color: 'oklch(0.72 0.15 25)', body: msg, note: '' } });
-    if (!d || d.format !== 'json-gateway-application' || !d.application || !d.application.code) { fail('Not an application export (a JSON file from Flows → Export → JSON).'); return; }
+    if (!d || d.format !== 'json-gateway-application' || !d.application || !d.application.code) { fail('Not an export (a JSON file from Flows → Export → JSON).'); return; }
     const inc = fromApi({ flows: d.flows || [], targets: d.targets || [], lookups: d.lookups || [], schemas: d.schemas || [], storages: d.storages || [], applications: [d.application] });
     const app = inc.applications[0]; const notes = []; let added = 0, replaced = 0, removed = 0;
-    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     this.mutCfg(cfg => {
       cfg.applications = cfg.applications || [];
       const ex = cfg.applications.find(a => a.code === app.code);
@@ -1273,26 +1321,26 @@ class App extends Component {
         f.application = app.code; const i = cfg.flows.findIndex(x => x.code === f.code);
         if (i >= 0) { if ((cfg.flows[i].application || 'DEFAULT') !== app.code) notes.push('flow ' + f.code + ' moved here from ' + cfg.flows[i].application); cfg.flows[i] = f; replaced++; } else { cfg.flows.push(f); added++; }
       });
-      const merge = (list, item, what) => { const e = list.find(x => x.code === item.code); if (!e) { list.push(item); notes.push(what + ' ' + item.code + ' added'); } else if (!same(e, item)) notes.push(what + ' ' + item.code + ' already exists here and differs: kept this gateway\'s'); };
-      inc.targets.forEach(t => merge(cfg.targets, t, 'target system'));
-      inc.schemas.forEach(x => merge(cfg.schemas, x, 'schema'));
-      inc.storages.forEach(x => merge(cfg.storages = cfg.storages || [], x, 'storage'));
-      Object.keys(inc.lookups).forEach(code => { if (!cfg.lookups[code]) { cfg.lookups[code] = inc.lookups[code]; notes.push('lookup ' + code + ' added'); } else if (!same(cfg.lookups[code], inc.lookups[code])) notes.push('lookup ' + code + ' already exists here and differs: kept this gateway\'s'); });
+      this.mergeShared(cfg, inc, notes);
     });
-    const req = Object.entries(d.requires || {}).filter(([, v]) => v && v.length).map(([k, v]) => k + ': ' + v.join(', '));
     this.setState({ toast: { status: 'Imported', title: 'Import ' + app.code + ' · not saved yet', color: 'oklch(0.78 0.13 155)',
-      body: [added + ' flow(s) added, ' + replaced + ' replaced' + (removed ? ', ' + removed + ' removed (not in the file)' : ''), ...notes, ...req.map(r => 'needs ' + r),
-        ...(d.replacedSecrets && d.replacedSecrets.length ? ['set these environment variables: ' + d.replacedSecrets.join(', ')] : [])].join('\n'),
+      body: [added + ' flow(s) added, ' + replaced + ' replaced' + (removed ? ', ' + removed + ' removed (not in the file)' : ''), ...notes, ...this.importNeeds(d)].join('\n'),
       note: 'Review, then Save & reload: the save validates it like any edit.' } });
   }
 
   renderFlows() {
     const s = this.state; const base = s.catalog.apiBasePath; const dirty = this.dirty();
     const open = i => () => this.setState({ screen: 'flow', tab: 'pipeline', cur: i, sel: { kind: 'flow' }, scope: 'resp', preview: null });
-    const grid = 'display:grid;grid-template-columns:minmax(0,2.4fr) minmax(0,1.4fr) 70px minmax(0,1.5fr) 80px 90px;gap:12px';
+    const grid = 'display:grid;grid-template-columns:18px minmax(0,2.4fr) minmax(0,1.4fr) 70px minmax(0,1.5fr) 80px 90px;gap:12px';
+    // flows ticked for "export selected"; a code no longer in the configuration (deleted, renamed) drops out
+    const sel = (s.flowSel || []).filter(c => s.cfg.flows.some(f => f.code === c));
+    const setSel = codes => this.setState({ flowSel: codes });
+    const tick = (codes, on) => setSel(on ? [...new Set([...sel, ...codes])] : sel.filter(c => !codes.includes(c)));
+    const box = (codes, title) => { const on = codes.length > 0 && codes.every(c => sel.includes(c));
+      return html`<input type="checkbox" class="ro-ok" title=${title} checked=${on} disabled=${codes.length === 0} onClick=${e => { e.stopPropagation(); tick(codes, !on); }} style="margin:0;cursor:pointer;accent-color:#17181C"/>`; };
     const other = s.problems.filter(m => !s.cfg.flows.some(f => m.includes(`flow '${f.code}'`)) && !/^(target system|lookup|json schema|storage) '/.test(m));
     const small = (label, onClick, disabled, title, cls = 'btn-line') => html`<button class=${cls} disabled=${disabled} title=${title || ''} onClick=${onClick} style="border:1px solid #E4E1D8;background:#fff;color:#17181C;border-radius:7px;padding:5px 10px;cursor:pointer;font-weight:500;font-size:12px;white-space:nowrap">${label}</button>`;
-    const pickFile = () => { const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json'; inp.onchange = async () => { const f = inp.files && inp.files[0]; if (f) this.importApp(await f.text()); }; inp.click(); };
+    const pickFile = () => { const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json'; inp.onchange = async () => { const f = inp.files && inp.files[0]; if (f) this.importFile(await f.text()); }; inp.click(); };
     const q = (s.flowQ || '').trim().toLowerCase();
     const has = v => String(v == null ? '' : v).toLowerCase().includes(q);
     const flowHit = x => has(x.code) || has(x.name) || has(x.method + ' ' + base + x.path) || has(x.path) || has(x.errorHandler || 'defaultErrorHandler')
@@ -1313,11 +1361,21 @@ class App extends Component {
             <span style=${`font:11.5px ${MONO};color:#9A9CA2`}>${q ? shown + ' of ' + total : total} flow${total === 1 ? '' : 's'}${q ? ' in ' + sections.length + ' application' + (sections.length === 1 ? '' : 's') : ''}</span>
           </div>
           <div style="margin-top:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:#6A6D75">
-            <span class="ro-hide" style="display:flex;gap:8px">${small('+ New application', () => this.openAppModal('new'))}${small('Import application…', pickFile, false, 'Load a JSON export as unsaved changes')}</span>
+            <span class="ro-hide" style="display:flex;gap:8px">${small('+ New application', () => this.openAppModal('new'))}${small('Import…', pickFile, false, 'Load a JSON export (an application or selected flows) as unsaved changes')}</span>
             <span style="flex:1"></span>
             <span title="One document for every live endpoint, built from the API description (Swagger)">API specification of all endpoints</span>
             ${['docx:Word', 'pdf:PDF', 'md:Markdown'].map(x => { const [fmt, label] = x.split(':'); return small(label, () => this.openSpecModal(fmt), dirty, dirty ? 'Save & reload first: the spec comes from the live configuration' : 'Choose the applications and endpoints, then generate'); })}
           </div>
+          ${sel.length > 0 && html`
+          <div style="margin-top:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 14px;background:#F4F2EC;border:1px solid #E4E1D8;border-radius:9px;font-size:12px">
+            <span style=${`font:600 12px ${MONO}`}>${sel.length} flow${sel.length === 1 ? '' : 's'} selected</span>
+            <span title=${sel.join(', ')} style=${`font:11.5px ${MONO};color:#6A6D75;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:420px`}>${sel.join(', ')}</span>
+            <span style="flex:1"></span>
+            <span style="display:flex;align-items:center;gap:6px;color:#6A6D75">Export only these
+              ${[['json', 'JSON'], ['sql', 'SQL'], ['liquibase', 'Liquibase']].map(([fmt, label]) => small(label, () => this.exportFlows(sel, fmt), dirty, dirty ? 'Save & reload first: the export reads the saved configuration' : 'Applying it replaces only these flows; the other flows stay as they are'))}
+            </span>
+            ${small('Clear', () => setSel([]))}
+          </div>`}
           ${sections.map(({ app, flows }) => html`
           <div style="margin-top:18px;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:auto">
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px;background:#FAF9F6;border-bottom:1px solid #EFEDE6;min-width:760px">
@@ -1338,13 +1396,14 @@ class App extends Component {
             </div>
             ${app.description && html`<div style="padding:8px 16px;font-size:12px;color:#6A6D75;border-bottom:1px solid #F3F1EC;min-width:760px">${app.description}</div>`}
             ${flows.length > 0 && html`<div style=${`${grid};min-width:760px;padding:8px 16px;font:600 10px ${MONO};letter-spacing:.06em;color:#9A9CA2;border-bottom:1px solid #EFEDE6`}>
-              <span>ENDPOINT</span><span>CODE</span><span>STEPS</span><span>ERROR HANDLER</span><span>AUDIT</span><span>ENABLED</span>
+              ${box(flows.map(({ f }) => f.code), 'Select all flows of ' + app.code + ' shown here')}<span>ENDPOINT</span><span>CODE</span><span>STEPS</span><span>ERROR HANDLER</span><span>AUDIT</span><span>ENABLED</span>
             </div>`}
             ${flows.length === 0 && html`<div style="padding:16px;color:#6A6D75;font-size:12.5px;min-width:760px">No flows yet. <b>+ Flow</b> adds one to this application.</div>`}
             ${flows.map(({ f: x, i }) => {
               const np = this.flowProblems(x).length;
               return html`
               <div class="row" onClick=${open(i)} style=${`${grid};min-width:760px;align-items:center;padding:12px 16px;border-bottom:1px solid #F3F1EC;cursor:pointer`}>
+                ${box([x.code], 'Select for export')}
                 <div style="display:flex;align-items:center;gap:9px;min-width:0">
                   <span style=${`width:48px;text-align:center;flex:none;font:600 10px ${MONO};color:#fff;background:${MC[x.method] || '#555'};padding:3px 0;border-radius:4px`}>${x.method}</span>
                   <span style=${`font:12.5px ${MONO};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>${base}${x.path}</span>
