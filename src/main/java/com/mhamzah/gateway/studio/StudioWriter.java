@@ -139,12 +139,13 @@ class StudioWriter {
             jdbc.sql("INSERT INTO " + db.qualify(t.mappingRule())
                             + " (flow_id, step_id, phase, seq, target_type, target_path, source_path, constant_value,"
                             + " default_value, converter, lookup_code, field_handler, required, response_name,"
-                            + " error_map_code, error_map_where, error_map_output)"
-                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                            + " error_map_code, error_map_where, error_map_output, error_map_fill, error_map_index)"
+                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                     .params(flowIds.get(r.flowId()), r.stepId() == null ? null : stepIds.get(r.stepId()), r.phase(),
                             r.seq(), r.targetType(), r.targetPath(), r.sourcePath(), r.constantValue(),
                             r.defaultValue(), r.converter(), r.lookupCode(), r.fieldHandler(), r.required(),
-                            r.responseName(), r.errorMapCode(), r.errorMapWhere(), r.errorMapOutput())
+                            r.responseName(), r.errorMapCode(), r.errorMapWhere(), r.errorMapOutput(),
+                            r.errorMapCode() == null ? null : r.errorMapFill(), r.errorMapIndex())
                     .update();
         }
     }

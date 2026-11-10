@@ -345,6 +345,8 @@ scripts/flow-changelog.sh export TRADE_CALLBACK,OTHER_FLOW                      
 | `error_map_code` | | Take the value from this `gw_error_map` instead of `source_path` / `constant_value` ([§3.5a](#35a-gw_error_map)) |
 | `error_map_where` | with `error_map_code` | JSON conditions: `[{"field": "errorCode", "source": "$.steps.x.body.errorCode"}, {"field": "service", "value": "trade"}]` |
 | `error_map_output` | with `error_map_code` | The field of the matching entry that becomes the value, e.g. `generalMessage` |
+| `error_map_fill` | default `false` | Fill the `{name}` placeholders in the output with what template conditions captured |
+| `error_map_index` | default `0` | Which of several matching entries to take: `0` = the first (best) match, `1` = the next, … No entry at that index → `default_value` |
 
 Set exactly one of `source_path` / `constant_value`. The exceptions are a rule with a `field_handler`, which may have neither, and a rule with an `error_map_code`, which must have neither.
 
@@ -474,6 +476,22 @@ A list of errors as one JSON array of objects, with any fields, e.g. one entry p
 | `entries` | The JSON array; every element must be an object |
 
 A rule with `error_map_code` gets its value from the map: of the **first** entry whose fields equal every condition in `error_map_where`, the field `error_map_output`. A condition compares an entry field with a context value (`source`, e.g. `$.steps.backbone.body.errorCode` or, in an error response, `$.error.downstream.body.errorCode`) or with a constant (`value`). Values are compared as text, so `409` matches `"409"`. When no entry matches (or a `source` is missing), the value is missing and the rule's `default_value` applies; lookup, converter, field handler and `required` then work as for any rule. Several entries may share a code (e.g. one per message); match on more fields when the output differs between them.
+
+**Template conditions.** A condition with `"match": "template"` treats the entry's field as a template: its text must match literally (characters such as `(`, `.` or `?` are plain text), and each `{name}` in it matches any text. Use it for messages that contain values, e.g. the entry `"message": "Aplikasi {applicationNo} tidak dalam status DRAFT."` matches the backend's `Aplikasi LC-2026-0042 tidak dalam status DRAFT.`. Several entries can match: they are ordered by their fixed template text, most first (so a specific message comes before a catch-all such as `{workflow message}`), then by their order in the map, and `error_map_index` picks one (`0`, the default, is the best match; without template conditions the order is simply the map's). Spaces around the value and the template are ignored. With `error_map_fill`, the placeholders in the output get the captured values: `"messageEn": "Application {applicationNo} is not in DRAFT status."` becomes `Application LC-2026-0042 is not in DRAFT status.` (placeholders that captured nothing stay as they are).
+
+```json
+[{"field": "httpStatus", "source": "$.error.downstream.status"},
+ {"field": "errorCode",  "source": "$.error.downstream.body.errorCode"},
+ {"field": "message",    "source": "$.error.downstream.body.message", "match": "template"}]
+```
+
+**Debugging.** Every error map lookup is logged at INFO with the call's correlation ID, so it shows under **Logs** in Studio's audit trail (and in the log output): the condition values read, how many entries matched, which index was taken (and its position in the map) and the output, or why there was none:
+
+```
+error map TRADE for mapping rule 3 (error map TRADE -> $.messageEn): where httpStatus = '409', errorCode = 'INVALID_STATE', message ~ 'Aplikasi LC-1 tidak dalam status DRAFT.' -> 2 match(es), took index 0 (entry 1): messageEn = "Application {applicationNo} is not in DRAFT status."
+```
+
+Values longer than 200 characters are cut.
 
 In Studio: **Error maps** (paste the JSON; it shows the entries, the fields found and which flows use it); in a flow's **Mapping**, drag a map from **ERROR MAPS** onto a rule or use **+ Error map rule**, then pick the conditions (a field, `=`, a `$.` path or a constant) and the field to **take**.
 
@@ -1168,7 +1186,7 @@ Whether a downstream is called over HTTP or HTTPS is the scheme of its `base_url
 | `tls_mode` | What happens | Use for |
 |---|---|---|
 | `VERIFY` (default, NULL) | The server certificate must chain to a CA the JVM trusts, and match the host name | Public or company-CA certificates the JVM already trusts |
-| `INSECURE` | Any certificate and host name is accepted; a warning is logged on every reload | Dev/test systems with self-signed certificates only. Never production: anyone in the network path can read and change the traffic |
+| `INSECURE` | Any certificate and host name is accepted; a warning is logged on every reload | Dev/test systems with self-signed certificates only. Never production: anyone in the network path can read and change the traffic. Set `gateway.tls.allow-insecure: false` (env `GATEWAY_TLS_ALLOW_INSECURE=false`) in production and a target system with `INSECURE` becomes a configuration error: startup fails and a Studio save is refused |
 | `CUSTOM` | `tls_trust_store` replaces the JVM CAs for this target, and/or `tls_key_store` presents a client certificate (mutual TLS) | An internal CA or a pinned self-signed certificate; partners that require a client certificate |
 
 A store is either **PEM text** (`-----BEGIN CERTIFICATE-----...`), or a **path** on the gateway server to a `.pem`/`.crt` file (PEM), a `.p12`/`.pfx` file (PKCS12) or a `.jks` file. `classpath:` and `file:` prefixes work. A PEM key store contains the client certificate chain and the private key (one file). Passwords are needed for PKCS12/JKS stores and encrypted PEM keys.

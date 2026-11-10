@@ -164,7 +164,8 @@ final class StudioRows {
                 .sorted(Comparator.comparingInt(RuleRow::seq))
                 .map(r -> new Rule(r.targetType(), r.targetPath(), r.sourcePath(), r.constantValue(),
                         r.defaultValue(), r.lookupCode(), r.converter(), r.fieldHandler(), r.required(),
-                        r.errorMapCode(), where(r.errorMapWhere()), r.errorMapOutput()))
+                        r.errorMapCode(), where(r.errorMapWhere()), r.errorMapOutput(), r.errorMapFill(),
+                        r.errorMapIndex()))
                 .toList();
     }
 
@@ -178,7 +179,7 @@ final class StudioRows {
             for (tools.jackson.databind.JsonNode c : com.mhamzah.gateway.mapping.JsonValues.MAPPER.readTree(json)) {
                 tools.jackson.databind.JsonNode v = c.get("value");
                 out.add(new StudioConfig.Where(c.path("field").asString(null), c.path("source").asString(null),
-                        v == null || v.isNull() ? null : v.asString()));
+                        v == null || v.isNull() ? null : v.asString(), c.path("match").asString(null)));
             }
             return out;
         } catch (RuntimeException e) {
@@ -199,6 +200,9 @@ final class StudioRows {
                 o.put("source", w.source().strip());
             } else {
                 o.put("value", w.value());
+            }
+            if ("template".equalsIgnoreCase(text(w.match()))) {
+                o.put("match", "template");
             }
         }
         return out.toString();
@@ -325,7 +329,9 @@ final class StudioRows {
                     text(r.source()), text(r.constant()), text(r.defaultValue()), text(r.converter()),
                     text(r.lookup()), text(r.fieldHandler()), r.required(), response, text(r.errorMap()),
                     text(r.errorMap()) == null ? null : whereJson(r.errorMapWhere()),
-                    text(r.errorMap()) == null ? null : text(r.errorMapOutput())));
+                    text(r.errorMap()) == null ? null : text(r.errorMapOutput()),
+                    text(r.errorMap()) != null && Boolean.TRUE.equals(r.errorMapFill()),
+                    text(r.errorMap()) == null || r.errorMapIndex() == null || r.errorMapIndex() == 0 ? null : r.errorMapIndex()));
         }
     }
 

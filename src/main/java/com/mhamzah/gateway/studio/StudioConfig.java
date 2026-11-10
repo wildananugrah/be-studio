@@ -248,21 +248,47 @@ public record StudioConfig(
             Boolean required,
             String errorMap,
             List<Where> errorMapWhere,
-            String errorMapOutput) {
+            String errorMapOutput,
+            Boolean errorMapFill,
+            Integer errorMapIndex) {
+
+        public Rule(String type, String target, String source, String constant, String defaultValue, String lookup,
+                String converter, String fieldHandler, Boolean required, String errorMap, List<Where> errorMapWhere,
+                String errorMapOutput, Boolean errorMapFill) {
+            this(type, target, source, constant, defaultValue, lookup, converter, fieldHandler, required, errorMap,
+                    errorMapWhere, errorMapOutput, errorMapFill, null);
+        }
+
+        public Rule(String type, String target, String source, String constant, String defaultValue, String lookup,
+                String converter, String fieldHandler, Boolean required, String errorMap, List<Where> errorMapWhere,
+                String errorMapOutput) {
+            this(type, target, source, constant, defaultValue, lookup, converter, fieldHandler, required, errorMap,
+                    errorMapWhere, errorMapOutput, null);
+        }
 
         public Rule {
+            errorMapFill = errorMapFill != null && errorMapFill;
             required = required != null && required;
             errorMapWhere = errorMapWhere == null ? List.of() : List.copyOf(errorMapWhere);
         }
 
         public Rule(String type, String target, String source, String constant, String defaultValue, String lookup,
                 String converter, String fieldHandler, Boolean required) {
-            this(type, target, source, constant, defaultValue, lookup, converter, fieldHandler, required, null, null, null);
+            this(type, target, source, constant, defaultValue, lookup, converter, fieldHandler, required, null, null, null,
+                    null);
         }
     }
 
-    /** A condition of an error map rule: the entry's {@code field} equals the value at {@code source}, or {@code value}. */
-    public record Where(String field, String source, String value) {}
+    /**
+     * A condition of an error map rule: the entry's {@code field} equals the value at {@code source}, or {@code value}.
+     * {@code match} {@code template}: the entry's field is a template ({@code {name}} matches any text); null = equals.
+     */
+    public record Where(String field, String source, String value, String match) {
+
+        public Where(String field, String source, String value) {
+            this(field, source, value, null);
+        }
+    }
 
     /** {@code gw_error_map}: {@code text} is a JSON array of objects that error map rules pick from. */
     public record ErrorMap(String code, String description, String text) {}

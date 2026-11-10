@@ -56,6 +56,10 @@ gateway:
   default-step-timeout-ms: 10000
   admin:
     token: ${GATEWAY_ADMIN_TOKEN:dev-admin-token}
+  # tls_mode INSECURE (trust any certificate and host name) is for dev / test against self-signed backends.
+  # Set GATEWAY_TLS_ALLOW_INSECURE=false in production: a target system using it then stops the configuration loading.
+  tls:
+    allow-insecure: ${GATEWAY_TLS_ALLOW_INSECURE:true}
   snap:
     # two characters, each a digit or an upper-case letter: 00-99 and 0A-ZZ (1,296 codes per application)
     service-code-pattern: ${GATEWAY_SNAP_SERVICE_CODE_PATTERN:[0-9A-Z]{2}[a-z]?}

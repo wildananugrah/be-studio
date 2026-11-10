@@ -354,6 +354,79 @@ class FlowExecutorTest {
         assertThat(run("POST", "/f", "{}").response().body().toString()).isEqualTo("{\"byStatus\":\"Unknown error\"}");
     }
 
+    private static final String TRADE_ERRORS = """
+            [{"service":"trade","httpStatus":409,"errorCode":"INVALID_STATE","message":"{workflow message}","messageEn":"Generic: {workflow message}"},
+             {"service":"trade","httpStatus":409,"errorCode":"INVALID_STATE","message":"Aplikasi {applicationNo} tidak dalam status DRAFT.","messageEn":"Application {applicationNo} is not in DRAFT status."},
+             {"service":"trade","httpStatus":422,"errorCode":"LIMIT","message":"Nominal (max {max.toPlainString()}) terlampaui? Cek {who}.","messageEn":"Amount above {max.toPlainString()} for {who}."}]""";
+
+    /** A rule taking messageEn where httpStatus and errorCode equal the step's, and its message matches as a template. */
+    private void templateRule(boolean fill) {
+        templateRule(fill, null);
+    }
+
+    private void templateRule(boolean fill, Integer index) {
+        rows.errorMap("TRADE", TRADE_ERRORS);
+        var flow = rows.flow("F", "POST", "/f");
+        rows.step(flow, "s", 1);
+        var r = rows.responseRule(flow, "$.messageEn", null);
+        rows.replace(r, new com.mhamzah.gateway.config.ConfigRows.RuleRow(r.id(), flow.id(), null, "FLOW_RESPONSE", r.seq(), "BODY",
+                "$.messageEn", null, null, "\"Unknown error\"", null, null, null, false, null).withErrorMap("TRADE",
+                "[{\"field\":\"httpStatus\",\"source\":\"$.steps.s.body.status\"},"
+                        + "{\"field\":\"errorCode\",\"source\":\"$.steps.s.body.errorCode\"},"
+                        + "{\"field\":\"message\",\"source\":\"$.steps.s.body.message\",\"match\":\"template\"}]",
+                "messageEn", fill, index));
+    }
+
+    private String messageEn(String status, String code, String message) {
+        downstream.ok("/s", "{\"status\":" + status + ",\"errorCode\":\"" + code + "\",\"message\":\"" + message + "\"}");
+        JsonNode v = run("POST", "/f", "{}").response().body().get("messageEn");
+        return v == null ? null : v.asString();
+    }
+
+    @Test
+    void aTemplateConditionMatchesAMessageWithItsValuesFilledIn() {
+        templateRule(false);
+        // the specific template beats the catch-all {workflow message}; without fill the output keeps its placeholders
+        assertThat(messageEn("409", "INVALID_STATE", "Aplikasi LC-2026-0042 tidak dalam status DRAFT."))
+                .isEqualTo("Application {applicationNo} is not in DRAFT status.");
+        assertThat(messageEn("409", "INVALID_STATE", "Something else went wrong")).isEqualTo("Generic: {workflow message}");
+        assertThat(messageEn("400", "INVALID_STATE", "Aplikasi X tidak dalam status DRAFT.")).isEqualTo("Unknown error");
+    }
+
+    @Test
+    void fillPutsTheCapturedValuesIntoTheOutput() {
+        templateRule(true);
+        assertThat(messageEn("409", "INVALID_STATE", "Aplikasi LC-2026-0042 tidak dalam status DRAFT."))
+                .isEqualTo("Application LC-2026-0042 is not in DRAFT status.");
+        assertThat(messageEn("409", "INVALID_STATE", "Workflow busy")).isEqualTo("Generic: Workflow busy");
+        // ( ) ? . in the template are plain text, not regex; placeholders named like code are captured too
+        assertThat(messageEn("422", "LIMIT", "Nominal (max 5000.00) terlampaui? Cek maker A."))
+                .isEqualTo("Amount above 5000.00 for maker A.");
+        assertThat(messageEn("422", "LIMIT", "Nominal max 5000.00 terlampaui? Cek maker A.")).isEqualTo("Unknown error");
+    }
+
+    @Test
+    void theIndexPicksOneOfSeveralMatchesAndTheLookupIsLogged() {
+        templateRule(false, 1);
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(MappingEngine.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs = new ch.qos.logback.core.read.ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            // both INVALID_STATE templates match: index 0 would be the specific one, index 1 is the catch-all
+            assertThat(messageEn("409", "INVALID_STATE", "Aplikasi LC-1 tidak dalam status DRAFT.")).isEqualTo("Generic: {workflow message}");
+            // only the catch-all matches: there is no index 1 -> the default
+            assertThat(messageEn("409", "INVALID_STATE", "Workflow busy")).isEqualTo("Unknown error");
+        } finally {
+            logger.detachAppender(logs);
+        }
+        assertThat(logs.list).extracting(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                .anySatisfy(m -> assertThat(m).startsWith("error map TRADE for mapping rule")
+                        .contains("where httpStatus = '409', errorCode = 'INVALID_STATE', message ~ 'Aplikasi LC-1 tidak dalam status DRAFT.'",
+                                "-> 2 match(es), took index 1 (entry 0): messageEn = \"Generic: {workflow message}\""))
+                .anySatisfy(m -> assertThat(m).contains("-> 1 match(es), no match at index 1 -> no value, default \"Unknown error\""));
+    }
+
     @Test
     void errorMapMistakesAreReportedOnReload() {
         rows.errorMap("BROKEN", "{\"not\":\"an array\"}");
@@ -367,7 +440,13 @@ class FlowExecutorTest {
         rows.replace(noWhere, noWhere.withErrorMap("ERRORS", "[]", "generalMessage"));
         var badStep = rows.responseRule(flow, "$.d", null);
         rows.replace(badStep, badStep.withErrorMap("ERRORS", "[{\"field\":\"errorCode\",\"source\":\"$.steps.ghost.body.code\"}]", "generalMessage"));
+        var badMatch = rows.responseRule(flow, "$.e", null);
+        rows.replace(badMatch, badMatch.withErrorMap("ERRORS", "[{\"field\":\"errorCode\",\"value\":\"X\",\"match\":\"regex\"}]", "generalMessage"));
+        var badIndex = rows.responseRule(flow, "$.f", null);
+        rows.replace(badIndex, badIndex.withErrorMap("ERRORS", "[{\"field\":\"errorCode\",\"value\":\"X\"}]", "generalMessage", false, -1));
         assertThatThrownBy(this::registry).isInstanceOfSatisfying(ConfigValidationException.class, e -> assertThat(e.errors())
+                .anySatisfy(m -> assertThat(m).contains("condition on 'errorCode': match 'regex' must be equals or template"))
+                .anySatisfy(m -> assertThat(m).contains("error_map_index must be 0 or more"))
                 .anySatisfy(m -> assertThat(m).contains("error map 'BROKEN': entries must be a JSON array of objects"))
                 .anySatisfy(m -> assertThat(m).contains("error_map_code 'MISSING' is not an error map"))
                 .anySatisfy(m -> assertThat(m).contains("takes its value from the map: leave source_path and constant_value empty"))

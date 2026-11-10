@@ -22,7 +22,7 @@ const storage = {
 
 // ---------- API document <-> editor model ----------
 const ruleIn = r => ({ id: uid('r'), type: r.type || 'BODY', target: str(r.target), source: str(r.source), constant: str(r.constant), def: str(r.defaultValue), lookup: str(r.lookup), conv: str(r.converter), fh: str(r.fieldHandler), required: !!r.required,
-  em: str(r.errorMap), emWhere: (r.errorMapWhere || []).map(w => ({ field: str(w.field), input: str(w.source || w.value) })), emOut: str(r.errorMapOutput) });
+  em: str(r.errorMap), emWhere: (r.errorMapWhere || []).map(w => ({ field: str(w.field), input: str(w.source || w.value), template: w.match === 'template' })), emOut: str(r.errorMapOutput), emFill: !!r.errorMapFill, emIndex: r.errorMapIndex ? String(r.errorMapIndex) : '' });
 /**
  * An error map's JSON text, read once per text: the entries' field names (in first-seen order), the entry count and
  * the problem when it is not a JSON array of objects.
@@ -44,7 +44,7 @@ function emInfo(text) {
   emCache.set(t, info); return info;
 }
 /** An error map condition's input: a context path when it starts with $., otherwise a constant. */
-const emCond = w => (/^\$\./.test(String(w.input || '').trim()) ? { field: w.field, source: w.input.trim(), value: null } : { field: w.field, source: null, value: w.input });
+const emCond = w => ({ ...(/^\$\./.test(String(w.input || '').trim()) ? { field: w.field, source: w.input.trim(), value: null } : { field: w.field, source: null, value: w.input }), match: w.template ? 'template' : null });
 /**
  * How a response's HTTP status is set: a STATUS rule passing a step's status through ({ step }), another STATUS rule
  * ({ custom }), or null for the response's fixed status.
@@ -68,7 +68,7 @@ function setStatusFrom(rules, step) {
   else rules.unshift({ id: uid('r'), type: 'STATUS', target: 'status', source, constant: '', def: '', lookup: '', conv: '', fh: '', required: false });
 }
 const ruleOut = r => ({ type: r.type, target: r.target, source: r.em ? null : nn(r.source), constant: r.em || r.source ? null : nn(r.constant), defaultValue: nn(r.def), lookup: nn(r.lookup), converter: nn(r.conv), fieldHandler: nn(r.fh), required: r.required,
-  errorMap: nn(r.em), errorMapWhere: r.em ? (r.emWhere || []).map(emCond) : [], errorMapOutput: r.em ? nn(r.emOut) : null });
+  errorMap: nn(r.em), errorMapWhere: r.em ? (r.emWhere || []).map(emCond) : [], errorMapOutput: r.em ? nn(r.emOut) : null, errorMapFill: !!(r.em && r.emFill), errorMapIndex: r.em && int(r.emIndex) > 0 ? int(r.emIndex) : null });
 
 function fromApi(c) {
   const lookups = {};
@@ -535,7 +535,7 @@ function flowSql(f, lookupsUsed) {
     const c = st ? ['flow_id', 'step_id', 'phase', 'seq', 'target_type', 'target_path'] : ['flow_id', 'phase', 'seq', 'target_type', 'target_path'];
     const v = st ? ['f.id', 's.id', "'STEP_REQUEST'", i + 1, q(r.type), q(r.target)] : ['id', "'FLOW_RESPONSE'", i + 1, q(r.type), q(r.target)];
     if (resp) { c.push('response_name'); v.push(q(resp)); }
-    if (r.em) { opt('error_map_code', r.em, 0, c, v); opt('error_map_where', JSON.stringify((r.emWhere || []).map(emCond).map(w => (w.source ? { field: w.field, source: w.source } : { field: w.field, value: w.value }))), 0, c, v); opt('error_map_output', r.emOut, 0, c, v); }
+    if (r.em) { opt('error_map_code', r.em, 0, c, v); opt('error_map_where', JSON.stringify((r.emWhere || []).map(emCond).map(w => ({ field: w.field, ...(w.source ? { source: w.source } : { value: w.value }), ...(w.match ? { match: w.match } : {}) }))), 0, c, v); opt('error_map_output', r.emOut, 0, c, v); if (r.emFill) opt('error_map_fill', 'true', 1, c, v); if (int(r.emIndex) > 0) opt('error_map_index', int(r.emIndex), 1, c, v); }
     else { opt('source_path', r.source, 0, c, v); if (!r.source) opt('constant_value', r.constant, 0, c, v); }
     opt('default_value', r.def, 0, c, v); opt('lookup_code', r.lookup, 0, c, v); opt('converter', r.conv, 0, c, v); opt('field_handler', r.fh, 0, c, v); if (r.required) opt('required', 'true', 1, c, v);
     return 'INSERT INTO gw_mapping_rule (' + c.join(', ') + ')\nSELECT ' + v.join(', ') + (st ? '\nFROM gw_flow f JOIN gw_flow_step s ON s.flow_id = f.id\nWHERE f.code = ' + q(f.code) + ' AND s.name = ' + q(st.name) + ';' : '\nFROM gw_flow WHERE code = ' + q(f.code) + ';');
@@ -3190,7 +3190,9 @@ class App extends Component {
           <div style="display:flex;align-items:center;gap:6px">
             <span style=${`width:42px;font:600 10px ${MONO};color:#9A9CA2;letter-spacing:.04em`}>${j === 0 ? 'WHERE' : 'AND'}</span>
             ${sel(w.field, v => setW(j, 'field', v), 'A field of the map entries')}
-            <span style="color:#ADA99E">=</span>
+            <select value=${w.template ? 'template' : 'equals'} onChange=${e => setW(j, 'template', e.currentTarget.value === 'template')} title="equals: the entry's field must be the same text. matches template: the entry's field is a template, each {name} in it matches any text (e.g. a message with an application number in it)" style=${`height:24px;border:1px solid #E4E1D8;border-radius:5px;background:${w.template ? 'oklch(0.96 0.03 300)' : '#fff'};font:11px ${MONO};padding:0 4px`}>
+              <option value="equals">=</option><option value="template">matches template</option>
+            </select>
             <input class="inp" value=${w.input} onInput=${e => setW(j, 'input', e.currentTarget.value)} placeholder="$.steps.x.body.errorCode, or a constant (drop a field)" title="Starts with $. : read from the context (request, steps, error). Anything else: compared as text"
               style=${`flex:1;min-width:0;height:24px;border:1px ${/^\$\./.test(w.input.trim()) ? 'solid #E4E1D8' : 'dashed #C9C6BC'};border-radius:5px;padding:0 7px;font:11px ${MONO};background:${/^\$\./.test(w.input.trim()) ? 'oklch(0.97 0.02 255)' : '#fff'}`}/>
             <button class="ro-hide" onClick=${() => updRule(r.id, x => { x.emWhere = x.emWhere.filter((_, n) => n !== j); })} title="Remove this condition" style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:13px;padding:0 3px">×</button>
@@ -3198,8 +3200,11 @@ class App extends Component {
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           <span style=${`width:42px;font:600 10px ${MONO};color:#9A9CA2;letter-spacing:.04em`}>TAKE</span>
           ${sel(r.emOut, v => updRule(r.id, x => { x.emOut = v; }), 'The field of the matching entry that becomes the value')}
+          <label title="Which of several matching entries to take: 0 = the first (the best match: most fixed template text, then map order), 1 = the next, … No entry at that index → the default below. The call's log (Audit trail → Logs) shows how many matched." style=${`display:flex;align-items:center;gap:4px;font:11px ${MONO};color:#3E4047`}>index
+            <input class="inp" value=${r.emIndex || ''} placeholder="0" inputmode="numeric" onInput=${e => { const v = e.currentTarget.value.replace(/\D/g, ''); updRule(r.id, x => { x.emIndex = v; }); }} style=${`width:44px;height:24px;border:1px solid #E4E1D8;border-radius:5px;padding:0 6px;font:11px ${MONO};background:#fff`}/></label>
+          ${where.some(w => w.template) && html`<label title="Replace each {name} in the output with the text the template conditions captured under the same name" style=${`display:flex;align-items:center;gap:4px;font:11px ${MONO};color:#3E4047;cursor:pointer`}><input type="checkbox" checked=${!!r.emFill} onChange=${e => { const v = e.currentTarget.checked; updRule(r.id, x => { x.emFill = v; }); }} style="margin:0;accent-color:#17181C"/>fill {placeholders}</label>`}
           <button class="ro-hide" onClick=${() => updRule(r.id, x => { x.emWhere = [...(x.emWhere || []), { field: '', input: '' }]; })} style="border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-size:11px;color:#6A6D75">+ condition</button>
-          <span style="font-size:11px;color:#9A9CA2">First entry where every condition is equal (compared as text). No match → the default below.</span>
+          <span style="font-size:11px;color:#9A9CA2">${where.some(w => w.template) ? 'Entries where every condition holds, ordered by fixed template text (most first), then map order; index picks one. No entry → the default below.' : 'Entries where every condition is equal (compared as text), in map order; index picks one (0 = first). No entry → the default below.'} The lookup is logged: Audit trail → Logs.</span>
         </div>
       </div>`;
   }

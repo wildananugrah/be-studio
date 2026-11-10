@@ -236,9 +236,9 @@ class StudioIntegrationTest {
         String step = inquiry.get("steps").get(0).get("name").asString();
         ObjectNode rule = ((ArrayNode) inquiry.get("response")).addObject()
                 .put("type", "BODY").put("target", "$.statusLabel").put("defaultValue", "\"Unknown\"")
-                .put("errorMap", "ACCOUNT_STATES").put("errorMapOutput", "label");
+                .put("errorMap", "ACCOUNT_STATES").put("errorMapOutput", "label").put("errorMapFill", true).put("errorMapIndex", 0);
         rule.putArray("errorMapWhere").addObject().put("field", "code").put("source", "$.steps." + step + ".body.statusCd");
-        ((ArrayNode) rule.get("errorMapWhere")).addObject().put("field", "service").put("value", "core");
+        ((ArrayNode) rule.get("errorMapWhere")).addObject().put("field", "service").put("value", "core").put("match", "template");
 
         Response saved = call("PUT", "/studio/api/config", "studio-token", save(original.get("version").asString(), changed));
         assertThat(saved.status()).as(saved.text()).isEqualTo(200);
@@ -250,7 +250,10 @@ class StudioIntegrationTest {
         JsonNode back = StreamSupport.stream(flow(reread, "ACCOUNT_INQUIRY").get("response").spliterator(), false)
                 .filter(x -> "$.statusLabel".equals(x.path("target").asString())).findFirst().orElseThrow();
         assertThat(back.get("errorMap").asString()).isEqualTo("ACCOUNT_STATES");
-        assertThat(back.get("errorMapWhere").toString()).contains("\"source\":\"$.steps." + step + ".body.statusCd\"", "\"value\":\"core\"");
+        assertThat(back.get("errorMapWhere").toString()).contains("\"source\":\"$.steps." + step + ".body.statusCd\"", "\"value\":\"core\"",
+                "\"match\":\"template\"");
+        assertThat(back.get("errorMapFill").asBoolean()).isTrue();
+        assertThat(back.get("errorMapIndex").isNull()).as("index 0 is the default: stored as null").isTrue();
 
         // a rule naming a map that does not exist is rejected, nothing is written
         ObjectNode broken = reread.deepCopy();

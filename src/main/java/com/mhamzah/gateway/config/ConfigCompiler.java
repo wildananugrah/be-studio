@@ -88,6 +88,7 @@ public class ConfigCompiler {
     private final SqlDatasources sqlDatasources;
     private final FileStores fileStores;
     private Pattern serviceCodePattern = Pattern.compile(DEFAULT_SERVICE_CODE_PATTERN);
+    private boolean allowInsecureTls = true;
 
     /**
      * @param configTargets target systems from application.yml ({@code gateway.target-systems}); database rows win
@@ -111,6 +112,12 @@ public class ConfigCompiler {
         this.placeholders = placeholders;
         this.defaultFlowTimeout = defaultFlowTimeout;
         this.defaultStepTimeout = defaultStepTimeout;
+    }
+
+    /** False ({@code gateway.tls.allow-insecure}) makes {@code tls_mode INSECURE} a configuration error. */
+    public ConfigCompiler allowInsecureTls(boolean value) {
+        this.allowInsecureTls = value;
+        return this;
     }
 
     /** What {@code gw_flow.service_code} must match (the whole value), e.g. {@code [0-9A-Z]{2}}. */
@@ -403,6 +410,11 @@ public class ConfigCompiler {
                 errors.add(where + ": tls_mode '" + tls.mode() + "' must be VERIFY, INSECURE or CUSTOM");
                 return;
             }
+            if ("INSECURE".equals(tls.mode()) && !allowInsecureTls) {
+                errors.add(where + ": tls_mode INSECURE is not allowed here (gateway.tls.allow-insecure=false):"
+                        + " use VERIFY, or CUSTOM with the server's CA as trust store");
+                return;
+            }
             if (baseUrl == null || !baseUrl.regionMatches(true, 0, "https:", 0, 6)) {
                 return;
             }
@@ -524,7 +536,7 @@ public class ConfigCompiler {
                 return null;
             }
             if (json == null || !json.isArray() || json.isEmpty()) {
-                errors.add(where + ": error_map_where needs at least one condition [{\"field\": ..., \"source\" or \"value\": ...}]");
+                errors.add(where + ": error_map_where needs at least one condition [{\"field\": ..., \"source\" or \"value\": ..., \"match\": \"equals\" | \"template\"}]");
                 return null;
             }
             for (tools.jackson.databind.JsonNode c : json) {
@@ -548,9 +560,19 @@ public class ConfigCompiler {
                         errors.add(where + ": condition on '" + field + "' cannot read a [*] path");
                     }
                 }
-                conditions.add(new ErrorMap.Condition(field, source, hasValue ? c.get("value") : null));
+                String match = c.path("match").asString("equals");
+                if (!match.equals("equals") && !match.equals("template")) {
+                    errors.add(where + ": condition on '" + field + "': match '" + match + "' must be equals or template");
+                    continue;
+                }
+                conditions.add(new ErrorMap.Condition(field, source, hasValue ? c.get("value") : null, match.equals("template")));
             }
-            return map == null ? null : new ErrorMap.Lookup(map, conditions, r.errorMapOutput());
+            int index = r.errorMapIndex() == null ? 0 : r.errorMapIndex();
+            if (index < 0) {
+                errors.add(where + ": error_map_index must be 0 or more (0 = the best match)");
+                return null;
+            }
+            return map == null ? null : new ErrorMap.Lookup(map, conditions, r.errorMapOutput(), r.errorMapFill(), index);
         }
 
         private void checkFlowCodes() {

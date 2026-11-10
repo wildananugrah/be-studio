@@ -341,7 +341,27 @@ public record ConfigRows(
             String responseName,
             String errorMapCode,
             String errorMapWhere,
-            String errorMapOutput) {
+            String errorMapOutput,
+            boolean errorMapFill,
+            Integer errorMapIndex) {
+
+        public RuleRow(long id, long flowId, Long stepId, String phase, int seq, String targetType, String targetPath,
+                String sourcePath, String constantValue, String defaultValue, String converter, String lookupCode,
+                String fieldHandler, boolean required, String responseName, String errorMapCode, String errorMapWhere,
+                String errorMapOutput, boolean errorMapFill) {
+            this(id, flowId, stepId, phase, seq, targetType, targetPath, sourcePath, constantValue, defaultValue,
+                    converter, lookupCode, fieldHandler, required, responseName, errorMapCode, errorMapWhere,
+                    errorMapOutput, errorMapFill, null);
+        }
+
+        public RuleRow(long id, long flowId, Long stepId, String phase, int seq, String targetType, String targetPath,
+                String sourcePath, String constantValue, String defaultValue, String converter, String lookupCode,
+                String fieldHandler, boolean required, String responseName, String errorMapCode, String errorMapWhere,
+                String errorMapOutput) {
+            this(id, flowId, stepId, phase, seq, targetType, targetPath, sourcePath, constantValue, defaultValue,
+                    converter, lookupCode, fieldHandler, required, responseName, errorMapCode, errorMapWhere,
+                    errorMapOutput, false);
+        }
 
         public RuleRow(long id, long flowId, Long stepId, String phase, int seq, String targetType, String targetPath,
                 String sourcePath, String constantValue, String defaultValue, String converter, String lookupCode,
@@ -355,8 +375,19 @@ public record ConfigRows(
          * {@code [{"field", "source" | "value"}]}), its field {@code output}.
          */
         public RuleRow withErrorMap(String code, String where, String output) {
+            return withErrorMap(code, where, output, false);
+        }
+
+        /** As above; {@code fill}: placeholders in the output are filled with what template conditions captured. */
+        public RuleRow withErrorMap(String code, String where, String output, boolean fill) {
+            return withErrorMap(code, where, output, fill, null);
+        }
+
+        /** As above; {@code index}: which of several matching entries to take (null = 0, the best match). */
+        public RuleRow withErrorMap(String code, String where, String output, boolean fill, Integer index) {
             return new RuleRow(id, flowId, stepId, phase, seq, targetType, targetPath, sourcePath, constantValue,
-                    defaultValue, converter, lookupCode, fieldHandler, required, responseName, code, where, output);
+                    defaultValue, converter, lookupCode, fieldHandler, required, responseName, code, where, output, fill,
+                    index);
         }
 
         /** A rule of a step or of the default response ({@code response_name} null). */

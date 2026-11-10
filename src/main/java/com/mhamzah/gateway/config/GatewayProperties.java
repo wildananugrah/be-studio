@@ -22,7 +22,8 @@ public record GatewayProperties(
         @DefaultValue Sql sql,
         @DefaultValue Files files,
         Map<String, FileStorage> storages,
-        @DefaultValue Snap snap) {
+        @DefaultValue Snap snap,
+        @DefaultValue TlsPolicy tls) {
 
     public GatewayProperties {
         targetSystems = targetSystems == null ? Map.of() : Map.copyOf(targetSystems);
@@ -41,6 +42,13 @@ public record GatewayProperties(
      * response is sent with when it would be 1xx, 204, 205 or 304, which cannot carry a body; its {@code responseCode}
      * keeps the original status (e.g. {@code 204G000}).
      */
+    /**
+     * What target systems may do with TLS. {@code allowInsecure} false (set it so in production) rejects
+     * {@code tls_mode INSECURE}, which trusts any certificate and host name: the configuration does not load, and a
+     * Studio save that uses it is refused.
+     */
+    public record TlsPolicy(@DefaultValue("true") boolean allowInsecure) {}
+
     public record Snap(@DefaultValue("[0-9]{2}([0-9]{2})?") String serviceCodePattern,
             @DefaultValue("200") int noBodyStatus) {}
 

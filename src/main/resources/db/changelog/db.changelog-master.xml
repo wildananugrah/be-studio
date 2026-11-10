@@ -63,4 +63,5 @@
     <include file="changes/019-flow-service-code-not-null.xml" relativeToChangelogFile="true"/>
     <include file="changes/021-flow-service-code-length.xml" relativeToChangelogFile="true"/>
     <include file="changes/022-error-map.xml" relativeToChangelogFile="true"/>
+    <include file="changes/023-error-map-template.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

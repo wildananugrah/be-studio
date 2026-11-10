@@ -2,35 +2,28 @@ package com.mhamzah.gateway.mapping;
 
 import com.mhamzah.gateway.extension.ExecutionContext;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.JsonNodeFactory;
 
 /**
  * An error map from {@code gw_error_map}: a list of JSON objects (e.g. one per error code, with its HTTP status,
- * service and messages). A mapping rule reads one field of the first entry that matches its conditions.
+ * service and messages). A mapping rule reads one field of the entry that matches its conditions.
  */
 public record ErrorMap(String code, List<JsonNode> entries) {
 
+    /** A placeholder in a template text: anything in braces, e.g. {@code {applicationNo}} or {@code {master.currency()}}. */
+    static final Pattern PLACEHOLDER = Pattern.compile("\\{[^{}]*}");
+    /** Longer values are not matched against templates (a message, not a document). */
+    static final int MAX_TEMPLATE_INPUT = 4000;
+
     public ErrorMap {
         entries = List.copyOf(entries);
-    }
-
-    /**
-     * The first entry whose fields equal {@code values} (field name to value, compared as text, so {@code 400} matches
-     * {@code "400"}); null when none does.
-     */
-    public JsonNode find(List<String> fields, List<JsonNode> values) {
-        for (JsonNode entry : entries) {
-            boolean all = true;
-            for (int i = 0; i < fields.size() && all; i++) {
-                String expected = JsonValues.keyOf(values.get(i));
-                all = expected != null && expected.equals(JsonValues.keyOf(entry.get(fields.get(i))));
-            }
-            if (all) {
-                return entry;
-            }
-        }
-        return null;
     }
 
     /** The field names used across the entries, in the order they first appear (for Studio's pickers). */
@@ -44,30 +37,176 @@ public record ErrorMap(String code, List<JsonNode> entries) {
         return out;
     }
 
-    /** One condition of a rule: the entry's {@code field} equals the value at {@code source}, or {@code value}. */
-    public record Condition(String field, JsonPath source, JsonNode value) {}
+    /**
+     * One condition of a rule: the entry's {@code field} equals the value at {@code source}, or {@code value}. With
+     * {@code template}, the entry's field is a template instead: its text must match literally, and each
+     * {@code {name}} in it matches any text (captured under that name).
+     */
+    public record Condition(String field, JsonPath source, JsonNode value, boolean template) {
 
-    /** What a rule takes from a map: field {@code output} of the first entry matching every condition. */
-    public record Lookup(ErrorMap map, List<Condition> where, String output) {
+        public Condition(String field, JsonPath source, JsonNode value) {
+            this(field, source, value, false);
+        }
+    }
+
+    /**
+     * An entry's text compiled as a template: {@code names} are its placeholders in order (group i + 1 of
+     * {@code pattern}); {@code literal} is the length of its fixed text, used to prefer the most specific match.
+     */
+    record Template(Pattern pattern, List<String> names, int literal) {
+
+        static Template of(String text) {
+            StringBuilder regex = new StringBuilder();
+            List<String> names = new ArrayList<>();
+            int literal = 0;
+            int last = 0;
+            Matcher m = PLACEHOLDER.matcher(text);
+            while (m.find()) {
+                String fixed = text.substring(last, m.start());
+                regex.append(Pattern.quote(fixed)).append("(.*?)");
+                literal += fixed.length();
+                names.add(m.group().substring(1, m.group().length() - 1));
+                last = m.end();
+            }
+            String rest = text.substring(last);
+            regex.append(Pattern.quote(rest));
+            literal += rest.length();
+            return new Template(Pattern.compile(regex.toString(), Pattern.DOTALL), names, literal);
+        }
+
+        /** Placeholder name to the captured text, or null when {@code value} does not match. */
+        Map<String, String> match(String value) {
+            Matcher m = pattern.matcher(value);
+            if (!m.matches()) {
+                return null;
+            }
+            Map<String, String> out = new LinkedHashMap<>();
+            for (int i = 0; i < names.size(); i++) {
+                out.putIfAbsent(names.get(i), m.group(i + 1));
+            }
+            return out;
+        }
+    }
+
+    /**
+     * What one lookup found, for the value and for the debug line in the log (and so in Studio's audit trail):
+     * {@code values} the condition values read, {@code matches} how many entries matched, {@code entry} the position
+     * in the map of the one taken (null when none) and {@code value} its output.
+     */
+    public record Result(JsonNode value, List<String> values, int matches, Integer entry) {}
+
+    /**
+     * What a rule takes from a map: field {@code output} of an entry matching every condition. The matching entries
+     * are ordered by their fixed template text, most first (so {@code "Application {id} not found"} comes before
+     * {@code "{message}"}), then by their order in the map; {@code index} picks one of them (0 = the first, the best
+     * match). With {@code fill}, the placeholders in a text output are replaced by what the templates captured under
+     * the same names.
+     */
+    public record Lookup(ErrorMap map, List<Condition> where, String output, boolean fill, int index,
+            Map<String, Template[]> templates) {
+
+        public Lookup(ErrorMap map, List<Condition> where, String output) {
+            this(map, where, output, false);
+        }
+
+        public Lookup(ErrorMap map, List<Condition> where, String output, boolean fill) {
+            this(map, where, output, fill, 0);
+        }
+
+        public Lookup(ErrorMap map, List<Condition> where, String output, boolean fill, int index) {
+            this(map, where, output, fill, index, compile(map, where));
+        }
 
         public Lookup {
             where = List.copyOf(where);
         }
 
-        /** The output field of the matching entry; null when no entry matches (the rule's default applies). */
+        /** Every entry's template text of each template field, compiled once (null where the entry has no text). */
+        private static Map<String, Template[]> compile(ErrorMap map, List<Condition> where) {
+            Map<String, Template[]> out = new HashMap<>();
+            for (Condition c : where) {
+                if (c.template() && !out.containsKey(c.field())) {
+                    Template[] t = new Template[map.entries().size()];
+                    for (int i = 0; i < t.length; i++) {
+                        String text = JsonValues.keyOf(map.entries().get(i).get(c.field()));
+                        t[i] = text == null ? null : Template.of(text.strip());
+                    }
+                    out.put(c.field(), t);
+                }
+            }
+            return out;
+        }
+
+        /** The output field of the picked entry; null when there is none (the rule's default applies). */
         public JsonNode resolve(ExecutionContext ctx) {
-            List<String> fields = new ArrayList<>();
-            List<JsonNode> values = new ArrayList<>();
+            return evaluate(ctx).value();
+        }
+
+        /** The lookup with what it found (see {@link Result}). */
+        public Result evaluate(ExecutionContext ctx) {
+            List<String> values = new ArrayList<>();
             for (Condition c : where) {
                 JsonNode v = c.source() != null ? ctx.read(c.source()) : c.value();
                 if (JsonValues.isAbsent(v)) {
-                    return null;
+                    values.add(null);
+                    return new Result(null, values, 0, null); // a missing value matches nothing
                 }
-                fields.add(c.field());
-                values.add(v);
+                values.add(JsonValues.keyOf(v));
             }
-            JsonNode entry = map.find(fields, values);
-            return entry == null ? null : entry.get(output);
+            record Match(int entry, int score, Map<String, String> captured) {}
+            List<Match> matches = new ArrayList<>();
+            List<JsonNode> entries = map.entries();
+            for (int i = 0; i < entries.size(); i++) {
+                JsonNode entry = entries.get(i);
+                Map<String, String> captured = new HashMap<>();
+                int score = 0;
+                boolean all = true;
+                for (int j = 0; j < where.size() && all; j++) {
+                    Condition c = where.get(j);
+                    String value = values.get(j);
+                    if (c.template()) {
+                        Template t = templates.get(c.field())[i];
+                        String input = value.strip();
+                        Map<String, String> m = t == null || input.length() > MAX_TEMPLATE_INPUT ? null : t.match(input);
+                        all = m != null;
+                        if (all) {
+                            m.forEach(captured::putIfAbsent);
+                            score += t.literal();
+                        }
+                    } else {
+                        all = value.equals(JsonValues.keyOf(entry.get(c.field())));
+                    }
+                }
+                if (all) {
+                    matches.add(new Match(i, score, captured));
+                }
+            }
+            // most fixed template text first; List.sort is stable, so equal scores keep the map's order
+            matches.sort(java.util.Comparator.comparingInt(Match::score).reversed());
+            if (index >= matches.size()) {
+                return new Result(null, values, matches.size(), null);
+            }
+            Match picked = matches.get(index);
+            JsonNode out = entries.get(picked.entry()).get(output);
+            if (fill && out != null && out.isString()) {
+                out = JsonNodeFactory.instance.stringNode(fill(out.asString(), picked.captured()));
+            }
+            return new Result(out, values, matches.size(), picked.entry());
+        }
+
+        /** {@code text} with each {@code {name}} replaced by the value captured under that name (others stay). */
+        static String fill(String text, Map<String, String> captured) {
+            if (captured.isEmpty()) {
+                return text;
+            }
+            Matcher m = PLACEHOLDER.matcher(text);
+            StringBuilder sb = new StringBuilder();
+            while (m.find()) {
+                String value = captured.get(m.group().substring(1, m.group().length() - 1));
+                m.appendReplacement(sb, Matcher.quoteReplacement(value != null ? value : m.group()));
+            }
+            m.appendTail(sb);
+            return sb.toString();
         }
 
         /** The context paths the conditions read. */

@@ -42,6 +42,8 @@ class TargetSystemCompileTest {
         return sb.toString();
     };
 
+    private boolean allowInsecure = true;
+
     private FlowRegistry compile() {
         ConfigCompiler compiler = new ConfigCompiler(
                 new ConfigCompiler.HandlerLookup() {
@@ -51,7 +53,8 @@ class TargetSystemCompileTest {
                         return type.isInstance(bean) ? type.cast(bean) : null;
                     }
                 },
-                configTargets, placeholders, Duration.ofSeconds(30), Duration.ofSeconds(10));
+                configTargets, placeholders, Duration.ofSeconds(30), Duration.ofSeconds(10))
+                .allowInsecureTls(allowInsecure);
         return compiler.compile(rows.build());
     }
 
@@ -109,6 +112,19 @@ class TargetSystemCompileTest {
                 null, null));
         assertInvalid("target system 'CORE': tls: tls_mode CUSTOM needs a trust store",
                 "target system 'CARD': tls: Could not resolve placeholder 'CARD_CA'");
+    }
+
+    @Test
+    void insecureTlsIsRefusedWhenThePolicyForbidsIt() {
+        rows.target(new TargetRow(1, "CORE", "https://core", null, null, null, true, "INSECURE", null, null, null, null));
+        configTargets.put("CARD", new GatewayProperties.TargetSystem("https://card", 1000, 2000, Map.of(), null,
+                new GatewayProperties.Tls("INSECURE", null, null, null, null)));
+        flowCalling("CORE");
+        compile(); // allowed by default (dev / test)
+
+        allowInsecure = false;
+        assertInvalid("target system 'CORE': tls_mode INSECURE is not allowed here (gateway.tls.allow-insecure=false)",
+                "'CARD' (application config): tls_mode INSECURE is not allowed here");
     }
 
     @Test

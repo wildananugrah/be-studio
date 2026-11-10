@@ -16,6 +16,10 @@ import tools.jackson.databind.node.JsonNodeFactory;
  */
 public class MappingEngine {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MappingEngine.class);
+    /** Longer values are cut in the error map debug line. */
+    private static final int LOG_VALUE_MAX = 200;
+
     public MappedMessage apply(List<CompiledRule> rules, ExecutionContext ctx) {
         JsonNode[] body = {JsonNodeFactory.instance.objectNode()};
         Map<String, String> headers = new LinkedHashMap<>();
@@ -30,7 +34,7 @@ public class MappingEngine {
             } else if (rule.source() != null && rule.source().wildcardCount() > 0) {
                 applyWildcard(rule, ctx, body);
             } else {
-                JsonNode value = rule.errorMap() != null ? rule.errorMap().resolve(ctx)
+                JsonNode value = rule.errorMap() != null ? errorMap(rule, ctx)
                         : rule.constant() != null ? rule.constant() : rule.source() != null ? ctx.read(rule.source()) : null;
                 value = process(rule, value, ctx);
                 if (value != null) {
@@ -74,6 +78,39 @@ public class MappingEngine {
         if (!positional) {
             writeBody(rule, rule.targetPath(), collected, body);
         }
+    }
+
+    /**
+     * An error map rule's value, logged so the call's log (and Studio's audit trail) shows how it was found: the
+     * condition values, how many entries matched, which one was taken and what it gave.
+     */
+    private static JsonNode errorMap(CompiledRule rule, ExecutionContext ctx) {
+        ErrorMap.Lookup lookup = rule.errorMap();
+        ErrorMap.Result r = lookup.evaluate(ctx);
+        StringBuilder where = new StringBuilder();
+        for (int i = 0; i < lookup.where().size(); i++) {
+            ErrorMap.Condition c = lookup.where().get(i);
+            where.append(i == 0 ? "" : ", ").append(c.field()).append(c.template() ? " ~ " : " = ")
+                    .append(i < r.values().size() ? quote(r.values().get(i)) : "(not read)");
+        }
+        if (r.entry() == null) {
+            log.info("error map {} for {}: where {} -> {} match(es), {} -> no value{}", lookup.map().code(), rule.describe(),
+                    where, r.matches(), r.matches() == 0 ? "none to take" : "no match at index " + lookup.index(),
+                    rule.defaultValue() != null ? ", default " + cut(rule.defaultValue().toString()) : "");
+        } else {
+            log.info("error map {} for {}: where {} -> {} match(es), took index {} (entry {}): {} = {}", lookup.map().code(),
+                    rule.describe(), where, r.matches(), lookup.index(), r.entry(), lookup.output(),
+                    r.value() == null ? "(no such field)" : cut(r.value().toString()));
+        }
+        return r.value();
+    }
+
+    private static String quote(String value) {
+        return value == null ? "(missing)" : "'" + cut(value) + "'";
+    }
+
+    private static String cut(String value) {
+        return value.length() <= LOG_VALUE_MAX ? value : value.substring(0, LOG_VALUE_MAX) + "…";
     }
 
     /** Default, lookup, converter, handler and required check. Returns null when the value is missing. */

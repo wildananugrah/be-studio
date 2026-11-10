@@ -166,24 +166,28 @@ public class AuditPartitions {
 
     // ---------- PostgreSQL ----------
 
-    private String schemaOrCurrent() {
-        return db.hasSchema() ? "'" + db.schema().toLowerCase(Locale.ROOT) + "'" : "current_schema()";
+    /**
+     * The configured schema as a bind parameter (null: the session's current schema), for
+     * {@code n.nspname = COALESCE(CAST(? AS name), current_schema())}: no configured value is ever part of the SQL text.
+     */
+    private String pgSchema() {
+        return db.hasSchema() ? db.schema().toLowerCase(Locale.ROOT) : null;
     }
 
     private boolean pgPartitioned(String table) {
         return jdbc.sql("SELECT COUNT(*) FROM pg_partitioned_table p JOIN pg_class c ON c.oid = p.partrelid"
-                        + " JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relname = ? AND n.nspname = "
-                        + schemaOrCurrent())
-                .param(table.toLowerCase(Locale.ROOT)).query(Long.class).single() > 0;
+                        + " JOIN pg_namespace n ON n.oid = c.relnamespace"
+                        + " WHERE c.relname = ? AND n.nspname = COALESCE(CAST(? AS name), current_schema())")
+                .params(table.toLowerCase(Locale.ROOT), pgSchema()).query(Long.class).single() > 0;
     }
 
     List<Range> pgRanges(String table) {
         List<Range> out = new ArrayList<>();
         jdbc.sql("SELECT c.relname, pg_get_expr(c.relpartbound, c.oid) FROM pg_inherits i"
                         + " JOIN pg_class c ON c.oid = i.inhrelid JOIN pg_class p ON p.oid = i.inhparent"
-                        + " JOIN pg_namespace n ON n.oid = p.relnamespace WHERE p.relname = ? AND n.nspname = "
-                        + schemaOrCurrent())
-                .param(table.toLowerCase(Locale.ROOT))
+                        + " JOIN pg_namespace n ON n.oid = p.relnamespace"
+                        + " WHERE p.relname = ? AND n.nspname = COALESCE(CAST(? AS name), current_schema())")
+                .params(table.toLowerCase(Locale.ROOT), pgSchema())
                 .query((rs, i) -> {
                     Matcher m = PG_BOUND.matcher(String.valueOf(rs.getString(2)));
                     if (m.find()) {
@@ -216,15 +220,24 @@ public class AuditPartitions {
 
     // ---------- Oracle ----------
 
-    private String oracleDictionary(String view) {
-        return db.hasSchema() ? "all_" + view + " WHERE owner = '" + db.schema().toUpperCase(Locale.ROOT) + "' AND"
-                : "user_" + view + " WHERE";
+    /**
+     * A dictionary view of the table's owner and the query's parameters: {@code all_<view>} filtered on the configured
+     * schema (a bind parameter, never part of the SQL text), else {@code user_<view>}.
+     */
+    private record Dictionary(String from, List<Object> params) {}
+
+    private Dictionary oracleDictionary(String view, String ownerColumn, String table) {
+        String name = table.toUpperCase(Locale.ROOT);
+        return db.hasSchema()
+                ? new Dictionary("all_" + view + " WHERE " + ownerColumn + " = ? AND", List.of(db.schema().toUpperCase(Locale.ROOT), name))
+                : new Dictionary("user_" + view + " WHERE", List.of(name));
     }
 
     /** The table's INTERVAL expression; null when it is not partitioned. */
     private String oracleInterval(String table) {
-        return jdbc.sql("SELECT interval FROM " + oracleDictionary("part_tables") + " table_name = ?")
-                .param(table.toUpperCase(Locale.ROOT)).query(String.class).optional().orElse(null);
+        Dictionary d = oracleDictionary("part_tables", "owner", table);
+        return jdbc.sql("SELECT interval FROM " + d.from() + " table_name = ?")
+                .params(d.params()).query(String.class).optional().orElse(null);
     }
 
     private void oracleSetInterval(String table) {
@@ -243,12 +256,10 @@ public class AuditPartitions {
 
     /** Interval partitions only; the first (range) partition can never be dropped. HIGH_VALUE is the upper bound. */
     List<Range> oracleRanges(String table) {
-        String from = db.hasSchema()
-                ? "all_tab_partitions WHERE table_owner = '" + db.schema().toUpperCase(Locale.ROOT) + "' AND"
-                : "user_tab_partitions WHERE";
+        Dictionary d = oracleDictionary("tab_partitions", "table_owner", table);
         List<Range> raw = new ArrayList<>();
-        jdbc.sql("SELECT partition_name, interval, high_value FROM " + from + " table_name = ? ORDER BY partition_position")
-                .param(table.toUpperCase(Locale.ROOT))
+        jdbc.sql("SELECT partition_name, interval, high_value FROM " + d.from() + " table_name = ? ORDER BY partition_position")
+                .params(d.params())
                 .query((rs, i) -> {
                     String name = rs.getString(1);
                     String interval = rs.getString(2);

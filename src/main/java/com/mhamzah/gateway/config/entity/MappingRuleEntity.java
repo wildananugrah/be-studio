@@ -30,12 +30,14 @@ public class MappingRuleEntity {
     /** CLOB / text: the JSON conditions of an error map rule. */
     private String errorMapWhere;
     private String errorMapOutput;
+    private Boolean errorMapFill;
+    private Integer errorMapIndex;
 
     protected MappingRuleEntity() {}
 
     public RuleRow toRow() {
         return new RuleRow(id, flowId, stepId, phase, seq, targetType, targetPath, sourcePath, constantValue,
                 defaultValue, converter, lookupCode, fieldHandler, required, responseName, errorMapCode, errorMapWhere,
-                errorMapOutput);
+                errorMapOutput, Boolean.TRUE.equals(errorMapFill), errorMapIndex);
     }
 }

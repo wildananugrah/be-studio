@@ -58,8 +58,9 @@ class ApplicationExportTest {
     @Test
     void errorMapsUsedByRulesAreExportedAsSharedItems() {
         StudioConfig.Rule rule = new StudioConfig.Rule("BODY", "$.message", null, null, null, null, null, null, false,
-                "BG_ERRORS", List.of(new StudioConfig.Where("errorCode", "$.error.downstream.body.errorCode", null)),
-                "generalMessage");
+                "BG_ERRORS", List.of(new StudioConfig.Where("errorCode", "$.error.downstream.body.errorCode", null),
+                        new StudioConfig.Where("message", "$.error.downstream.body.message", null, "template")),
+                "messageEn", true, 2);
         Flow flow = new Flow("PAYMENT", "PAYMENT", "POST", "/payment", null, null, null, null, null, 200, null, "INHERIT",
                 true, List.of(), List.of(rule), "PAY");
         StudioConfig config = new StudioConfig(null, List.of(flow), List.of(), List.of(), List.of(), List.of(),
@@ -72,8 +73,9 @@ class ApplicationExportTest {
         assertThat(bundle.errorMaps()).extracting(StudioConfig.ErrorMap::code).containsExactly("BG_ERRORS");
         assertThat(ApplicationExport.json(bundle, "test")).contains("\"errorMaps\"", "BG_ERRORS").doesNotContain("UNUSED");
         String sql = ApplicationExport.sql(bundle, ApplicationExport.Dialect.POSTGRES, TABLES, "test");
-        assertThat(sql).contains("INSERT INTO gw_error_map", "error_map_code", "'generalMessage'",
-                "[{\"field\":\"errorCode\",\"source\":\"$.error.downstream.body.errorCode\"}]");
+        assertThat(sql).contains("INSERT INTO gw_error_map", "error_map_code", "'messageEn'", "error_map_fill", "error_map_index",
+                "[{\"field\":\"errorCode\",\"source\":\"$.error.downstream.body.errorCode\"},"
+                        + "{\"field\":\"message\",\"source\":\"$.error.downstream.body.message\",\"match\":\"template\"}]");
     }
 
     private static final GatewayProperties.Tables TABLES = new GatewayProperties.Tables("gw_flow", "gw_flow_step",

@@ -435,8 +435,10 @@ final class ApplicationExport {
         if (r.errorMapCode() == null) {
             return cols;
         }
-        return optional(optional(optional(cols, "error_map_code", r.errorMapCode()), "error_map_where", r.errorMapWhere()),
+        List<Col> out = optional(optional(optional(cols, "error_map_code", r.errorMapCode()), "error_map_where", r.errorMapWhere()),
                 "error_map_output", r.errorMapOutput());
+        out = r.errorMapFill() ? optional(out, "error_map_fill", true) : out;
+        return optional(out, "error_map_index", r.errorMapIndex());
     }
 
     /** The columns plus {@code name} when it is set: an export without overrides still runs on a schema without it. */
