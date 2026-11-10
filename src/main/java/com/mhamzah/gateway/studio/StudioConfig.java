@@ -12,7 +12,12 @@ import java.util.List;
  */
 public record StudioConfig(
         String version, List<Flow> flows, List<Target> targets, List<Lookup> lookups, List<Schema> schemas,
-        List<Storage> storages, List<Application> applications) {
+        List<Storage> storages, List<Application> applications, List<ErrorMap> errorMaps) {
+
+    public StudioConfig(String version, List<Flow> flows, List<Target> targets, List<Lookup> lookups,
+            List<Schema> schemas, List<Storage> storages, List<Application> applications) {
+        this(version, flows, targets, lookups, schemas, storages, applications, List.of());
+    }
 
     public StudioConfig(String version, List<Flow> flows, List<Target> targets, List<Lookup> lookups,
             List<Schema> schemas, List<Storage> storages) {
@@ -27,6 +32,7 @@ public record StudioConfig(
     public StudioConfig {
         storages = storages == null ? List.of() : List.copyOf(storages);
         applications = applications == null ? List.of() : List.copyOf(applications);
+        errorMaps = errorMaps == null ? List.of() : List.copyOf(errorMaps);
         flows = flows == null ? List.of() : List.copyOf(flows);
         targets = targets == null ? List.of() : List.copyOf(targets);
         lookups = lookups == null ? List.of() : List.copyOf(lookups);
@@ -34,7 +40,7 @@ public record StudioConfig(
     }
 
     public StudioConfig withVersion(String value) {
-        return new StudioConfig(value, flows, targets, lookups, schemas, storages, applications);
+        return new StudioConfig(value, flows, targets, lookups, schemas, storages, applications, errorMaps);
     }
 
     /**
@@ -239,12 +245,27 @@ public record StudioConfig(
             String lookup,
             String converter,
             String fieldHandler,
-            Boolean required) {
+            Boolean required,
+            String errorMap,
+            List<Where> errorMapWhere,
+            String errorMapOutput) {
 
         public Rule {
             required = required != null && required;
+            errorMapWhere = errorMapWhere == null ? List.of() : List.copyOf(errorMapWhere);
+        }
+
+        public Rule(String type, String target, String source, String constant, String defaultValue, String lookup,
+                String converter, String fieldHandler, Boolean required) {
+            this(type, target, source, constant, defaultValue, lookup, converter, fieldHandler, required, null, null, null);
         }
     }
+
+    /** A condition of an error map rule: the entry's {@code field} equals the value at {@code source}, or {@code value}. */
+    public record Where(String field, String source, String value) {}
+
+    /** {@code gw_error_map}: {@code text} is a JSON array of objects that error map rules pick from. */
+    public record ErrorMap(String code, String description, String text) {}
 
     /** {@code gw_target_system} plus its {@code gw_target_system_header} rows. */
     public record Target(

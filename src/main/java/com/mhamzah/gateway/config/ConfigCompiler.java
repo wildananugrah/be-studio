@@ -20,6 +20,7 @@ import com.mhamzah.gateway.mapping.CompiledRule;
 import com.mhamzah.gateway.mapping.Converters;
 import com.mhamzah.gateway.mapping.JsonPath;
 import com.mhamzah.gateway.mapping.JsonValues;
+import com.mhamzah.gateway.mapping.ErrorMap;
 import com.mhamzah.gateway.mapping.LookupTable;
 import com.mhamzah.gateway.mapping.TargetType;
 import com.mhamzah.gateway.schema.CompiledSchema;
@@ -128,6 +129,7 @@ public class ConfigCompiler {
         private final List<String> errors = new ArrayList<>();
         private Map<String, CompiledSchema> schemas;
         private Map<String, LookupTable> lookups;
+        private Map<String, ErrorMap> errorMaps;
         private Map<String, ResolvedTarget> targets;
         private Map<String, FileStore> storages;
         /** Body codec of each target system that sets one (a missing bean is reported once, for the target). */
@@ -140,6 +142,7 @@ public class ConfigCompiler {
         FlowRegistry compile() {
             schemas = compileSchemas(rows.schemas());
             lookups = buildLookups(rows.lookups());
+            errorMaps = buildErrorMaps(rows.errorMaps());
             targets = resolveTargets();
             storages = resolveStorages();
             // TRANSFORM and CONDITION mark steps that call nothing: nothing else may take those names
@@ -462,6 +465,94 @@ public class ConfigCompiler {
             return out;
         }
 
+        /** Each map's entries must be a JSON array of objects; codes are unique. */
+        private Map<String, ErrorMap> buildErrorMaps(List<ConfigRows.ErrorMapRow> rows) {
+            Map<String, ErrorMap> out = new HashMap<>();
+            for (ConfigRows.ErrorMapRow m : rows) {
+                String where = "error map '" + m.code() + "'";
+                if (m.code() == null || m.code().isBlank()) {
+                    errors.add("error map id " + m.id() + ": code is required");
+                    continue;
+                }
+                if (out.containsKey(m.code())) {
+                    errors.add(where + " is defined twice");
+                    continue;
+                }
+                tools.jackson.databind.JsonNode json;
+                try {
+                    json = JsonValues.MAPPER.readTree(m.entries() == null ? "" : m.entries());
+                } catch (RuntimeException e) {
+                    errors.add(where + ": entries are not valid JSON");
+                    continue;
+                }
+                if (json == null || !json.isArray()) {
+                    errors.add(where + ": entries must be a JSON array of objects");
+                    continue;
+                }
+                List<tools.jackson.databind.JsonNode> entries = new ArrayList<>();
+                int i = 0;
+                for (tools.jackson.databind.JsonNode e : json) {
+                    if (!e.isObject()) {
+                        errors.add(where + ": entry " + i + " is not a JSON object");
+                    }
+                    entries.add(e);
+                    i++;
+                }
+                out.put(m.code(), new ErrorMap(m.code(), entries));
+            }
+            return out;
+        }
+
+        /**
+         * The error map part of a rule: an existing map, at least one condition ({@code field} plus exactly one of
+         * {@code source} / {@code value}) and an output field. Null (with errors) when it is invalid.
+         */
+        private ErrorMap.Lookup errorMapLookup(RuleRow r, String where) {
+            ErrorMap map = errorMaps.get(r.errorMapCode());
+            if (map == null) {
+                errors.add(where + ": error_map_code '" + r.errorMapCode() + "' is not an error map");
+            }
+            if (r.errorMapOutput() == null || r.errorMapOutput().isBlank()) {
+                errors.add(where + ": error_map_output (the field to take from the matching entry) is required");
+            }
+            List<ErrorMap.Condition> conditions = new ArrayList<>();
+            tools.jackson.databind.JsonNode json = null;
+            try {
+                json = r.errorMapWhere() == null || r.errorMapWhere().isBlank() ? null : JsonValues.MAPPER.readTree(r.errorMapWhere());
+            } catch (RuntimeException e) {
+                errors.add(where + ": error_map_where is not valid JSON");
+                return null;
+            }
+            if (json == null || !json.isArray() || json.isEmpty()) {
+                errors.add(where + ": error_map_where needs at least one condition [{\"field\": ..., \"source\" or \"value\": ...}]");
+                return null;
+            }
+            for (tools.jackson.databind.JsonNode c : json) {
+                String field = c.path("field").asString("");
+                boolean hasSource = c.hasNonNull("source") && !c.get("source").asString("").isBlank();
+                boolean hasValue = c.has("value") && !c.get("value").isNull();
+                if (field.isBlank()) {
+                    errors.add(where + ": every error_map_where condition needs a field");
+                    continue;
+                }
+                if (hasSource == hasValue) {
+                    errors.add(where + ": condition on '" + field + "' must set exactly one of source / value");
+                    continue;
+                }
+                JsonPath source = null;
+                if (hasSource) {
+                    source = path(c.get("source").asString(), where, "error_map_where '" + field + "'");
+                    if (source != null && !CONTEXT_ROOTS.contains(source.firstField())) {
+                        errors.add(where + ": condition on '" + field + "' must read $.request, $.steps, $.correlationId or $.error");
+                    } else if (source != null && source.wildcardCount() > 0) {
+                        errors.add(where + ": condition on '" + field + "' cannot read a [*] path");
+                    }
+                }
+                conditions.add(new ErrorMap.Condition(field, source, hasValue ? c.get("value") : null));
+            }
+            return map == null ? null : new ErrorMap.Lookup(map, conditions, r.errorMapOutput());
+        }
+
         private void checkFlowCodes() {
             Set<String> apps = new HashSet<>();
             for (var a : rows.applications()) {
@@ -597,7 +688,7 @@ public class ConfigCompiler {
                     } else if (rule != null && rule.targetType() == TargetType.FILE && !fileRule(rule, r, rw, fileRules)) {
                         continue;
                     } else if (rule != null) {
-                        checkStepRefs(rule.source(), stepOrders, Integer.MAX_VALUE, null, rw);
+                        rule.references().forEach(p -> checkStepRefs(p, stepOrders, Integer.MAX_VALUE, null, rw));
                         (r.responseName() == null ? responseRules : namedRules.get(r.responseName())).add(rule);
                     }
                 } else {
@@ -804,7 +895,7 @@ public class ConfigCompiler {
                 String rw = "mapping rule " + r.id() + " of " + where;
                 CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.HEADER, TargetType.QUERY, TargetType.PATH), STEP_REQUEST);
                 if (rule != null) {
-                    checkStepRefs(rule.source(), orders, s.stepOrder(), null, rw);
+                    rule.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), null, rw));
                     rules.add(rule);
                 }
             }
@@ -864,7 +955,7 @@ public class ConfigCompiler {
                 String rw = "mapping rule " + r.id() + " of " + where;
                 CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.PATH), "a file storage step (BODY $.file / $.contentType, PATH key variables)");
                 if (rule != null) {
-                    checkStepRefs(rule.source(), orders, s.stepOrder(), null, rw);
+                    rule.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), null, rw));
                     rules.add(rule);
                     if (rule.targetType() == TargetType.PATH) {
                         pathTargets.add(rule.targetName());
@@ -933,7 +1024,7 @@ public class ConfigCompiler {
                 String rw = "mapping rule " + r.id() + " of " + where;
                 CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY), "a database query step (its rules set :parameters)");
                 if (rule != null) {
-                    checkStepRefs(rule.source(), orders, s.stepOrder(), null, rw);
+                    rule.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), null, rw));
                     rules.add(rule);
                     if (rule.targetPath() != null && !rule.targetPath().fieldNames().isEmpty()) {
                         provided.add(rule.targetPath().fieldNames().getFirst());
@@ -997,7 +1088,7 @@ public class ConfigCompiler {
                 String rw = "mapping rule " + r.id() + " of " + where;
                 CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY), "a transform step (its rules build its result)");
                 if (rule != null) {
-                    checkStepRefs(rule.source(), orders, s.stepOrder(), null, rw);
+                    rule.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), null, rw));
                     rules.add(rule);
                 }
             }
@@ -1084,7 +1175,17 @@ public class ConfigCompiler {
             }
             boolean hasSource = r.sourcePath() != null;
             boolean hasConstant = r.constantValue() != null;
-            if (hasSource && hasConstant || !hasSource && !hasConstant && r.fieldHandler() == null) {
+            ErrorMap.Lookup errorMap = null;
+            if (r.errorMapCode() != null && !r.errorMapCode().isBlank()) {
+                // the map gives the value: no source_path / constant_value
+                if (hasSource || hasConstant) {
+                    errors.add(where + ": a rule with error_map_code takes its value from the map: leave source_path and constant_value empty");
+                }
+                if (targetType == TargetType.FILE) {
+                    errors.add(where + ": a FILE rule cannot use an error map");
+                }
+                errorMap = errorMapLookup(r, where);
+            } else if (hasSource && hasConstant || !hasSource && !hasConstant && r.fieldHandler() == null) {
                 errors.add(where + ": must set exactly one of source_path / constant_value (or a field_handler)");
             }
             int sourceWildcards = source == null ? 0 : source.wildcardCount();
@@ -1120,7 +1221,7 @@ public class ConfigCompiler {
             return new CompiledRule(r.id(), r.seq(), targetType, target,
                     targetType == TargetType.BODY ? null : r.targetPath(), source,
                     JsonValues.parseLiteral(r.constantValue()), JsonValues.parseLiteral(r.defaultValue()),
-                    converter, lookup, fieldHandler, r.fieldHandler(), r.required());
+                    converter, lookup, fieldHandler, r.fieldHandler(), r.required(), errorMap);
         }
 
         /**

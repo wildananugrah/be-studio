@@ -243,10 +243,18 @@ public record GatewayProperties(
             @DefaultValue("gw_target_system_header") String targetSystemHeader,
             @DefaultValue("gw_storage") String storage,
             @DefaultValue("gw_application") String application,
-            @DefaultValue("gw_flow_response") String flowResponse) {
+            @DefaultValue("gw_flow_response") String flowResponse,
+            @DefaultValue("gw_error_map") String errorMap) {
 
         @org.springframework.boot.context.properties.bind.ConstructorBinding
         public Tables {}
+
+        public Tables(String flow, String flowStep, String mappingRule, String lookupEntry, String jsonSchema,
+                String auditTransaction, String auditStep, String targetSystem, String targetSystemHeader,
+                String storage, String application, String flowResponse) {
+            this(flow, flowStep, mappingRule, lookupEntry, jsonSchema, auditTransaction, auditStep, targetSystem,
+                    targetSystemHeader, storage, application, flowResponse, "gw_error_map");
+        }
 
         public Tables(String flow, String flowStep, String mappingRule, String lookupEntry, String jsonSchema,
                 String auditTransaction, String auditStep, String targetSystem, String targetSystemHeader,
@@ -282,7 +290,8 @@ public record GatewayProperties(
                     Map.entry("target_system_header", targetSystemHeader),
                     Map.entry("storage", storage),
                     Map.entry("application", application),
-                    Map.entry("flow_response", flowResponse));
+                    Map.entry("flow_response", flowResponse),
+                    Map.entry("error_map", errorMap));
         }
     }
 

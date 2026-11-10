@@ -115,7 +115,11 @@ final class StudioRows {
                 .sorted(Comparator.comparing(ConfigRows.ApplicationRow::code, Comparator.nullsFirst(Comparator.naturalOrder())))
                 .map(a -> new StudioConfig.Application(a.code(), a.name(), a.description()))
                 .toList();
-        return new StudioConfig(null, flows, targets, lookups, schemas, storages, applications);
+        List<StudioConfig.ErrorMap> errorMaps = rows.errorMaps().stream()
+                .sorted(Comparator.comparing(ConfigRows.ErrorMapRow::code, Comparator.nullsFirst(Comparator.naturalOrder())))
+                .map(m -> new StudioConfig.ErrorMap(m.code(), m.description(), m.entries()))
+                .toList();
+        return new StudioConfig(null, flows, targets, lookups, schemas, storages, applications, errorMaps);
     }
 
     /** {@code gw_flow_step.cases} (JSON) to the cases of a condition step; unreadable text gives none. */
@@ -159,8 +163,45 @@ final class StudioRows {
         return rows.stream()
                 .sorted(Comparator.comparingInt(RuleRow::seq))
                 .map(r -> new Rule(r.targetType(), r.targetPath(), r.sourcePath(), r.constantValue(),
-                        r.defaultValue(), r.lookupCode(), r.converter(), r.fieldHandler(), r.required()))
+                        r.defaultValue(), r.lookupCode(), r.converter(), r.fieldHandler(), r.required(),
+                        r.errorMapCode(), where(r.errorMapWhere()), r.errorMapOutput()))
                 .toList();
+    }
+
+    /** {@code gw_mapping_rule.error_map_where} (JSON) to conditions; unreadable text gives none. */
+    private static List<StudioConfig.Where> where(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<StudioConfig.Where> out = new ArrayList<>();
+            for (tools.jackson.databind.JsonNode c : com.mhamzah.gateway.mapping.JsonValues.MAPPER.readTree(json)) {
+                tools.jackson.databind.JsonNode v = c.get("value");
+                out.add(new StudioConfig.Where(c.path("field").asString(null), c.path("source").asString(null),
+                        v == null || v.isNull() ? null : v.asString()));
+            }
+            return out;
+        } catch (RuntimeException e) {
+            return List.of();
+        }
+    }
+
+    /** The conditions as stored: [{"field", "source"} | {"field", "value"}]; null when there are none. */
+    static String whereJson(List<StudioConfig.Where> where) {
+        if (where == null || where.isEmpty()) {
+            return null;
+        }
+        tools.jackson.databind.node.ArrayNode out = com.mhamzah.gateway.mapping.JsonValues.MAPPER.createArrayNode();
+        for (StudioConfig.Where w : where) {
+            tools.jackson.databind.node.ObjectNode o = out.addObject();
+            o.put("field", text(w.field()));
+            if (text(w.source()) != null) {
+                o.put("source", w.source().strip());
+            } else {
+                o.put("value", w.value());
+            }
+        }
+        return out.toString();
     }
 
     /**
@@ -262,7 +303,13 @@ final class StudioRows {
                 && applications.stream().noneMatch(a -> DEFAULT_APPLICATION.equals(a.code()))) {
             applications.add(new ConfigRows.ApplicationRow(++applicationId, DEFAULT_APPLICATION, "Default application", null));
         }
-        return new ConfigRows(flows, steps, rules, lookups, schemas, targets, headers, storages, applications, responses);
+        List<ConfigRows.ErrorMapRow> errorMaps = new ArrayList<>();
+        long errorMapId = 0;
+        for (StudioConfig.ErrorMap m : config.errorMaps()) {
+            errorMaps.add(new ConfigRows.ErrorMapRow(++errorMapId, text(m.code()), text(m.description()), m.text()));
+        }
+        return new ConfigRows(flows, steps, rules, lookups, schemas, targets, headers, storages, applications, responses,
+                errorMaps);
     }
 
     private static void addRules(List<RuleRow> out, List<Rule> rules, long flowId, Long stepId, String phase) {
@@ -276,7 +323,9 @@ final class StudioRows {
             seq++;
             out.add(new RuleRow(seq, flowId, stepId, phase, seq, or(r.type(), "BODY"), text(r.target()),
                     text(r.source()), text(r.constant()), text(r.defaultValue()), text(r.converter()),
-                    text(r.lookup()), text(r.fieldHandler()), r.required(), response));
+                    text(r.lookup()), text(r.fieldHandler()), r.required(), response, text(r.errorMap()),
+                    text(r.errorMap()) == null ? null : whereJson(r.errorMapWhere()),
+                    text(r.errorMap()) == null ? null : text(r.errorMapOutput())));
         }
     }
 
@@ -371,6 +420,17 @@ final class StudioRows {
             }
             if (l.targetValue() == null || l.targetValue().isEmpty()) {
                 errors.add(where + " source_value '" + l.sourceValue() + "': target_value must not be empty");
+            }
+        }
+        Set<String> errorMapCodes = new HashSet<>();
+        for (ConfigRows.ErrorMapRow m : rows.errorMaps()) {
+            if (m.code() == null) {
+                errors.add("every error map needs a code");
+            } else if (!errorMapCodes.add(m.code())) {
+                errors.add("error map '" + m.code() + "': duplicate code");
+            }
+            if (m.entries() == null || m.entries().isBlank()) {
+                errors.add("error map '" + m.code() + "': entries must not be empty");
             }
         }
         Set<String> schemaCodes = new HashSet<>();

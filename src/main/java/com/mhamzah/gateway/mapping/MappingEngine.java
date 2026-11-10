@@ -11,8 +11,8 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 
 /**
- * Applies mapping rules in order (spec Section 6.3): value, default, lookup, converter, field handler,
- * required check, write.
+ * Applies mapping rules in order (spec Section 6.3): value (source, constant or error map), default, lookup,
+ * converter, field handler, required check, write.
  */
 public class MappingEngine {
 
@@ -30,7 +30,8 @@ public class MappingEngine {
             } else if (rule.source() != null && rule.source().wildcardCount() > 0) {
                 applyWildcard(rule, ctx, body);
             } else {
-                JsonNode value = rule.constant() != null ? rule.constant() : rule.source() != null ? ctx.read(rule.source()) : null;
+                JsonNode value = rule.errorMap() != null ? rule.errorMap().resolve(ctx)
+                        : rule.constant() != null ? rule.constant() : rule.source() != null ? ctx.read(rule.source()) : null;
                 value = process(rule, value, ctx);
                 if (value != null) {
                     write(rule, value, body, headers, query, pathVars, status);

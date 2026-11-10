@@ -21,7 +21,30 @@ const storage = {
 };
 
 // ---------- API document <-> editor model ----------
-const ruleIn = r => ({ id: uid('r'), type: r.type || 'BODY', target: str(r.target), source: str(r.source), constant: str(r.constant), def: str(r.defaultValue), lookup: str(r.lookup), conv: str(r.converter), fh: str(r.fieldHandler), required: !!r.required });
+const ruleIn = r => ({ id: uid('r'), type: r.type || 'BODY', target: str(r.target), source: str(r.source), constant: str(r.constant), def: str(r.defaultValue), lookup: str(r.lookup), conv: str(r.converter), fh: str(r.fieldHandler), required: !!r.required,
+  em: str(r.errorMap), emWhere: (r.errorMapWhere || []).map(w => ({ field: str(w.field), input: str(w.source || w.value) })), emOut: str(r.errorMapOutput) });
+/**
+ * An error map's JSON text, read once per text: the entries' field names (in first-seen order), the entry count and
+ * the problem when it is not a JSON array of objects.
+ */
+const emCache = new Map();
+function emInfo(text) {
+  const t = String(text || ''); if (emCache.has(t)) return emCache.get(t);
+  let info;
+  try {
+    const d = JSON.parse(t);
+    if (!Array.isArray(d)) info = { err: 'must be a JSON array of objects ([{...}, {...}])', count: 0, fields: [] };
+    else {
+      const fields = []; const seen = new Set(); let bad = 0;
+      d.forEach(e => { if (!e || typeof e !== 'object' || Array.isArray(e)) { bad++; return; } Object.keys(e).forEach(k => { if (!seen.has(k)) { seen.add(k); fields.push(k); } }); });
+      info = { err: bad ? bad + ' entr' + (bad === 1 ? 'y is' : 'ies are') + ' not an object' : '', count: d.length, fields };
+    }
+  } catch (e) { info = { err: 'not valid JSON: ' + e.message, count: 0, fields: [] }; }
+  if (emCache.size > 20) emCache.clear();
+  emCache.set(t, info); return info;
+}
+/** An error map condition's input: a context path when it starts with $., otherwise a constant. */
+const emCond = w => (/^\$\./.test(String(w.input || '').trim()) ? { field: w.field, source: w.input.trim(), value: null } : { field: w.field, source: null, value: w.input });
 /**
  * How a response's HTTP status is set: a STATUS rule passing a step's status through ({ step }), another STATUS rule
  * ({ custom }), or null for the response's fixed status.
@@ -44,7 +67,8 @@ function setStatusFrom(rules, step) {
   if (i >= 0) { rules[i].source = source; rules[i].constant = ''; }
   else rules.unshift({ id: uid('r'), type: 'STATUS', target: 'status', source, constant: '', def: '', lookup: '', conv: '', fh: '', required: false });
 }
-const ruleOut = r => ({ type: r.type, target: r.target, source: nn(r.source), constant: r.source ? null : nn(r.constant), defaultValue: nn(r.def), lookup: nn(r.lookup), converter: nn(r.conv), fieldHandler: nn(r.fh), required: r.required });
+const ruleOut = r => ({ type: r.type, target: r.target, source: r.em ? null : nn(r.source), constant: r.em || r.source ? null : nn(r.constant), defaultValue: nn(r.def), lookup: nn(r.lookup), converter: nn(r.conv), fieldHandler: nn(r.fh), required: r.required,
+  errorMap: nn(r.em), errorMapWhere: r.em ? (r.emWhere || []).map(emCond) : [], errorMapOutput: r.em ? nn(r.emOut) : null });
 
 function fromApi(c) {
   const lookups = {};
@@ -65,6 +89,7 @@ function fromApi(c) {
     lookups,
     applications: (c.applications || []).map(a => ({ code: str(a.code), name: str(a.name), description: str(a.description) })),
     schemas: (c.schemas || []).map(x => ({ code: str(x.code), desc: str(x.description), text: str(x.text) })),
+    errorMaps: (c.errorMaps || []).map(x => ({ code: str(x.code), desc: str(x.description), text: str(x.text) })),
     storages: (c.storages || []).map(x => ({ code: str(x.code), type: (x.type || 'LOCAL').toUpperCase(), baseDir: str(x.baseDir), bucket: str(x.bucket), prefix: str(x.prefix), region: str(x.region), endpoint: str(x.endpoint),
       pathStyle: !!x.pathStyle, accessKey: str(x.accessKey), secretKey: str(x.secretKey), allowedTypes: str(x.allowedTypes), maxSize: str(x.maxSize), enabled: x.enabled !== false }))
   };
@@ -240,6 +265,7 @@ function toApi(cfg) {
       tls: tlsOut(t.tls) })),
     lookups: Object.keys(cfg.lookups).map(code => ({ code, entries: cfg.lookups[code].map(r => ({ source: r.src, target: r.tgt })) })),
     schemas: cfg.schemas.map(x => ({ code: x.code, description: nn(x.desc), text: x.text })),
+    errorMaps: (cfg.errorMaps || []).map(x => ({ code: x.code, description: nn(x.desc), text: x.text })),
     applications: (cfg.applications || []).map(a => ({ code: a.code, name: nn(a.name), description: nn(a.description) })),
     storages: (cfg.storages || []).map(x => ({ code: x.code, type: x.type, baseDir: nn(x.baseDir), bucket: nn(x.bucket), prefix: nn(x.prefix), region: nn(x.region), endpoint: nn(x.endpoint), pathStyle: !!x.pathStyle,
       accessKey: nn(x.accessKey), secretKey: nn(x.secretKey), allowedTypes: nn(x.allowedTypes), maxSize: nn(x.maxSize), enabled: x.enabled !== false }))
@@ -399,6 +425,73 @@ const hl = (text, lang) => {
   return tokens(t, lang);
 };
 
+/**
+ * A scrolling code editor: a transparent textarea over a highlighted copy of its text. Only the lines in view (plus a
+ * margin) are highlighted, so a JSON document of thousands of lines stays fast to type in and scroll. Lines do not
+ * wrap, so line positions are exact.
+ */
+const CODE_LINE = 20; const CODE_PAD = 10; const CODE_BAR = 10;
+class CodeArea extends Component {
+  constructor() { super(); this.state = { top: 0, left: 0, sh: 0, ch: 0, sw: 0, cw: 0 }; }
+  componentDidMount() { this.measure(); }
+  componentDidUpdate() { this.measure(); }
+  componentWillUnmount() { if (this.raf) cancelAnimationFrame(this.raf); }
+  /** The textarea's scroll position and sizes, for the highlighted layer and the scrollbars (set only when changed). */
+  measure() {
+    const t = this.ta; if (!t) return;
+    const n = { top: t.scrollTop, left: t.scrollLeft, sh: t.scrollHeight, ch: t.clientHeight, sw: t.scrollWidth, cw: t.clientWidth };
+    if (Object.keys(n).some(k => n[k] !== this.state[k])) this.setState(n);
+  }
+  /** Drags a scrollbar thumb: {@code axis} 'y' or 'x'. */
+  drag(e, axis) {
+    e.preventDefault(); e.stopPropagation();
+    const t = this.ta; const st = this.state;
+    const start = axis === 'y' ? e.clientY : e.clientX; const from = axis === 'y' ? t.scrollTop : t.scrollLeft;
+    const track = axis === 'y' ? st.ch : st.cw; const total = axis === 'y' ? st.sh : st.sw;
+    const ratio = total / Math.max(1, track);
+    const move = ev => { const d = (axis === 'y' ? ev.clientY : ev.clientX) - start; if (axis === 'y') t.scrollTop = from + d * ratio; else t.scrollLeft = from + d * ratio; };
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+  }
+  /** A click on the track (not the thumb) pages towards it. */
+  page(e, axis) {
+    const t = this.ta; const r = e.currentTarget.getBoundingClientRect();
+    if (axis === 'y') t.scrollTop += (e.clientY - r.top < (t.scrollTop / Math.max(1, t.scrollHeight)) * r.height ? -1 : 1) * t.clientHeight * 0.9;
+    else t.scrollLeft += (e.clientX - r.left < (t.scrollLeft / Math.max(1, t.scrollWidth)) * r.width ? -1 : 1) * t.clientWidth * 0.9;
+  }
+  render({ value, onInput, lang = 'json', height = 520, invalid, placeholder, readOnly }, { top, left, sh, ch, sw, cw }) {
+    const v = value || '';
+    const lines = v.split('\n');
+    const first = Math.max(0, Math.floor((top - CODE_PAD) / CODE_LINE) - 30);
+    const last = Math.min(lines.length, first + Math.ceil(height / CODE_LINE) + 60);
+    const box = `margin:0;padding:${CODE_PAD}px ${12 + CODE_BAR}px ${CODE_PAD + CODE_BAR}px 12px;font:12px/${CODE_LINE}px ${MONO};white-space:pre;tab-size:2`;
+    const h = Math.max(8 * CODE_LINE, Math.min(height, lines.length * CODE_LINE + 2 * CODE_PAD + CODE_BAR + 6));
+    const scroll = () => { if (this.raf) return; this.raf = requestAnimationFrame(() => { this.raf = 0; this.measure(); }); };
+    const keys = e => {
+      if (e.key !== 'Tab' || e.shiftKey || readOnly) return;
+      e.preventDefault();
+      const ta = e.currentTarget; const a = ta.selectionStart; const b = ta.selectionEnd;
+      onInput(ta.value.slice(0, a) + '  ' + ta.value.slice(b));
+      requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = a + 2; });
+    };
+    // always-visible scrollbars (the native ones are hidden: macOS shows them only while scrolling)
+    const showY = sh > ch + 1; const showX = sw > cw + 1;
+    const ty = showY ? Math.max(28, ch * ch / sh) : 0; const yPos = showY ? (top / (sh - ch)) * (ch - ty) : 0;
+    const tx = showX ? Math.max(28, cw * cw / sw) : 0; const xPos = showX ? (left / (sw - cw)) * (cw - tx) : 0;
+    const thumb = 'position:absolute;border-radius:5px;background:#C9C6BC;cursor:default';
+    return html`
+      <div class="code-area" style=${`position:relative;height:${h}px;border:1px solid ${invalid ? 'oklch(0.75 0.12 25)' : '#E4E1D8'};border-radius:6px;background:#fff;overflow:hidden`}>
+        <pre aria-hidden="true" class="code-light" style=${`${box};position:absolute;inset:0;pointer-events:none;color:#2B2D33;overflow:hidden`}><div style=${`transform:translate(${-left}px,${first * CODE_LINE - top}px)`}>${hl(lines.slice(first, last).join('\n'), lang)}</div></pre>
+        <textarea ref=${el => { this.ta = el; }} class="code-ta ro-ok" readOnly=${!!readOnly} value=${v} placeholder=${placeholder} spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" onInput=${e => onInput(e.currentTarget.value)} onScroll=${scroll} onKeyDown=${keys}
+          style=${`${box};position:absolute;inset:0;width:100%;height:100%;border:0;outline:none;color:transparent;caret-color:#17181C;resize:none;overflow:auto`}></textarea>
+        ${showY && html`<div onMouseDown=${e => this.page(e, 'y')} style=${`position:absolute;top:2px;right:2px;bottom:${CODE_BAR + 2}px;width:${CODE_BAR - 2}px;border-radius:5px;background:#F3F1EC`}>
+          <div onMouseDown=${e => this.drag(e, 'y')} title="Drag to scroll" style=${`${thumb};left:0;right:0;top:${yPos}px;height:${ty}px`}></div></div>`}
+        ${showX && html`<div onMouseDown=${e => this.page(e, 'x')} style=${`position:absolute;left:2px;right:${CODE_BAR + 2}px;bottom:2px;height:${CODE_BAR - 2}px;border-radius:5px;background:#F3F1EC`}>
+          <div onMouseDown=${e => this.drag(e, 'x')} title="Drag to scroll" style=${`${thumb};top:0;bottom:0;left:${xPos}px;width:${tx}px`}></div></div>`}
+      </div>`;
+  }
+}
+
 // ---------- JSON schemas ----------
 const SCHEMA_TEMPLATE = pretty({ $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', required: [], properties: {} });
 /** A draft 2020-12 schema that accepts {@code v}: every non-null property required, types from the values. */
@@ -442,7 +535,9 @@ function flowSql(f, lookupsUsed) {
     const c = st ? ['flow_id', 'step_id', 'phase', 'seq', 'target_type', 'target_path'] : ['flow_id', 'phase', 'seq', 'target_type', 'target_path'];
     const v = st ? ['f.id', 's.id', "'STEP_REQUEST'", i + 1, q(r.type), q(r.target)] : ['id', "'FLOW_RESPONSE'", i + 1, q(r.type), q(r.target)];
     if (resp) { c.push('response_name'); v.push(q(resp)); }
-    opt('source_path', r.source, 0, c, v); if (!r.source) opt('constant_value', r.constant, 0, c, v); opt('default_value', r.def, 0, c, v); opt('lookup_code', r.lookup, 0, c, v); opt('converter', r.conv, 0, c, v); opt('field_handler', r.fh, 0, c, v); if (r.required) opt('required', 'true', 1, c, v);
+    if (r.em) { opt('error_map_code', r.em, 0, c, v); opt('error_map_where', JSON.stringify((r.emWhere || []).map(emCond).map(w => (w.source ? { field: w.field, source: w.source } : { field: w.field, value: w.value }))), 0, c, v); opt('error_map_output', r.emOut, 0, c, v); }
+    else { opt('source_path', r.source, 0, c, v); if (!r.source) opt('constant_value', r.constant, 0, c, v); }
+    opt('default_value', r.def, 0, c, v); opt('lookup_code', r.lookup, 0, c, v); opt('converter', r.conv, 0, c, v); opt('field_handler', r.fh, 0, c, v); if (r.required) opt('required', 'true', 1, c, v);
     return 'INSERT INTO gw_mapping_rule (' + c.join(', ') + ')\nSELECT ' + v.join(', ') + (st ? '\nFROM gw_flow f JOIN gw_flow_step s ON s.flow_id = f.id\nWHERE f.code = ' + q(f.code) + ' AND s.name = ' + q(st.name) + ';' : '\nFROM gw_flow WHERE code = ' + q(f.code) + ';');
   };
   steps.forEach(st => { if (st.rules.length) out.push('-- ' + st.name + ': what the call sends\n' + st.rules.map((r, i) => ruleSql(r, i, st)).join('\n')); });
@@ -735,7 +830,7 @@ class App extends Component {
       if (i < 0) return null;
       return { screen: 'flow', cur: i, tab: ['pipeline', 'mapping', 'schemas', 'tests', 'rows'].includes(m[3]) ? m[3] : 'pipeline', sel: { kind: 'flow' }, scope: 'resp', preview: null };
     }
-    return ['flows', 'targets', 'lookups', 'schemas', 'storages', 'audit'].includes(m[1]) ? { screen: m[1] } : null;
+    return ['flows', 'targets', 'lookups', 'schemas', 'errormaps', 'storages', 'audit'].includes(m[1]) ? { screen: m[1] } : null;
   }
 
   /** Records a screen change in the browser history (a new entry, or the same one when only the flow code changed). */
@@ -1023,7 +1118,7 @@ class App extends Component {
     if (current && current.custom) options.push({ v: '__custom', l: 'Set by a STATUS rule (Mapping)' });
     if (current && current.step && !steps.some(x => x.name === current.step)) options.push({ v: current.step, l: 'Pass through · ' + current.step + ' (no such HTTP step)' });
     const rule = current && current.rule;
-    const extras = rule ? [rule.lookup && 'lookup ' + rule.lookup, rule.def && 'default ' + rule.def, rule.conv && 'converter'].filter(Boolean) : [];
+    const extras = rule ? [rule.em && 'error map ' + rule.em, rule.lookup && 'lookup ' + rule.lookup, rule.def && 'default ' + rule.def, rule.conv && 'converter'].filter(Boolean) : [];
     return { label: 'Status', col: 'STATUS rule', value, kind: 'select', options,
       onSet: (fl, v) => { if (v !== '__custom') setStatusFrom(listOf(fl), v); },
       hint: current && current.step ? 'The client gets the HTTP status ' + current.step + ' answered with' + (extras.length ? ' (' + extras.join(', ') + ')' : '') + ', whether it succeeded or failed. To translate statuses (e.g. 503 → 502), give the STATUS rule a lookup in Mapping.'
@@ -1075,6 +1170,7 @@ class App extends Component {
         ${s.screen === 'targets' && this.renderTargets()}
         ${s.screen === 'lookups' && this.renderLookups()}
         ${s.screen === 'schemas' && this.renderSchemas()}
+        ${s.screen === 'errormaps' && this.renderErrorMaps()}
         ${s.screen === 'storages' && this.renderStorages()}
         ${s.screen === 'audit' && this.renderAudit()}
         ${s.toast && this.renderToast()}
@@ -1105,7 +1201,7 @@ class App extends Component {
 
   renderHeader() {
     const s = this.state; const dirty = this.dirty();
-    const nav = [['Flows', 'flows'], ['Target systems', 'targets'], ['Lookups', 'lookups'], ['Schemas', 'schemas'], ['Storages', 'storages'], ['Audit trail', 'audit']].map(([label, k]) => {
+    const nav = [['Flows', 'flows'], ['Target systems', 'targets'], ['Lookups', 'lookups'], ['Schemas', 'schemas'], ['Error maps', 'errormaps'], ['Storages', 'storages'], ['Audit trail', 'audit']].map(([label, k]) => {
       const on = s.screen === k || (k === 'flows' && s.screen === 'flow');
       return html`<button onClick=${() => this.setState({ screen: k }, () => { if (k === 'audit') this.loadAudit(); })} style=${`border:0;background:${on ? '#2B2D33' : 'transparent'};color:${on ? '#FFFFFF' : '#A4A6AC'};padding:6px 11px;border-radius:6px;cursor:pointer;font-weight:500`}>${label}</button>`;
     });
@@ -1270,6 +1366,7 @@ class App extends Component {
     inc.targets.forEach(t => merge(cfg.targets, t, 'target system'));
     inc.schemas.forEach(x => merge(cfg.schemas, x, 'schema'));
     inc.storages.forEach(x => merge(cfg.storages = cfg.storages || [], x, 'storage'));
+    (inc.errorMaps || []).forEach(x => merge(cfg.errorMaps = cfg.errorMaps || [], x, 'error map'));
     Object.keys(inc.lookups).forEach(code => { if (!cfg.lookups[code]) { cfg.lookups[code] = inc.lookups[code]; notes.push('lookup ' + code + ' added'); } else if (!same(cfg.lookups[code], inc.lookups[code])) notes.push('lookup ' + code + ' already exists here and differs: kept this gateway\'s'); });
   }
 
@@ -1284,7 +1381,7 @@ class App extends Component {
    * their applications and shared items are added when missing. Nothing is written until Save & reload.
    */
   importFlows(d) {
-    const inc = fromApi({ flows: d.flows || [], targets: d.targets || [], lookups: d.lookups || [], schemas: d.schemas || [], storages: d.storages || [], applications: d.applications || [] });
+    const inc = fromApi({ flows: d.flows || [], targets: d.targets || [], lookups: d.lookups || [], schemas: d.schemas || [], storages: d.storages || [], errorMaps: d.errorMaps || [], applications: d.applications || [] });
     const notes = []; let added = 0, replaced = 0;
     this.mutCfg(cfg => {
       cfg.applications = cfg.applications || [];
@@ -1308,7 +1405,7 @@ class App extends Component {
   importApp(d) {
     const fail = msg => this.setState({ toast: { status: 'Import', title: 'Import application', color: 'oklch(0.72 0.15 25)', body: msg, note: '' } });
     if (!d || d.format !== 'json-gateway-application' || !d.application || !d.application.code) { fail('Not an export (a JSON file from Flows → Export → JSON).'); return; }
-    const inc = fromApi({ flows: d.flows || [], targets: d.targets || [], lookups: d.lookups || [], schemas: d.schemas || [], storages: d.storages || [], applications: [d.application] });
+    const inc = fromApi({ flows: d.flows || [], targets: d.targets || [], lookups: d.lookups || [], schemas: d.schemas || [], storages: d.storages || [], errorMaps: d.errorMaps || [], applications: [d.application] });
     const app = inc.applications[0]; const notes = []; let added = 0, replaced = 0, removed = 0;
     this.mutCfg(cfg => {
       cfg.applications = cfg.applications || [];
@@ -1338,7 +1435,7 @@ class App extends Component {
     const tick = (codes, on) => setSel(on ? [...new Set([...sel, ...codes])] : sel.filter(c => !codes.includes(c)));
     const box = (codes, title) => { const on = codes.length > 0 && codes.every(c => sel.includes(c));
       return html`<input type="checkbox" class="ro-ok" title=${title} checked=${on} disabled=${codes.length === 0} onClick=${e => { e.stopPropagation(); tick(codes, !on); }} style="margin:0;cursor:pointer;accent-color:#17181C"/>`; };
-    const other = s.problems.filter(m => !s.cfg.flows.some(f => m.includes(`flow '${f.code}'`)) && !/^(target system|lookup|json schema|storage) '/.test(m));
+    const other = s.problems.filter(m => !s.cfg.flows.some(f => m.includes(`flow '${f.code}'`)) && !/^(target system|lookup|json schema|error map|storage) '/.test(m));
     const small = (label, onClick, disabled, title, cls = 'btn-line') => html`<button class=${cls} disabled=${disabled} title=${title || ''} onClick=${onClick} style="border:1px solid #E4E1D8;background:#fff;color:#17181C;border-radius:7px;padding:5px 10px;cursor:pointer;font-weight:500;font-size:12px;white-space:nowrap">${label}</button>`;
     const pickFile = () => { const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json'; inp.onchange = async () => { const f = inp.files && inp.files[0]; if (f) this.importFile(await f.text()); }; inp.click(); };
     const q = (s.flowQ || '').trim().toLowerCase();
@@ -1938,6 +2035,87 @@ class App extends Component {
       </div>`;
   }
 
+  /** Flows (and where in them) whose rules use error map {@code code}. */
+  errorMapUses(code) {
+    const out = [];
+    this.state.cfg.flows.forEach(f => {
+      const n = [...f.response, ...f.steps.flatMap(st => st.rules), ...(f.responses || []).flatMap(r => r.rules)].filter(r => r.em === code).length;
+      if (n) out.push(f.code + (n > 1 ? ' ×' + n : ''));
+    });
+    return out;
+  }
+
+  renderErrorMaps() {
+    const s = this.state; const maps = s.cfg.errorMaps || [];
+    const val = e => e.currentTarget.value;
+    const upd = (i, fn) => this.mutCfg(cfg => fn(cfg.errorMaps[i], cfg));
+    const each = (cfg, fn) => cfg.flows.forEach(f => [...f.response, ...f.steps.flatMap(st => st.rules), ...(f.responses || []).flatMap(r => r.rules)].forEach(fn));
+    const add = () => {
+      let k = 1; while (maps.some(x => x.code === 'NEW_ERROR_MAP_' + k)) k++; const code = 'NEW_ERROR_MAP_' + k;
+      this.mutCfg(cfg => { cfg.errorMaps = cfg.errorMaps || []; cfg.errorMaps.push({ code, desc: '', text: '[\n  {"errorCode": "VALIDATION_FAILED", "httpStatus": 400, "generalMessage": "Some of the data you entered is not valid."}\n]' }); });
+      this.setState({ emQ: '', focusEm: code });
+    };
+    const rename = (i, old, v) => this.mutCfg(cfg => {
+      if (!v || (v !== old && cfg.errorMaps.some(x => x.code === v))) return;
+      cfg.errorMaps[i].code = v; each(cfg, r => { if (r.em === old) r.em = v; });
+      setTimeout(() => this.setState({ focusEm: v }), 0);
+    });
+    const q = (s.emQ || '').trim().toLowerCase();
+    const has = v => String(v == null ? '' : v).toLowerCase().includes(q);
+    const rows = maps.map((x, i) => ({ x, i, info: emInfo(x.text), uses: this.errorMapUses(x.code) }))
+      .filter(r => !q || has(r.x.code) || has(r.x.desc) || r.uses.some(has) || r.info.fields.some(has));
+    const grid = 'display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1.6fr) 80px minmax(0,2fr) minmax(0,1.4fr);gap:12px;align-items:center';
+    return html`
+      <div style="flex:1;min-height:0;overflow:auto;padding:28px 32px 60px">
+        <div style="max-width:1180px;margin:0 auto">
+          ${pageHead('Error maps', html`Lists of errors as JSON (e.g. one object per error code, with its HTTP status, service and messages). A mapping rule picks one field of the first entry that matches its conditions, e.g. ${mono('generalMessage')} where ${mono('errorCode')} = the backend's code; no match gives the rule's default. ${mono('gw_error_map')}`, '+ New error map', add)}
+          <div style="margin-top:18px;display:flex;align-items:center;gap:10px">
+            <input id="list-search" class="inp ro-ok" value=${s.emQ || ''} onInput=${e => this.setState({ emQ: e.currentTarget.value })} onKeyDown=${e => { if (e.key === 'Escape') this.setState({ emQ: '' }); }}
+              placeholder="Search code, description, field name or the flow using it…  ( / )" style=${inputStyle(34, 12.5) + ';max-width:460px'}/>
+            <span style=${`font:11.5px ${MONO};color:#9A9CA2`}>${q ? rows.length + ' of ' + maps.length : maps.length} error map${maps.length === 1 ? '' : 's'}</span>
+          </div>
+          ${maps.length === 0 ? html`<div style="margin-top:14px;padding:22px;border:1.5px dashed #C9C6BC;border-radius:10px;color:#6A6D75;text-align:center">No error maps yet. Create one with <b>+ New error map</b> and paste a JSON array into it.</div>` : html`
+          <div style="margin-top:12px;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:auto">
+            <div style=${`${grid};min-width:880px;padding:10px 16px;font:600 10px ${MONO};letter-spacing:.06em;color:#9A9CA2;border-bottom:1px solid #EFEDE6`}>
+              <span>CODE</span><span>DESCRIPTION</span><span>ENTRIES</span><span>FIELDS</span><span>USED BY</span>
+            </div>
+            ${rows.length === 0 && html`<div style="padding:22px 16px;color:#6A6D75;font-size:12.5px">Nothing matches “${s.emQ}”.</div>`}
+            ${rows.map(({ x, i, info, uses }) => {
+              const errs = s.problems.filter(m => m.includes(`error map '${x.code}'`));
+              const open = s.focusEm === x.code;
+              return html`
+              <div id=${'errormap-' + x.code} class="row" onClick=${() => this.setState({ focusEm: open ? null : x.code })} style=${`${grid};min-width:880px;padding:11px 16px;border-bottom:1px solid #F3F1EC;cursor:pointer;background:${open ? '#FAF9F6' : ''}`}>
+                <div style="display:flex;align-items:center;gap:7px;min-width:0">
+                  <span style=${`font:600 12.5px ${MONO};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`}>${x.code}</span>
+                  ${(errs.length > 0 || info.err) && html`<span title=${info.err || errs.join('\n')} style=${`flex:none;min-width:16px;height:16px;border-radius:8px;padding:0 4px;background:${C.err};color:#fff;display:grid;place-items:center;font:700 10px ${MONO}`}>!</span>`}
+                </div>
+                <span class="hscroll" style="font-size:12px;color:#6A6D75;white-space:nowrap">${x.desc || '—'}</span>
+                <span style=${`font:11.5px ${MONO};color:#3E4047`}>${info.err ? '—' : info.count}</span>
+                <span class="hscroll" style=${`font:11.5px ${MONO};color:#3E4047;white-space:nowrap`}>${info.fields.slice(0, 6).join(', ') || '—'}${info.fields.length > 6 ? ', …' : ''}</span>
+                <span class="hscroll" style=${`font:11.5px ${MONO};color:#6A6D75;white-space:nowrap`}>${uses.length ? uses.join(', ') : 'not used'}</span>
+              </div>
+              ${open && html`
+              <div style="padding:14px 18px 16px;border-bottom:1px solid #E4E1D8;background:#FAF9F6;display:flex;flex-direction:column;gap:10px;min-width:880px">
+                <label style="display:flex;flex-direction:column;gap:5px;max-width:420px">${label10('CODE')}
+                  <input class="inp" value=${x.code} onChange=${e => rename(i, x.code, val(e).toUpperCase().replace(/[^A-Z0-9_]/g, '_'))} title="Rename (applies when the field loses focus; the rules using it follow)" style=${inputStyle(32, 12.5)}/>
+                </label>
+                <input class="inp" value=${x.desc} onInput=${e => { const v = val(e); upd(i, y => { y.desc = v; }); }} placeholder="description (optional)" style=${inputStyle(30, 12)}/>
+                <div style="display:flex;align-items:baseline;gap:10px">${label10('ENTRIES · JSON ARRAY OF OBJECTS')}<span style=${`font:11px ${MONO};color:${info.err ? 'oklch(0.5 0.18 25)' : '#6A6D75'}`}>${info.err ? info.err : info.count + ' entr' + (info.count === 1 ? 'y' : 'ies') + ' · fields: ' + (info.fields.join(', ') || 'none')}</span></div>
+                <${CodeArea} value=${x.text} onInput=${v => upd(i, y => { y.text = v; })} invalid=${!!info.err} height=${560} readOnly=${this.ro} placeholder='[{"errorCode": "VALIDATION_FAILED", "generalMessage": "..."}]'/>
+                ${errList(errs)}
+                <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+                  <button class="ro-hide" disabled=${!!info.err} onClick=${() => upd(i, y => { y.text = pretty(JSON.parse(y.text)); })} style="border:1px solid #E4E1D8;background:#fff;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#3E4047">Format</button>
+                  <span style="font-size:11.5px;color:#9A9CA2">Use it in a flow: Mapping → drag it from ERROR MAPS onto a rule, or <b>+ Error map rule</b>.</span>
+                  <span style="flex:1"></span>
+                  <button class="del" onClick=${() => this.ask(`Delete error map ${x.code || '(unnamed)'}?`, (uses.length ? `Still used by ${uses.join(', ')}: the save will be rejected until those rules are changed.` : 'Nothing uses it.') + ' Nothing changes in the database until Save & reload.', () => this.mutCfg(cfg => { cfg.errorMaps.splice(i, 1); }))} style="border:0;background:none;color:#9A9CA2;cursor:pointer;font-size:12px">Delete error map</button>
+                </div>
+              </div>`}`;
+            })}
+          </div>`}
+        </div>
+      </div>`;
+  }
+
   renderSchemas() {
     const s = this.state;
     const val = e => e.currentTarget.value;
@@ -1998,7 +2176,7 @@ class App extends Component {
                   <span style="font-size:11px;color:#9A9CA2">Renaming updates the flows and steps that use it (applies when the field loses focus).</span>
                 </label>
                 <input class="inp" value=${x.desc} onInput=${e => { const v = val(e); upd(i, y => { y.desc = v; }); }} placeholder="description (optional)" style=${inputStyle(30, 12)}/>
-                <textarea class="inp" value=${x.text} onInput=${e => { const v = val(e); upd(i, y => { y.text = v; }); }} spellcheck="false" rows=${Math.min(24, Math.max(8, x.text.split('\n').length + 1))} style=${`border:1px solid #E4E1D8;border-radius:6px;padding:9px 11px;font:12px/1.5 ${MONO};background:#FAF9F6;resize:vertical;width:100%;tab-size:2`}></textarea>
+                <${CodeArea} value=${x.text} onInput=${v => upd(i, y => { y.text = v; })} invalid=${!!parseErr} height=${480} readOnly=${this.ro}/>
                 ${parseErr ? html`<div style=${`font:11px/1.45 ${MONO};color:oklch(0.5 0.18 25)`}>Not valid JSON: ${parseErr}</div>` : errList(errs)}
                 ${exOpen && html`
                   <div style="padding:12px;border:1px dashed #C9C6BC;border-radius:8px;display:flex;flex-direction:column;gap:8px;background:#FAF9F6">
@@ -2791,7 +2969,14 @@ class App extends Component {
         return { ctxAdd: null, ctxAddName: '' };
       });
     };
-    const ruleAccept = d => ['src', 'conv', 'lookup', 'fh'].includes(d.kind);
+    const ruleAccept = d => ['src', 'conv', 'lookup', 'fh', 'em'].includes(d.kind);
+    /** Turns a rule into an error map rule: the map gives the value (no source / constant); guesses the usual fields. */
+    const useMap = (x, code) => {
+      const fields = emInfo(((s.cfg.errorMaps || []).find(m => m.code === code) || {}).text).fields;
+      x.em = code; x.source = ''; x.constant = '';
+      if (!x.emWhere || !x.emWhere.length) x.emWhere = [{ field: fields.find(k => /^errorcode$/i.test(k)) || fields[0] || '', input: '' }];
+      if (!x.emOut || !fields.includes(x.emOut)) x.emOut = fields.find(k => /^generalmessage$/i.test(k)) || fields.find(k => /message/i.test(k)) || '';
+    };
     const types = scopeStep ? (isSql(scopeStep) || isTransform(scopeStep) ? ['BODY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes.filter(t => t !== 'STATUS' && t !== 'FILE')) : respSel && isInfoResp(respSel) ? ['BODY'] : ['BODY', 'HEADER', 'STATUS', 'FILE'];
 
     const pv = s.preview && s.preview.key === f.code + '/' + (scopeStep ? scopeStep.name : respSel ? '@' + respSel.name : '') ? s.preview : null;
@@ -2800,7 +2985,7 @@ class App extends Component {
       if (!x) return { t: '', c: '#9A9CA2' };
       if (x.error) return { t: 'error · ' + x.error, c: 'oklch(0.55 0.18 25)' };
       if (x.written) return { t: '→ ' + JSON.stringify(x.value), c: 'oklch(0.48 0.11 160)' };
-      return r.required ? { t: 'missing (required)', c: 'oklch(0.55 0.18 25)' } : { t: 'skipped · source missing', c: '#9A9CA2' };
+      return r.required ? { t: 'missing (required)', c: 'oklch(0.55 0.18 25)' } : { t: r.em ? 'skipped · no matching entry, no default' : 'skipped · source missing', c: '#9A9CA2' };
     };
     const newZone = this.zone('rule-new', d => d.kind === 'src', d => this.mut(fl => {
       const list = listOf(fl);
@@ -2812,6 +2997,7 @@ class App extends Component {
     }));
     const nzBorder = newZone.active ? C.in : '#C9C6BC'; const nzBg = newZone.over ? 'oklch(0.56 0.13 255 / 0.1)' : newZone.active ? 'oklch(0.56 0.13 255 / 0.04)' : 'transparent';
     const addConst = () => this.mut(fl => { listOf(fl).push({ id: uid('r'), type: 'BODY', target: '$.field', source: '', constant: '', def: '', lookup: '', conv: '', fh: '', required: false }); });
+    const addMapRule = () => this.mut(fl => { const r = { id: uid('r'), type: 'BODY', target: '$.message', source: '', constant: '', def: '', lookup: '', conv: '', fh: '', required: false }; useMap(r, s.cfg.errorMaps[0].code); listOf(fl).push(r); });
     const dragChip = (label, payload, style) => html`<div class="pal" draggable="true" onDragStart=${this.ds(payload)} onDragEnd=${this.dragEnd} style=${`padding:4px 7px;border-radius:5px;font:11px ${MONO};cursor:grab;${style}`}>${label}</div>`;
 
     // preview panel
@@ -2900,6 +3086,10 @@ class App extends Component {
           ${Object.keys(s.cfg.lookups).length > 0 && html`
             <div style=${`margin:20px 6px 8px;font:600 10px ${MONO};letter-spacing:.08em;color:#6A6D75`}>LOOKUPS</div>
             <div style="display:flex;flex-wrap:wrap;gap:5px;padding:0 6px">${Object.keys(s.cfg.lookups).map(v => dragChip(v, { kind: 'lookup', v }, 'border:1px solid oklch(0.88 0.05 160);background:oklch(0.97 0.02 160)'))}</div>`}
+          ${(s.cfg.errorMaps || []).length > 0 && html`
+            <div style=${`margin:20px 6px 8px;font:600 10px ${MONO};letter-spacing:.08em;color:#6A6D75`}>ERROR MAPS</div>
+            <div style="display:flex;flex-wrap:wrap;gap:5px;padding:0 6px">${s.cfg.errorMaps.map(m => dragChip(m.code, { kind: 'em', v: m.code }, 'border:1px solid oklch(0.87 0.06 25);background:oklch(0.97 0.02 25)'))}</div>
+            <div style="padding:6px 6px 0;font-size:11px;color:#9A9CA2;line-height:1.4">Drop on a rule: its value becomes one field of the first matching entry.</div>`}
           ${cat.fieldHandlers.length > 0 && html`
             <div style=${`margin:20px 6px 8px;font:600 10px ${MONO};letter-spacing:.08em;color:#6A6D75`}>FIELD HANDLERS</div>
             <div style="display:flex;flex-wrap:wrap;gap:5px;padding:0 6px">${cat.fieldHandlers.map(v => dragChip(v, { kind: 'fh', v }, 'border:1px solid #EBDDB8;background:#FBF5E6'))}</div>`}
@@ -2917,7 +3107,7 @@ class App extends Component {
 
           <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;max-width:880px">
             ${rules.map((r, i) => {
-              const z = this.zone('rule-' + r.id, ruleAccept, d => (d.kind === 'conv' && !this.ro ? this.openConv({ id: r.id, conv: d.v, fromDrop: true }) : null, updRule(r.id, x => { if (d.kind === 'src') { x.source = d.path; x.constant = ''; } if (d.kind === 'conv') x.conv = d.v; if (d.kind === 'lookup') x.lookup = d.v; if (d.kind === 'fh') x.fh = d.v; })));
+              const z = this.zone('rule-' + r.id, ruleAccept, d => (d.kind === 'conv' && !this.ro ? this.openConv({ id: r.id, conv: d.v, fromDrop: true }) : null, updRule(r.id, x => { if (d.kind === 'src' && x.em) { const w = (x.emWhere || []).find(c => !c.input); if (w) w.input = d.path; else x.emWhere = [...(x.emWhere || []), { field: '', input: d.path }]; } else if (d.kind === 'src') { x.source = d.path; x.constant = ''; } if (d.kind === 'em') useMap(x, d.v); if (d.kind === 'conv') x.conv = d.v; if (d.kind === 'lookup') x.lookup = d.v; if (d.kind === 'fh') x.fh = d.v; })));
               const res = resText(r, i); const set = k => e => { const v = e.currentTarget.value; updRule(r.id, x => { x[k] = v; }); };
               return html`
               <div ...${zoneProps(z)} style="position:relative;background:#fff;border:1px solid #E4E1D8;border-radius:9px;padding:9px 10px;display:flex;flex-direction:column;gap:7px">
@@ -2928,13 +3118,18 @@ class App extends Component {
                   </select>
                   <input class="inp" value=${r.type === 'STATUS' ? 'HTTP status (100-599)' : r.type === 'FILE' ? 'the file of the step (source $.steps.<step>)' : r.target} readOnly=${r.type === 'STATUS' || r.type === 'FILE'} title=${r.type === 'FILE' ? 'Sends the file a step with body_codec fileCodec downloaded, with its Content-Type; BODY rules and the response handler do not apply' : r.type === 'STATUS' ? 'Sets the HTTP status of this response, e.g. from $.steps.<step>.status; wins over the fixed status' : ''} onInput=${set('target')} style=${`flex:1;min-width:120px;height:28px;border:1px solid #E4E1D8;border-radius:5px;padding:0 8px;font:12px ${MONO};background:${r.type === 'STATUS' || r.type === 'FILE' ? '#FAF9F6' : '#fff'};color:${r.type === 'STATUS' || r.type === 'FILE' ? '#6A6D75' : 'inherit'}`}/>
                   <span style="color:#ADA99E">←</span>
-                  ${r.source ? html`
+                  ${r.em ? html`
+                    <div style=${`flex:1.25;min-width:0;height:28px;display:flex;align-items:center;gap:6px;padding:0 4px 0 9px;border-radius:5px;background:oklch(0.96 0.025 25);font:11.5px ${MONO};color:oklch(0.42 0.13 25)`}>
+                      <span class="hscroll" style="flex:1;min-width:0" title=${'Error map ' + r.em + ': field ' + (r.emOut || '?') + ' of the first entry matching the conditions below'}>error map ${r.em} → ${r.emOut || '?'}</span>
+                      <button onClick=${() => updRule(r.id, x => { x.em = ''; x.emWhere = []; x.emOut = ''; })} title="Stop using the error map" style="border:0;background:none;color:oklch(0.5 0.1 25);cursor:pointer;font-size:13px;padding:0 3px">×</button>
+                    </div>` : r.source ? html`
                     <div style=${`flex:1.25;min-width:0;height:28px;display:flex;align-items:center;gap:6px;padding:0 4px 0 9px;border-radius:5px;background:oklch(0.96 0.025 255);font:11.5px ${MONO};color:oklch(0.38 0.12 255)`}>
                       <span class="hscroll" style="flex:1;min-width:0" title=${r.source}>${r.source}</span>
                       <button onClick=${() => updRule(r.id, x => { x.source = ''; })} style="border:0;background:none;color:oklch(0.5 0.08 255);cursor:pointer;font-size:13px;padding:0 3px">×</button>
                     </div>` : html`
                     <input class="inp" value=${r.constant} onInput=${set('constant')} placeholder="constant, or drop a field" style=${`flex:1.25;min-width:0;height:28px;border:1px dashed #C9C6BC;border-radius:5px;padding:0 9px;font:11.5px ${MONO};background:#FAF9F6`}/>`}
                 </div>
+                ${r.em && this.renderErrorMapRule(r, updRule)}
                 <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-left:26px">
                   ${r.lookup && html`<span style=${`display:flex;align-items:center;gap:4px;padding:2px 3px 2px 7px;border-radius:5px;background:oklch(0.96 0.03 160);font:11px ${MONO};color:oklch(0.38 0.1 160)`}>lookup ${r.lookup}<button onClick=${() => updRule(r.id, x => { x.lookup = ''; })} style="border:0;background:none;color:inherit;cursor:pointer;padding:0 3px">×</button></span>`}
                   ${r.conv && html`<span style=${`display:flex;flex:0 1 auto;max-width:100%;min-width:0;align-items:center;gap:2px;padding:2px 3px;border-radius:5px;background:${s.convEdit && s.convEdit.id === r.id ? 'oklch(0.9 0.06 300)' : 'oklch(0.95 0.03 300)'};font:11px ${MONO};color:oklch(0.4 0.13 300)`}><button class="hscroll" title=${'Edit converter · ' + r.conv} onClick=${() => this.openConv(r)} style=${`border:0;background:transparent;font:11px ${MONO};color:inherit;cursor:pointer;padding:0 4px;max-width:340px`}>${convLabel(r.conv)} ✎</button><button class="ro-hide" onClick=${() => updRule(r.id, x => { x.conv = ''; })} style="border:0;background:none;color:inherit;cursor:pointer;padding:0 3px">×</button></span>`}
@@ -2943,7 +3138,7 @@ class App extends Component {
                   <button onClick=${() => updRule(r.id, x => { x.required = !x.required; })} style=${`height:24px;border:1px solid ${r.required ? '#17181C' : '#E4E1D8'};background:${r.required ? '#17181C' : '#fff'};color:${r.required ? '#fff' : '#9A9CA2'};border-radius:5px;padding:0 8px;font:11px ${MONO};cursor:pointer`}>required</button>
                   <span style="flex:1"></span>
                   <span class="hscroll" title=${res.t} style=${`font:11px ${MONO};color:${res.c};max-width:300px`}>${res.t}</span>
-                  <button class="del" onClick=${() => this.ask(`Delete rule ${i + 1}?`, `${r.type} ${r.target || '(no target)'} ← ${r.source || (r.constant ? "'" + r.constant + "'" : '(nothing)')}. Nothing changes in the database until Save & reload.`, () => updRule(r.id, (x, list, idx) => { list.splice(idx, 1); }))} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:14px;padding:0 4px">×</button>
+                  <button class="del" onClick=${() => this.ask(`Delete rule ${i + 1}?`, `${r.type} ${r.target || '(no target)'} ← ${r.em ? 'error map ' + r.em : r.source || (r.constant ? "'" + r.constant + "'" : '(nothing)')}. Nothing changes in the database until Save & reload.`, () => updRule(r.id, (x, list, idx) => { list.splice(idx, 1); }))} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:14px;padding:0 4px">×</button>
                 </div>
                 ${r.conv && s.convEdit && s.convEdit.id === r.id && this.renderConvEditor(r, updRule)}
                 ${z.active && html`<div style=${`position:absolute;inset:-4px;border:1.5px dashed ${C.in};border-radius:11px;background:oklch(0.56 0.13 255 / 0.04);pointer-events:none`}></div>`}
@@ -2952,7 +3147,10 @@ class App extends Component {
             })}
             <div ...${zoneProps(newZone)} style=${`display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border:1.5px dashed ${nzBorder};background:${nzBg};border-radius:9px;color:#6A6D75;font-size:12px`}>
               <span>Drop a context field here to add a rule</span>
-              <button class="ro-hide" onClick=${addConst} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:500">+ Constant rule</button>
+              <span style="display:flex;gap:6px">
+                ${(s.cfg.errorMaps || []).length > 0 && html`<button class="ro-hide" onClick=${addMapRule} title=${'A rule whose value comes from an error map (' + s.cfg.errorMaps[0].code + '; drop another map on it to switch)'} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:500">+ Error map rule</button>`}
+                <button class="ro-hide" onClick=${addConst} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:500">+ Constant rule</button>
+              </span>
             </div>
           </div>
         </main>
@@ -2973,6 +3171,36 @@ class App extends Component {
             ${stored !== undefined && html`<button onClick=${() => this.ask('Reset the sample context?', 'Your edits to the sample are thrown away and a generated sample is used again.', () => this.setState(st => { const n = { ...st.samples }; delete n[f.code]; return { samples: n }; }, () => this.changed()), 'Reset')} style="margin-top:6px;border:1px solid #3A3C43;background:none;color:#C9CBD1;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px">Regenerate from rules</button>`}
           </details>
         </aside>
+      </div>`;
+  }
+
+  /** The conditions and output field of an error map rule (under its row in Mapping). */
+  renderErrorMapRule(r, updRule) {
+    const map = (this.state.cfg.errorMaps || []).find(m => m.code === r.em);
+    const fields = map ? emInfo(map.text).fields : [];
+    const opts = v => [...(v && !fields.includes(v) ? [v] : []), ...fields];
+    const sel = (value, onChange, title) => html`<select value=${value} title=${title} onChange=${e => onChange(e.currentTarget.value)} style=${`height:24px;border:1px solid #E4E1D8;border-radius:5px;background:#fff;font:11px ${MONO};padding:0 4px;max-width:180px`}>
+      <option value="">— field</option>${opts(value).map(k => html`<option value=${k}>${k}${fields.includes(k) ? '' : ' (not in the map)'}</option>`)}</select>`;
+    const where = r.emWhere || [];
+    const setW = (j, k, v) => updRule(r.id, x => { x.emWhere = (x.emWhere || []).map((w, n) => (n === j ? { ...w, [k]: v } : w)); });
+    return html`
+      <div style="margin-left:26px;padding:8px 10px;border:1px solid oklch(0.9 0.04 25);background:oklch(0.985 0.008 25);border-radius:7px;display:flex;flex-direction:column;gap:6px">
+        ${!map && html`<div style=${`font:11px ${MONO};color:oklch(0.5 0.18 25)`}>Error map ${r.em} does not exist (Error maps screen).</div>`}
+        ${where.map((w, j) => html`
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style=${`width:42px;font:600 10px ${MONO};color:#9A9CA2;letter-spacing:.04em`}>${j === 0 ? 'WHERE' : 'AND'}</span>
+            ${sel(w.field, v => setW(j, 'field', v), 'A field of the map entries')}
+            <span style="color:#ADA99E">=</span>
+            <input class="inp" value=${w.input} onInput=${e => setW(j, 'input', e.currentTarget.value)} placeholder="$.steps.x.body.errorCode, or a constant (drop a field)" title="Starts with $. : read from the context (request, steps, error). Anything else: compared as text"
+              style=${`flex:1;min-width:0;height:24px;border:1px ${/^\$\./.test(w.input.trim()) ? 'solid #E4E1D8' : 'dashed #C9C6BC'};border-radius:5px;padding:0 7px;font:11px ${MONO};background:${/^\$\./.test(w.input.trim()) ? 'oklch(0.97 0.02 255)' : '#fff'}`}/>
+            <button class="ro-hide" onClick=${() => updRule(r.id, x => { x.emWhere = x.emWhere.filter((_, n) => n !== j); })} title="Remove this condition" style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:13px;padding:0 3px">×</button>
+          </div>`)}
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span style=${`width:42px;font:600 10px ${MONO};color:#9A9CA2;letter-spacing:.04em`}>TAKE</span>
+          ${sel(r.emOut, v => updRule(r.id, x => { x.emOut = v; }), 'The field of the matching entry that becomes the value')}
+          <button class="ro-hide" onClick=${() => updRule(r.id, x => { x.emWhere = [...(x.emWhere || []), { field: '', input: '' }]; })} style="border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:2px 8px;cursor:pointer;font-size:11px;color:#6A6D75">+ condition</button>
+          <span style="font-size:11px;color:#9A9CA2">First entry where every condition is equal (compared as text). No match → the default below.</span>
+        </div>
       </div>`;
   }
 
@@ -3039,7 +3267,7 @@ class App extends Component {
       if (parts[0] === 'flow') {
         const i = this.state.cfg.flows.findIndex(f => f.code === parts[1]);
         if (i >= 0) this.setState({ screen: 'flow', cur: i, tab: ['pipeline', 'mapping', 'schemas', 'tests', 'rows'].includes(parts[2]) ? parts[2] : 'pipeline', sel: { kind: 'flow' }, scope: 'resp', preview: null }, () => this.changed());
-      } else if (['flows', 'targets', 'lookups', 'schemas'].includes(parts[0])) this.setState({ screen: parts[0] });
+      } else if (['flows', 'targets', 'lookups', 'schemas', 'errormaps'].includes(parts[0])) this.setState({ screen: parts[0] });
       return;
     }
     const copy = e.target.closest('[data-copy]');

@@ -7,6 +7,7 @@ import com.mhamzah.gateway.WireMockConfiguration;
 import com.mhamzah.gateway.config.FlowRegistryHolder;
 import com.mhamzah.gateway.mapping.JsonValues;
 import java.net.URI;
+import java.util.stream.StreamSupport;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -222,6 +223,44 @@ class StudioIntegrationTest {
         Response restored = call("PUT", "/studio/api/config", "studio-token", save(reread.get("version").asString(), original));
         assertThat(restored.status()).as(restored.text()).isEqualTo(200);
         assertThat(restored.json().get("version").asString()).isEqualTo(original.get("version").asString());
+    }
+
+    @Test
+    void anErrorMapSavedInStudioRemapsTheResponse() throws Exception {
+        ObjectNode original = config();
+        ObjectNode changed = original.deepCopy();
+        ((ArrayNode) changed.withArray("errorMaps")).addObject().put("code", "ACCOUNT_STATES").put("description", "test")
+                .put("text", "[{\"service\":\"core\",\"code\":\"A\",\"label\":\"Active account\"},"
+                        + "{\"service\":\"core\",\"code\":\"C\",\"label\":\"Closed account\"}]");
+        ObjectNode inquiry = flow(changed, "ACCOUNT_INQUIRY");
+        String step = inquiry.get("steps").get(0).get("name").asString();
+        ObjectNode rule = ((ArrayNode) inquiry.get("response")).addObject()
+                .put("type", "BODY").put("target", "$.statusLabel").put("defaultValue", "\"Unknown\"")
+                .put("errorMap", "ACCOUNT_STATES").put("errorMapOutput", "label");
+        rule.putArray("errorMapWhere").addObject().put("field", "code").put("source", "$.steps." + step + ".body.statusCd");
+        ((ArrayNode) rule.get("errorMapWhere")).addObject().put("field", "service").put("value", "core");
+
+        Response saved = call("PUT", "/studio/api/config", "studio-token", save(original.get("version").asString(), changed));
+        assertThat(saved.status()).as(saved.text()).isEqualTo(200);
+        Response r = call("GET", "/api/v1/accounts/1001", null, null);
+        assertThat(r.json().get("statusLabel").asString()).as(r.text()).isEqualTo("Active account");
+
+        ObjectNode reread = config();
+        assertThat(reread.get("errorMaps").get(0).get("code").asString()).isEqualTo("ACCOUNT_STATES");
+        JsonNode back = StreamSupport.stream(flow(reread, "ACCOUNT_INQUIRY").get("response").spliterator(), false)
+                .filter(x -> "$.statusLabel".equals(x.path("target").asString())).findFirst().orElseThrow();
+        assertThat(back.get("errorMap").asString()).isEqualTo("ACCOUNT_STATES");
+        assertThat(back.get("errorMapWhere").toString()).contains("\"source\":\"$.steps." + step + ".body.statusCd\"", "\"value\":\"core\"");
+
+        // a rule naming a map that does not exist is rejected, nothing is written
+        ObjectNode broken = reread.deepCopy();
+        ((ArrayNode) broken.get("errorMaps")).removeAll();
+        Response rejected = call("PUT", "/studio/api/config", "studio-token", save(reread.get("version").asString(), broken));
+        assertThat(rejected.status()).isEqualTo(422);
+        assertThat(rejected.text()).contains("error_map_code 'ACCOUNT_STATES' is not an error map");
+
+        Response restored = call("PUT", "/studio/api/config", "studio-token", save(reread.get("version").asString(), original));
+        assertThat(restored.status()).as(restored.text()).isEqualTo(200);
     }
 
     @Test

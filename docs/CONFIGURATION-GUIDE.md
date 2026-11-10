@@ -42,6 +42,7 @@ Seven tables hold the configuration:
 | `gw_flow_step` | one row per downstream call | every call to another system |
 | `gw_mapping_rule` | one row per field to write | building step requests and the client response |
 | `gw_lookup_entry` | code translation tables | translating codes, e.g. `A` → `ACTIVE`, and error mapping |
+| `gw_error_map` | error lists as JSON | picking one field (e.g. a friendly message) of the error entry that matches a code ([§3.5a](#35a-gw_error_map)) |
 | `gw_json_schema` | JSON Schemas | validating requests and responses |
 | `gw_target_system` | one row per downstream system: base URL (IP/host + port), timeouts | where the steps send their calls |
 | `gw_target_system_header` | fixed headers per downstream system | e.g. `X-Channel-Id`, API keys (as `${ENV}` placeholders) |
@@ -341,8 +342,11 @@ scripts/flow-changelog.sh export TRADE_CALLBACK,OTHER_FLOW                      
 | `converter` | | Format/convert the value ([§3.3.5](#335-converters)) |
 | `field_handler` | | `FieldHandler` bean for custom logic ([§5.1](#51-fieldhandler--one-field)) |
 | `required` | default `false` | Missing after default/lookup/converter/handler → error (instead of omitting the field) |
+| `error_map_code` | | Take the value from this `gw_error_map` instead of `source_path` / `constant_value` ([§3.5a](#35a-gw_error_map)) |
+| `error_map_where` | with `error_map_code` | JSON conditions: `[{"field": "errorCode", "source": "$.steps.x.body.errorCode"}, {"field": "service", "value": "trade"}]` |
+| `error_map_output` | with `error_map_code` | The field of the matching entry that becomes the value, e.g. `generalMessage` |
 
-Set exactly one of `source_path` / `constant_value`. The exception is a rule with a `field_handler`, which may have neither.
+Set exactly one of `source_path` / `constant_value`. The exceptions are a rule with a `field_handler`, which may have neither, and a rule with an `error_map_code`, which must have neither.
 
 #### 3.3.1 What a rule can read
 
@@ -391,7 +395,7 @@ Writing creates missing objects and arrays automatically: `$.data.account.no` pr
 
 For each rule, in `seq` order:
 
-1. **value**: `constant_value`, or read `source_path`
+1. **value**: `constant_value`, or read `source_path`, or the `error_map_output` field of the first `error_map_code` entry matching `error_map_where`
 2. **default**: if the value is missing or `null`, use `default_value`
 3. **lookup**: if `lookup_code` is set, translate
 4. **converter**: if `converter` is set, convert
@@ -450,6 +454,34 @@ If nothing matches and there is no `*` row, the value passes through unchanged.
 ```sql
 INSERT INTO gw_lookup_entry (lookup_code, source_value, target_value) VALUES ('ACCOUNT_STATUS', 'A', 'ACTIVE');
 INSERT INTO gw_lookup_entry (lookup_code, source_value, target_value) VALUES ('ACCOUNT_STATUS', '*', 'UNKNOWN');
+```
+
+### 3.5a `gw_error_map`
+
+A list of errors as one JSON array of objects, with any fields, e.g. one entry per error code of a backend:
+
+```json
+[
+  {"service": "direct-trade", "httpStatus": 400, "errorCode": "VALIDATION_FAILED", "generalMessage": "Some of the data you entered is not valid."},
+  {"service": "direct-trade", "httpStatus": 409, "errorCode": "ALREADY_DECIDED", "generalMessage": "This task has already been processed by another user."}
+]
+```
+
+| Column | Meaning |
+|---|---|
+| `code` | Referenced by `gw_mapping_rule.error_map_code` |
+| `description` | Free text (Studio) |
+| `entries` | The JSON array; every element must be an object |
+
+A rule with `error_map_code` gets its value from the map: of the **first** entry whose fields equal every condition in `error_map_where`, the field `error_map_output`. A condition compares an entry field with a context value (`source`, e.g. `$.steps.backbone.body.errorCode` or, in an error response, `$.error.downstream.body.errorCode`) or with a constant (`value`). Values are compared as text, so `409` matches `"409"`. When no entry matches (or a `source` is missing), the value is missing and the rule's `default_value` applies; lookup, converter, field handler and `required` then work as for any rule. Several entries may share a code (e.g. one per message); match on more fields when the output differs between them.
+
+In Studio: **Error maps** (paste the JSON; it shows the entries, the fields found and which flows use it); in a flow's **Mapping**, drag a map from **ERROR MAPS** onto a rule or use **+ Error map rule**, then pick the conditions (a field, `=`, a `$.` path or a constant) and the field to **take**.
+
+```sql
+INSERT INTO gw_mapping_rule (flow_id, phase, seq, target_type, target_path, default_value, error_map_code, error_map_where, error_map_output)
+SELECT id, 'FLOW_RESPONSE', 2, 'BODY', '$.message', 'Your request cannot be processed right now.', 'BG_ERRORS',
+       '[{"field": "errorCode", "source": "$.error.downstream.body.errorCode"}]', 'generalMessage'
+FROM gw_flow WHERE code = 'BG_PRESIGN_UPLOAD_DOCUMENT';
 ```
 
 ### 3.5 `gw_json_schema`

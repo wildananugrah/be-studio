@@ -56,8 +56,13 @@ class StudioWriter {
         replaceSchemas(rows.schemas(), schemaDescriptions);
         // children first; the foreign keys cascade, but not every database honours that for bulk deletes
         for (String table : new String[] {t.mappingRule(), t.flowStep(), t.flowResponse(), t.flow(), t.targetSystemHeader(),
-                t.targetSystem(), t.lookupEntry(), t.storage(), t.application()}) {
+                t.targetSystem(), t.lookupEntry(), t.storage(), t.application(), t.errorMap()}) {
             jdbc.sql("DELETE FROM " + db.qualify(table)).update();
+        }
+        for (ConfigRows.ErrorMapRow r : rows.errorMaps()) {
+            jdbc.sql("INSERT INTO " + db.qualify(t.errorMap()) + " (code, description, entries) VALUES (?, ?, ?)")
+                    .params(r.code(), r.description(), r.entries())
+                    .update();
         }
         for (ConfigRows.ApplicationRow r : rows.applications()) {
             jdbc.sql("INSERT INTO " + db.qualify(t.application()) + " (code, name, description) VALUES (?, ?, ?)")
@@ -133,12 +138,13 @@ class StudioWriter {
         for (RuleRow r : rows.rules()) {
             jdbc.sql("INSERT INTO " + db.qualify(t.mappingRule())
                             + " (flow_id, step_id, phase, seq, target_type, target_path, source_path, constant_value,"
-                            + " default_value, converter, lookup_code, field_handler, required, response_name)"
-                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                            + " default_value, converter, lookup_code, field_handler, required, response_name,"
+                            + " error_map_code, error_map_where, error_map_output)"
+                            + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                     .params(flowIds.get(r.flowId()), r.stepId() == null ? null : stepIds.get(r.stepId()), r.phase(),
                             r.seq(), r.targetType(), r.targetPath(), r.sourcePath(), r.constantValue(),
                             r.defaultValue(), r.converter(), r.lookupCode(), r.fieldHandler(), r.required(),
-                            r.responseName())
+                            r.responseName(), r.errorMapCode(), r.errorMapWhere(), r.errorMapOutput())
                     .update();
         }
     }

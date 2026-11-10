@@ -55,7 +55,7 @@ final class ApplicationExport {
      */
     record Bundle(List<Application> applications, List<Flow> flows, List<Target> targets, List<Lookup> lookups,
             List<Schema> schemas, List<Storage> storages, Map<String, List<String>> requires,
-            List<String> replacedSecrets, boolean flowsOnly) {
+            List<String> replacedSecrets, boolean flowsOnly, List<StudioConfig.ErrorMap> errorMaps) {
 
         /** The (first) application: the exported one of an application export. */
         Application application() {
@@ -136,6 +136,7 @@ final class ApplicationExport {
         Set<String> targetCodes = new TreeSet<>();
         Set<String> schemaCodes = new TreeSet<>();
         Set<String> lookupCodes = new TreeSet<>();
+        Set<String> errorMapCodes = new TreeSet<>();
         Set<String> handlers = new TreeSet<>();
         Set<String> codecs = new TreeSet<>();
         for (Flow f : flows) {
@@ -146,8 +147,8 @@ final class ApplicationExport {
             if (f.errorHandler() == null || !f.errorHandler().startsWith(com.mhamzah.gateway.config.StepDefinition.RESPOND)) {
                 addIf(handlers, f.errorHandler()); // RESPOND:<response> is one of the flow's responses, not a bean
             }
-            f.response().forEach(r -> rule(r, lookupCodes, handlers));
-            f.responses().forEach(x -> x.rules().forEach(r -> rule(r, lookupCodes, handlers)));
+            f.response().forEach(r -> rule(r, lookupCodes, errorMapCodes, handlers));
+            f.responses().forEach(x -> x.rules().forEach(r -> rule(r, lookupCodes, errorMapCodes, handlers)));
             for (Step s : f.steps()) {
                 if (!com.mhamzah.gateway.config.StepDefinition.TRANSFORM.equals(s.targetSystem())
                         && !com.mhamzah.gateway.config.StepDefinition.CONDITION.equals(s.targetSystem())) {
@@ -157,7 +158,7 @@ final class ApplicationExport {
                 addIf(handlers, s.requestHandler());
                 addIf(handlers, s.responseHandler());
                 addIf(codecs, s.bodyCodec());
-                s.rules().forEach(r -> rule(r, lookupCodes, handlers));
+                s.rules().forEach(r -> rule(r, lookupCodes, errorMapCodes, handlers));
             }
         }
         addReferencedSchemas(config, schemaCodes);
@@ -167,6 +168,7 @@ final class ApplicationExport {
         List<Storage> storages = config.storages().stream().filter(s -> targetCodes.contains(s.code()))
                 .map(s -> withoutSecrets(s, secrets)).toList();
         List<Lookup> lookups = config.lookups().stream().filter(l -> lookupCodes.contains(l.code())).toList();
+        List<StudioConfig.ErrorMap> errorMaps = config.errorMaps().stream().filter(m -> errorMapCodes.contains(m.code())).toList();
         List<Schema> schemas = config.schemas().stream().filter(s -> schemaCodes.contains(s.code())).toList();
 
         // used by the flows but not exported: they live in application.yml or in code on the target gateway
@@ -189,7 +191,13 @@ final class ApplicationExport {
         if (!missingLookups.isEmpty()) {
             requires.put("lookupsNotFound", List.copyOf(missingLookups));
         }
-        return new Bundle(List.copyOf(apps), flows, targets, lookups, schemas, storages, requires, secrets, flowsOnly);
+        Set<String> missingErrorMaps = new TreeSet<>(errorMapCodes);
+        errorMaps.forEach(m -> missingErrorMaps.remove(m.code()));
+        if (!missingErrorMaps.isEmpty()) {
+            requires.put("errorMapsNotFound", List.copyOf(missingErrorMaps));
+        }
+        return new Bundle(List.copyOf(apps), flows, targets, lookups, schemas, storages, requires, secrets, flowsOnly,
+                errorMaps);
     }
 
     /** Adds the schemas the given ones reference with gw:CODE, transitively; unknown codes stay for schemasNotFound. */
@@ -214,8 +222,9 @@ final class ApplicationExport {
         }
     }
 
-    private static void rule(Rule r, Set<String> lookups, Set<String> handlers) {
+    private static void rule(Rule r, Set<String> lookups, Set<String> errorMaps, Set<String> handlers) {
         addIf(lookups, r.lookup());
+        addIf(errorMaps, r.errorMap());
         addIf(handlers, r.fieldHandler());
     }
 
@@ -256,7 +265,8 @@ final class ApplicationExport {
 
     /** The bundle as a config Studio can merge (flows, shared items) plus what it needs. */
     static StudioConfig asConfig(Bundle b) {
-        return new StudioConfig(null, b.flows(), b.targets(), b.lookups(), b.schemas(), b.storages(), b.applications());
+        return new StudioConfig(null, b.flows(), b.targets(), b.lookups(), b.schemas(), b.storages(), b.applications(),
+                b.errorMaps());
     }
 
     // ------------------------------------------------------------------ JSON
@@ -277,6 +287,7 @@ final class ApplicationExport {
         out.put("lookups", b.lookups());
         out.put("schemas", b.schemas());
         out.put("storages", b.storages());
+        out.put("errorMaps", b.errorMaps());
         out.put("requires", b.requires());
         out.put("replacedSecrets", b.replacedSecrets());
         return JsonValues.MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(out);
@@ -353,6 +364,11 @@ final class ApplicationExport {
                     List.of(new Insert("json_schema", List.of(Col.v("code", s.code()), Col.v("schema_text", s.text()),
                             Col.v("description", s.description()))))));
         }
+        for (ConfigRows.ErrorMapRow m : rows.errorMaps()) {
+            shared.add(new Shared("error-map-" + m.code(), "SELECT COUNT(*) FROM {error_map} WHERE code = " + quote(m.code()),
+                    List.of(new Insert("error_map", List.of(Col.v("code", m.code()), Col.v("description", m.description()),
+                            Col.v("entries", m.entries()))))));
+        }
         for (ConfigRows.StorageRow s : rows.storages()) {
             shared.add(new Shared("storage-" + s.code(), "SELECT COUNT(*) FROM {storage} WHERE code = " + quote(s.code()),
                     List.of(new Insert("storage", List.of(Col.v("code", s.code()), Col.v("storage_type", s.storageType()),
@@ -399,7 +415,7 @@ final class ApplicationExport {
         for (RuleRow r : rows.rules()) {
             String code = flowCode.get(r.flowId());
             StepRow step = r.stepId() == null ? null : stepById.get(r.stepId());
-            flows.add(new Insert("mapping_rule", List.of(Col.expr("flow_id", flowId(code)),
+            flows.add(new Insert("mapping_rule", optional(List.of(Col.expr("flow_id", flowId(code)),
                     step == null ? Col.v("step_id", null)
                             : Col.expr("step_id", "(SELECT s.id FROM {flow_step} s JOIN {flow} f ON f.id = s.flow_id WHERE f.code = "
                                     + quote(code) + " AND s.name = " + quote(step.name()) + ")"),
@@ -408,10 +424,19 @@ final class ApplicationExport {
                     Col.v("constant_value", r.constantValue()), Col.v("default_value", r.defaultValue()),
                     Col.v("converter", r.converter()), Col.v("lookup_code", r.lookupCode()),
                     Col.v("field_handler", r.fieldHandler()), Col.v("required", r.required()),
-                    Col.v("response_name", r.responseName()))));
+                    Col.v("response_name", r.responseName())), r)));
         }
         List<String> flowCodes = rows.flows().stream().map(FlowRow::code).toList();
         return new Plan(app, b.flowsOnly() ? codeIn(flowCodes) : flowsOfApp(app, flowCodes), application, shared, flows);
+    }
+
+    /** A rule's columns plus its error map columns when it uses one (so other exports run on a schema without them). */
+    private static List<Col> optional(List<Col> cols, RuleRow r) {
+        if (r.errorMapCode() == null) {
+            return cols;
+        }
+        return optional(optional(optional(cols, "error_map_code", r.errorMapCode()), "error_map_where", r.errorMapWhere()),
+                "error_map_output", r.errorMapOutput());
     }
 
     /** The columns plus {@code name} when it is set: an export without overrides still runs on a schema without it. */

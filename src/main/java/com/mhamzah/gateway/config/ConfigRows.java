@@ -13,7 +13,14 @@ public record ConfigRows(
         List<TargetHeaderRow> targetHeaders,
         List<StorageRow> storages,
         List<ApplicationRow> applications,
-        List<ResponseRow> responses) {
+        List<ResponseRow> responses,
+        List<ErrorMapRow> errorMaps) {
+
+    public ConfigRows(List<FlowRow> flows, List<StepRow> steps, List<RuleRow> rules, List<LookupRow> lookups,
+            List<SchemaRow> schemas, List<TargetRow> targets, List<TargetHeaderRow> targetHeaders,
+            List<StorageRow> storages, List<ApplicationRow> applications, List<ResponseRow> responses) {
+        this(flows, steps, rules, lookups, schemas, targets, targetHeaders, storages, applications, responses, List.of());
+    }
 
     public ConfigRows(List<FlowRow> flows, List<StepRow> steps, List<RuleRow> rules, List<LookupRow> lookups,
             List<SchemaRow> schemas, List<TargetRow> targets, List<TargetHeaderRow> targetHeaders,
@@ -36,6 +43,7 @@ public record ConfigRows(
         storages = storages == null ? List.of() : List.copyOf(storages);
         applications = applications == null ? List.of() : List.copyOf(applications);
         responses = responses == null ? List.of() : List.copyOf(responses);
+        errorMaps = errorMaps == null ? List.of() : List.copyOf(errorMaps);
         flows = List.copyOf(flows);
         steps = List.copyOf(steps);
         rules = List.copyOf(rules);
@@ -330,7 +338,26 @@ public record ConfigRows(
             String lookupCode,
             String fieldHandler,
             boolean required,
-            String responseName) {
+            String responseName,
+            String errorMapCode,
+            String errorMapWhere,
+            String errorMapOutput) {
+
+        public RuleRow(long id, long flowId, Long stepId, String phase, int seq, String targetType, String targetPath,
+                String sourcePath, String constantValue, String defaultValue, String converter, String lookupCode,
+                String fieldHandler, boolean required, String responseName) {
+            this(id, flowId, stepId, phase, seq, targetType, targetPath, sourcePath, constantValue, defaultValue,
+                    converter, lookupCode, fieldHandler, required, responseName, null, null, null);
+        }
+
+        /**
+         * Takes the value from error map {@code code}: of the first entry whose fields equal {@code where} (JSON
+         * {@code [{"field", "source" | "value"}]}), its field {@code output}.
+         */
+        public RuleRow withErrorMap(String code, String where, String output) {
+            return new RuleRow(id, flowId, stepId, phase, seq, targetType, targetPath, sourcePath, constantValue,
+                    defaultValue, converter, lookupCode, fieldHandler, required, responseName, code, where, output);
+        }
 
         /** A rule of a step or of the default response ({@code response_name} null). */
         public RuleRow(long id, long flowId, Long stepId, String phase, int seq, String targetType, String targetPath,
@@ -346,6 +373,9 @@ public record ConfigRows(
 
     /** {@code gw_json_schema}. */
     public record SchemaRow(long id, String code, String schemaText) {}
+
+    /** {@code gw_error_map}: {@code entries} is a JSON array of objects (one per error, any fields). */
+    public record ErrorMapRow(long id, String code, String description, String entries) {}
 
     /**
      * {@code gw_target_system}: a downstream system. {@code baseUrl}, the TLS stores and their passwords may contain

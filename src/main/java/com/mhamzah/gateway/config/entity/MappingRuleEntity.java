@@ -26,11 +26,16 @@ public class MappingRuleEntity {
     private String fieldHandler;
     private boolean required;
     private String responseName;
+    private String errorMapCode;
+    /** CLOB / text: the JSON conditions of an error map rule. */
+    private String errorMapWhere;
+    private String errorMapOutput;
 
     protected MappingRuleEntity() {}
 
     public RuleRow toRow() {
         return new RuleRow(id, flowId, stepId, phase, seq, targetType, targetPath, sourcePath, constantValue,
-                defaultValue, converter, lookupCode, fieldHandler, required, responseName);
+                defaultValue, converter, lookupCode, fieldHandler, required, responseName, errorMapCode, errorMapWhere,
+                errorMapOutput);
     }
 }

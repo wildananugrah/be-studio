@@ -22,6 +22,7 @@
     <property name="tbl.storage" value="gw_storage"/>
     <property name="tbl.application" value="gw_application"/>
     <property name="tbl.flow_response" value="gw_flow_response"/>
+    <property name="tbl.error_map" value="gw_error_map"/>
 
     <include file="changes/001-config-tables.xml" relativeToChangelogFile="true"/>
     <include file="changes/002-audit-tables.xml" relativeToChangelogFile="true"/>
@@ -61,4 +62,5 @@
     <!-- after the dev data, which fills in the demo flows' service codes first -->
     <include file="changes/019-flow-service-code-not-null.xml" relativeToChangelogFile="true"/>
     <include file="changes/021-flow-service-code-length.xml" relativeToChangelogFile="true"/>
+    <include file="changes/022-error-map.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

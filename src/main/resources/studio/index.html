@@ -44,6 +44,13 @@ input[type=search]::-webkit-search-cancel-button,input[type=search]::-webkit-sea
 .ro [draggable=true]{cursor:default!important}
 /* SQL editor: the highlighted copy must keep the textarea's glyph widths, so no bold there */
 .sqled pre span{font-weight:inherit!important}
+/* CodeArea: the textarea stays transparent over its highlighted copy (also focused and in view-only mode);
+   its native scrollbars are hidden, the editor draws its own that are always visible */
+.code-ta,.code-ta:focus,.ro .code-ta{background:transparent!important;scrollbar-width:none}
+.code-ta::-webkit-scrollbar{display:none}
+.code-ta::selection{background:oklch(0.62 0.17 42 / 0.25)}
+.code-area:focus-within{border-color:var(--acc)!important}
+.code-area pre span{font-weight:inherit!important}
 .sqled textarea::selection{background:oklch(0.62 0.17 42 / 0.25)}
 /* syntax highlighting: .code-light on white panels, .code-dark on the dark ones */
 .code-light .t-kw{color:oklch(0.48 0.17 300);font-weight:600}.code-light .t-str{color:oklch(0.5 0.14 150)}

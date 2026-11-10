@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Error maps (Gateway Studio > Error maps): a JSON array of objects, e.g. one per error code with its HTTP status,
+        service and messages. A mapping rule with error_map_code takes its value from the map instead of source_path /
+        constant_value: the first entry whose fields equal the rule's conditions (error_map_where, JSON
+        [{"field": "errorCode", "source": "$.steps.x.body.errorCode"}, {"field": "service", "value": "trade"}]),
+        and from it the field error_map_output. No entry matches: the rule's default_value.
+    -->
+    <changeSet id="022-gw-error-map" author="json-gateway">
+        <createTable tableName="${tbl.error_map}">
+            <column name="id" type="bigint" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="${tbl.error_map}_PK" nullable="false"/>
+            </column>
+            <column name="code" type="varchar(100)">
+                <constraints nullable="false" unique="true" uniqueConstraintName="${tbl.error_map}_UK1"/>
+            </column>
+            <column name="description" type="varchar(500)"/>
+            <column name="entries" type="clob">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addColumn tableName="${tbl.mapping_rule}">
+            <column name="error_map_code" type="varchar(100)"/>
+            <column name="error_map_where" type="clob"/>
+            <column name="error_map_output" type="varchar(100)"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

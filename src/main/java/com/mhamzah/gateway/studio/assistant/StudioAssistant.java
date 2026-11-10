@@ -287,7 +287,8 @@ public class StudioAssistant {
         List<StudioConfig.Storage> storages = c.storages().stream().map(s -> new StudioConfig.Storage(s.code(), s.type(),
                 s.baseDir(), s.bucket(), s.prefix(), s.region(), s.endpoint(), s.pathStyle(), secret(s.accessKey()),
                 secret(s.secretKey()), s.allowedTypes(), s.maxSize(), s.enabled())).toList();
-        return new StudioConfig(c.version(), c.flows(), targets, c.lookups(), c.schemas(), storages, c.applications());
+        return new StudioConfig(c.version(), c.flows(), targets, c.lookups(), c.schemas(), storages, c.applications(),
+                c.errorMaps());
     }
 
     /** Placeholders show where a secret comes from; literal secrets are masked. */

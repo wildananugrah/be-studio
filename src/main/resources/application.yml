@@ -126,6 +126,7 @@ gateway:
       storage: gw_storage
       application: gw_application
       flow-response: gw_flow_response
+      error-map: gw_error_map
     liquibase-tables:
       changelog: gw_db_changelog
       changelog-lock: gw_db_changelog_lock

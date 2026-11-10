@@ -55,6 +55,27 @@ class ApplicationExportTest {
         assertThat(bundle.replacedSecrets()).isNotEmpty();
     }
 
+    @Test
+    void errorMapsUsedByRulesAreExportedAsSharedItems() {
+        StudioConfig.Rule rule = new StudioConfig.Rule("BODY", "$.message", null, null, null, null, null, null, false,
+                "BG_ERRORS", List.of(new StudioConfig.Where("errorCode", "$.error.downstream.body.errorCode", null)),
+                "generalMessage");
+        Flow flow = new Flow("PAYMENT", "PAYMENT", "POST", "/payment", null, null, null, null, null, 200, null, "INHERIT",
+                true, List.of(), List.of(rule), "PAY");
+        StudioConfig config = new StudioConfig(null, List.of(flow), List.of(), List.of(), List.of(), List.of(),
+                List.of(new StudioConfig.Application("PAY", "Payments", null)),
+                List.of(new StudioConfig.ErrorMap("BG_ERRORS", "errors", "[{\"errorCode\":\"X\",\"generalMessage\":\"Y\"}]"),
+                        new StudioConfig.ErrorMap("UNUSED", null, "[]")));
+
+        ApplicationExport.Bundle bundle = ApplicationExport.bundle(config, "PAY");
+
+        assertThat(bundle.errorMaps()).extracting(StudioConfig.ErrorMap::code).containsExactly("BG_ERRORS");
+        assertThat(ApplicationExport.json(bundle, "test")).contains("\"errorMaps\"", "BG_ERRORS").doesNotContain("UNUSED");
+        String sql = ApplicationExport.sql(bundle, ApplicationExport.Dialect.POSTGRES, TABLES, "test");
+        assertThat(sql).contains("INSERT INTO gw_error_map", "error_map_code", "'generalMessage'",
+                "[{\"field\":\"errorCode\",\"source\":\"$.error.downstream.body.errorCode\"}]");
+    }
+
     private static final GatewayProperties.Tables TABLES = new GatewayProperties.Tables("gw_flow", "gw_flow_step",
             "gw_mapping_rule", "gw_lookup_entry", "gw_json_schema", "gw_audit_transaction", "gw_audit_step",
             "gw_target_system", "gw_target_system_header", "gw_storage", "gw_application", "gw_flow_response");

@@ -202,11 +202,15 @@ public class StudioService {
         return errors;
     }
 
-    /** Schemas without text are already reported by {@link StudioRows#problems}; the compiler cannot parse them. */
+    /**
+     * Schemas and error maps without text are already reported by {@link StudioRows#problems}; the compiler cannot
+     * parse them.
+     */
     private static ConfigRows withoutEmptySchemas(ConfigRows rows) {
         return new ConfigRows(rows.flows(), rows.steps(), rows.rules(), rows.lookups(),
                 rows.schemas().stream().filter(x -> x.schemaText() != null && !x.schemaText().isBlank()).toList(),
-                rows.targets(), rows.targetHeaders(), rows.storages(), rows.applications(), rows.responses());
+                rows.targets(), rows.targetHeaders(), rows.storages(), rows.applications(), rows.responses(),
+                rows.errorMaps().stream().filter(m -> m.entries() != null && !m.entries().isBlank()).toList());
     }
 
     /** Outcome of {@link #save}. */
@@ -264,7 +268,7 @@ public class StudioService {
                 flow.steps().stream().map(StudioService::enabled).toList(), flow.response(), null, flow.responses(),
                 flow.schemaValidation(), flow.serviceCode());
         StudioConfig single = new StudioConfig(null, List.of(only), draft.targets(), draft.lookups(), draft.schemas(),
-                draft.storages());
+                draft.storages(), List.of(), draft.errorMaps());
         FlowRegistry registry;
         try {
             registry = compiler.compile(withoutEmptySchemas(StudioRows.toRows(single)));

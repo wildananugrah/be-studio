@@ -24,6 +24,18 @@ public final class Rows {
     private final List<TargetRow> targets = new ArrayList<>();
     private final List<TargetHeaderRow> targetHeaders = new ArrayList<>();
     private final List<ConfigRows.ResponseRow> responses = new ArrayList<>();
+    private final List<ConfigRows.ErrorMapRow> errorMaps = new ArrayList<>();
+
+    /** gw_error_map row: {@code entries} is the JSON array. */
+    public void errorMap(String code, String entries) {
+        errorMaps.add(new ConfigRows.ErrorMapRow(ids.getAndIncrement(), code, null, entries));
+    }
+
+    /** Replaces {@code rule} (same id) with {@code changed}, e.g. {@code r.withErrorMap(...)}. */
+    public RuleRow replace(RuleRow rule, RuleRow changed) {
+        rules.replaceAll(x -> x.id() == rule.id() ? changed : x);
+        return changed;
+    }
 
     /** A named client response of {@code flow}. */
     public ConfigRows.ResponseRow response(FlowRow flow, String name, Integer status) {
@@ -119,6 +131,6 @@ public final class Rows {
 
     public ConfigRows build() {
         return new ConfigRows(flows, steps, rules, lookups, schemas, targets, targetHeaders, List.of(), applications,
-                responses);
+                responses, errorMaps);
     }
 }

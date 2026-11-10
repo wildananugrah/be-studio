@@ -326,6 +326,56 @@ class FlowExecutorTest {
                 .anySatisfy(m -> assertThat(m).contains("response_validation 'MAYBE' must be INHERIT, ON or OFF")));
     }
 
+    private static final String ERRORS = """
+            [{"service":"trade","httpStatus":400,"errorCode":"VALIDATION_FAILED","generalMessage":"Some data is not valid."},
+             {"service":"trade","httpStatus":409,"errorCode":"ALREADY_DECIDED","generalMessage":"Already processed."},
+             {"service":"account","httpStatus":409,"errorCode":"ALREADY_DECIDED","generalMessage":"Account already processed."}]""";
+
+    @Test
+    void anErrorMapRuleTakesOneFieldOfTheMatchingEntry() {
+        rows.errorMap("ERRORS", ERRORS);
+        var flow = rows.flow("F", "POST", "/f");
+        rows.step(flow, "s", 1);
+        var byCode = rows.responseRule(flow, "$.message", null);
+        rows.replace(byCode, byCode.withErrorMap("ERRORS",
+                "[{\"field\":\"errorCode\",\"source\":\"$.steps.s.body.code\"},{\"field\":\"service\",\"value\":\"account\"}]",
+                "generalMessage"));
+        // "409" (text) matches "httpStatus": 409 (a number) in the map; nothing matches -> default_value
+        var byStatus = rows.rule(flow.id(), null, "FLOW_RESPONSE", "BODY", "$.byStatus", null, null);
+        rows.replace(byStatus, new com.mhamzah.gateway.config.ConfigRows.RuleRow(byStatus.id(), flow.id(), null, "FLOW_RESPONSE",
+                byStatus.seq(), "BODY", "$.byStatus", null, null, "\"Unknown error\"", null, null, null, false, null)
+                .withErrorMap("ERRORS", "[{\"field\":\"httpStatus\",\"source\":\"$.steps.s.body.status\"}]", "errorCode"));
+        downstream.ok("/s", "{\"code\":\"ALREADY_DECIDED\",\"status\":\"409\"}");
+
+        var r = run("POST", "/f", "{}");
+        assertThat(r.response().body().toString()).isEqualTo("{\"message\":\"Account already processed.\",\"byStatus\":\"ALREADY_DECIDED\"}");
+
+        downstream.ok("/s", "{\"code\":\"NOPE\",\"status\":500}");
+        assertThat(run("POST", "/f", "{}").response().body().toString()).isEqualTo("{\"byStatus\":\"Unknown error\"}");
+    }
+
+    @Test
+    void errorMapMistakesAreReportedOnReload() {
+        rows.errorMap("BROKEN", "{\"not\":\"an array\"}");
+        rows.errorMap("ERRORS", ERRORS);
+        var flow = rows.flow("F", "POST", "/f");
+        var unknown = rows.responseRule(flow, "$.a", null);
+        rows.replace(unknown, unknown.withErrorMap("MISSING", "[{\"field\":\"errorCode\",\"value\":\"X\"}]", "generalMessage"));
+        var both = rows.responseRule(flow, "$.b", "$.request.body.x");
+        rows.replace(both, both.withErrorMap("ERRORS", "[{\"field\":\"errorCode\",\"value\":\"X\"}]", null));
+        var noWhere = rows.responseRule(flow, "$.c", null);
+        rows.replace(noWhere, noWhere.withErrorMap("ERRORS", "[]", "generalMessage"));
+        var badStep = rows.responseRule(flow, "$.d", null);
+        rows.replace(badStep, badStep.withErrorMap("ERRORS", "[{\"field\":\"errorCode\",\"source\":\"$.steps.ghost.body.code\"}]", "generalMessage"));
+        assertThatThrownBy(this::registry).isInstanceOfSatisfying(ConfigValidationException.class, e -> assertThat(e.errors())
+                .anySatisfy(m -> assertThat(m).contains("error map 'BROKEN': entries must be a JSON array of objects"))
+                .anySatisfy(m -> assertThat(m).contains("error_map_code 'MISSING' is not an error map"))
+                .anySatisfy(m -> assertThat(m).contains("takes its value from the map: leave source_path and constant_value empty"))
+                .anySatisfy(m -> assertThat(m).contains("error_map_output (the field to take from the matching entry) is required"))
+                .anySatisfy(m -> assertThat(m).contains("error_map_where needs at least one condition"))
+                .anySatisfy(m -> assertThat(m).contains("references unknown step 'ghost'")));
+    }
+
     @Test
     void listResponseFromDownstreamIsAnArrayForTheClient() {
         rows.schema("LIST", "{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"id\"]}}");
