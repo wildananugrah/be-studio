@@ -1,93 +1,242 @@
-# Api-Gateway-Backend
+# JSON Gateway
 
+A Spring Boot service that receives JSON requests, transforms them, calls one or more downstream services (JSON, plain XML or SOAP), and transforms the results into a JSON response. Routing, mappings, orchestration and validation are **configured in database tables** and loaded at startup. Logic that config can't express goes into small custom Java classes.
 
+Design spec: [`docs/superpowers/specs/2026-10-08-json-gateway-design.md`](docs/superpowers/specs/2026-10-08-json-gateway-design.md)
 
-## Getting started
+## Running locally
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+Requirements: JDK 25 and Docker. The quickest way is the Makefile. See **[docs/MAKEFILE.md](docs/MAKEFILE.md)** for every target.
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
-```
-cd existing_repo
-git remote add origin https://gitlab-dc.bni.co.id/tbplatform/api-gateway-backend.git
-git branch -M master
-git push -uf origin master
+```bash
+make up      # PostgreSQL + WireMock via docker-compose.yml
+make run     # app on :8080 with the demo flows
+make demo    # call every demo flow (second terminal)
+make down
 ```
 
-## Integrate with your tools
+**API documentation:** open **http://localhost:8080/docs** (Swagger UI) with `make run` (the `dev` profile turns it on; elsewhere set `gateway.docs.enabled: true` or `GATEWAY_DOCS_ENABLED=true`). It lists every enabled flow with its parameters and bodies, generated from the database configuration, and updates after `make reload`. Endpoints are grouped by application (one section per `gw_application`, named by its code and described by its name and description; flows without one under **Flows**), and **Select a definition** in the top bar shows one application at a time. The raw OpenAPI 3.1 description is at `/docs/openapi.json`, or per application at `/docs/openapi.json?application=CORE_BANKING_API` (import either into Postman or a client generator; an unknown application gives 404).
 
-* [Set up project integrations](https://gitlab-dc.bni.co.id/tbplatform/api-gateway-backend/-/settings/integrations)
+**Gateway Studio:** open **http://localhost:8080/studio** and enter the admin token (`dev-admin-token` with `make run`). It is a browser editor for flows (drag-and-drop pipeline, mapping rules with a live preview run by the server), target systems, lookups, error maps and JSON schemas (draft 2020-12, in an editor with JSON syntax highlighting; write one, generate it from an example JSON document, or start one from a flow's sample data with **+ New schema** under a schema field). Edits stay in the page until **Save & reload**, which validates the whole configuration with the same checks as a reload, replaces the config rows in one transaction and reloads; an invalid config is rejected with 422 and nothing is written, and a save based on an out-of-date copy is rejected with 409. The **Rows (SQL)** tab gives the INSERTs for a flow, to commit as a Liquibase changeset for other environments. It is on with the `dev` profile and off otherwise (`gateway.studio.enabled`). Converters on a mapping rule open an editor with plain fields for their formats (from/to date format with common choices such as `ddMMyyyy` or `MMddyyyy`, padding length and character, substring positions, decimal places) and a **Try it** box that runs the real converter on a sample value.
 
-## Collaborate with your team
+**File uploads:** flows accept `multipart/form-data` (text fields in `$.request.body`, files in `$.request.files.<field>`), `application/x-www-form-urlencoded` forms and raw binary bodies (PDF, images, Office files, …), not only JSON. A **file storage step** stores the upload in a local directory or an S3 bucket (S3-compatible servers such as MinIO too), configured in Gateway Studio → **Storages** (table `gw_storage`, with `${ENV}` placeholders for keys and a **Test connection** button; applies on save, no restart) or in `application.yml` (`gateway.storages`) under a key like `/{yyyy}/{MM}/{uuid}-{filename}`, after checking the storage's allowed types and size; the result (key, location, size, sha256) is mapped for the client. Example: `POST /api/v1/files` (multipart), `POST /api/v1/documents` (raw body), `DELETE /api/v1/files/{yyyy}/{MM}/{name}` (dev profile). See [CONFIGURATION-GUIDE §4.18](docs/CONFIGURATION-GUIDE.md#418-file-uploads-local-storage-and-s3).
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+**Database query steps:** besides calling downstream systems over HTTP, a step can run one SQL statement on a database from `gateway.sql.datasources` (the gateway's own database as `GATEWAY_DB`, read-only by default, or any other JDBC URL). Its `:name` parameters come from the step's request mapping (path, query string, headers or body, with converters and defaults) and are always bound, never pasted into the SQL; the rows come back as JSON (`$.steps.<step>.body.rows`) for the response mapping. In Studio drag **Query GATEWAY_DB** onto the pipeline and write the SQL in an editor with syntax highlighting. Example: `GET /api/v1/sql/users/{id}` and `GET /api/v1/sql/users?q=&status=&limit=` over `tbl_ms_user` (dev profile). See [CONFIGURATION-GUIDE §4.17](docs/CONFIGURATION-GUIDE.md#417-query-a-database).
 
-## Test and Deploy
+**Unit test documents:** a flow's **Tests** tab in Gateway Studio generates test cases from the flow's operation in the API description (the Swagger one): a happy path, required fields only, one per missing required field or parameter and, when the flow has a request schema, one per field sent with the wrong type. Edit them or add your own, then **Run**: each case is sent through this gateway over HTTP with its own `X-Correlation-Id`, so the downstream systems are really called. Per case the evidence is the incoming request (client to gateway), the outgoing requests (gateway to downstream), the incoming responses (downstream to gateway), the outgoing response (gateway to client), the audit rows and the log lines of that correlation ID, with `gateway.masking.fields` masked. Download it as Word (.docx), PDF or Markdown. The audit trail is only there when the flow is audited: `gateway.audit.enabled=true` (`GATEWAY_AUDIT_ENABLED`) with `audit_mode` INHERIT, or `audit_mode` ON. Tests run against the live (saved) configuration; the last 20 runs are kept in memory for download.
 
-Use the built-in continuous integration in GitLab.
+**SNAP responses (Bank Indonesia):** every flow has a required two-character **service code** (`gw_flow.service_code`, unique within its application). A flow with `response_handler = snapResponseHandler` and `error_handler = snapErrorHandler` answers in the SNAP format: `{"responseCode": "4032414", "responseMessage": "Insufficient Funds", ..., "additionalInfo": {...}}`, where `responseCode` = HTTP status + service code + case code. The 63 SNAP codes and their messages are the lookup `SNAP_RESPONSE_CODE`; each downstream's codes, text or numbers, are translated by a lookup `SNAP_ERR_<target system>`; `additionalInfo` is optional and comes from the rules of a named response `additionalInfo`. All rows, editable in Studio. Example: `POST /api/v1/snap/transfers` (dev profile). See [CONFIGURATION-GUIDE §4.19](docs/CONFIGURATION-GUIDE.md#419-snap-responses-bank-indonesia).
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+**Error maps:** paste a list of errors as JSON (Studio → **Error maps**, table `gw_error_map`), for example one entry per backend error code with its HTTP status, service and messages, and let a mapping rule pick one field of the matching entry: say `messageEn` where `httpStatus` and `errorCode` equal the backend's. A condition can also match as a **template**, for messages that carry values: the entry `Aplikasi {applicationNo} tidak dalam status DRAFT.` matches the backend's `Aplikasi LC-2026-0042 tidak dalam status DRAFT.`, and **fill {placeholders}** puts `LC-2026-0042` into the output. When several entries match, the most specific comes first and the rule's **index** picks one; no match gives the rule's default. Every lookup is logged (the values compared, how many entries matched, which one was taken), so it shows in the call's logs in the audit trail. See [CONFIGURATION-GUIDE §3.5a](docs/CONFIGURATION-GUIDE.md#35a-gw_error_map) and [recipe 4.20](docs/CONFIGURATION-GUIDE.md#420-friendly-error-messages-from-an-error-list).
 
-***
+**Schema validation per flow and step:** a flow's `schema_validation` (BOTH, REQUEST, RESPONSE or NONE) chooses which of its schemas are checked at run time, and a step's `response_validation` (INHERIT, ON, OFF) overrides it for that step's response. A schema that is not checked is still used for mapping, the API docs and the spec documents. See [CONFIGURATION-GUIDE §3.1](docs/CONFIGURATION-GUIDE.md#31-gw_flow).
 
-# Editing this README
+**Applications and export:** every flow belongs to an application (`gw_application`; Studio's **+ New flow** asks for it first, and the Flows page groups flows by application). An application's whole configuration (its flows, steps and mapping rules, plus the target systems, lookups, error maps, JSON schemas and storages they use) exports as **JSON** (Studio's **Import application…** loads it on another gateway), a **SQL** script (PostgreSQL or Oracle) or a **Liquibase** changelog. Applying it replaces that application and only adds shared items that are missing. See [§3.1a](docs/CONFIGURATION-GUIDE.md#31a-gw_application).
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+**API specification documents:** the same API description also gives a spec document, as Word, PDF or Markdown: the Tests tab downloads one endpoint's; on the Flows page you pick the applications and endpoints that go into one document and their order, and the document follows that order with a table of contents (page numbers and links in PDF and Word). Per endpoint: URL, parameters, request and response fields with type, mandatory/optional and the schema's constraints, an example request and response, and the errors it can return; plus the common error response format. Attach request/response schemas to flows for exact types and lengths.
 
-## Suggestions for a good README
+**Audit trail:** Studio's **Audit trail** menu lists every audited call (newest first; filter by flow, status, correlation ID / path / error code and time) and shows each one as a timeline: the client request, every step's request *after mapping* with its URL and the downstream response, the client response, and the call's log lines. A failed step also shows **why** it failed (for example a `success_expr` that was false on a 2xx, or the response schema it did not match; stored in `gw_audit_step.error_message`), and the logs include each error map lookup. It is the quickest way to check that a flow and its mappings do what you meant. It reads `gw_audit_transaction` / `gw_audit_step` (so `gateway.audit.enabled` or the flow's `audit_mode=ON` must be on) and keeps recent log lines in memory per correlation ID (`gateway.studio.log-buffer.*`, this instance only). Read-only, so it also works in view-only mode.
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+**Project assistant:** the **Ask** button in Gateway Studio opens a chat that answers questions about this project: setup, running, building flows in Studio, custom classes, testing, configuration and troubleshooting, with step-by-step instructions and links that jump to the right Studio screen. It knows the project documentation (this README, `docs/`, the Makefile, `http/gateway.http`, a Studio user guide) and the gateway's live configuration, including the flow you have open. It calls Claude through the Anthropic Messages API, configured in a git-ignored `.env` file (copy `.env.example`): `AI_BASE_URL` (optional, default `https://api.anthropic.com`; any endpoint that serves the Anthropic Messages API), `AI_AUTH_KEY`, `AI_MODEL` (default `claude-opus-5-5`), optional `AI_AUTH_TYPE` (`api-key` = `x-api-key` header, `bearer` = `Authorization: Bearer`; `auto` picks `api-key` for Anthropic `sk-ant-api` keys, Bearer otherwise) and optional `AI_EFFORT`. For an OpenRouter key use `AI_BASE_URL=https://openrouter.ai/api` and an OpenRouter model id such as `anthropic/claude-sonnet-5.5`. Environment variables override the file; restart after changing it. The key stays on the server; the browser only talks to `/studio/api/assistant` with the admin token. Switch the assistant off with `gateway.assistant.enabled: false` in `application.yml` (env `GATEWAY_ASSISTANT_ENABLED=false`): the Ask button and its API disappear and nothing calls the AI endpoint; the rest of Studio keeps working.
 
-## Name
-Choose a self-explaining name for your project.
+To try requests one by one from your IDE, open **[`http/gateway.http`](http/gateway.http)** (IntelliJ HTTP Client or the VS Code REST Client extension). Every request there says what it should return.
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+Without make, `./mvnw spring-boot:test-run` starts a throwaway PostgreSQL in Docker, stubs the downstream systems with WireMock, and seeds three demo flows (profile `dev`):
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+```bash
+curl localhost:8080/api/v1/accounts/1001
+curl localhost:8080/api/v1/accounts/1001/transactions?limit=5
+curl -X POST localhost:8080/api/v1/transfers -H 'Content-Type: application/json' \
+     -d '{"fromAccount":"1001","toAccount":"2002","amount":1000}'
+curl -X POST localhost:8080/api/v1/transfers -H 'Content-Type: application/json' \
+     -d '{"fromAccount":"1001","toAccount":"2002","amount":999999999}'   # 422 INSUFFICIENT_FUNDS
+curl -X POST localhost:8080/admin/config/reload -H 'X-Admin-Token: dev-admin-token'
+```
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+Against your own PostgreSQL: `./mvnw spring-boot:run -Dspring-boot.run.profiles=dev` with `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `CORE_BANKING_URL` and `NOTIFICATION_URL` set.
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+## Tests
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+```bash
+./mvnw test               # unit + integration tests (PostgreSQL in Docker)
+./mvnw test -Poracle-it   # same suite against Oracle Free in Docker (large image, slow first run)
+```
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+## Adding an integration
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+**Full guide with a step-by-step tutorial, reference and recipes: [docs/CONFIGURATION-GUIDE.md](docs/CONFIGURATION-GUIDE.md).** Writing Java handlers: **[docs/CUSTOM-CLASSES.md](docs/CUSTOM-CLASSES.md)**.
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+An integration is a set of rows. All tables are in the default schema unless `gateway.db.schema` is set, and all table names are configurable.
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+| Table | One row per | Key columns |
+|---|---|---|
+| `gw_application` | group of flows | `code`, `name`, `description` (export / import unit, API docs section) |
+| `gw_flow` | inbound endpoint | `code`, `application_code`, `http_method`, `path_pattern` (e.g. `/v1/accounts/{accountNo}`), `service_code` (required, SNAP service code, up to 4 characters, unique within the application: `responseCode` uses the first two), optional `request_schema_code` / `response_schema_code`, `request_handler` / `response_handler` / `error_handler`, `success_status`, `timeout_ms`, `audit_mode` (INHERIT/ON/OFF), `schema_validation` (BOTH/REQUEST/RESPONSE/NONE: which schemas are checked; unchecked ones still serve mapping and docs) |
+| `gw_flow_step` | downstream call | `name`, `step_order` (**same order = run in parallel**), `target_system`, `http_method`, `path_template` (e.g. `/core/accounts/{acc}`), `condition_expr`, `success_expr`, `on_failure` (STOP/CONTINUE), `next_on_success` / `next_on_failure`, `timeout_ms`, `response_schema_code`, `response_validation` (INHERIT/ON/OFF), handlers |
+| `gw_flow_response` | named client response | `flow_id`, `name`, `status_code` (a branch answers with it: `RESPOND:<name>`) |
+| `gw_mapping_rule` | field | `phase` (STEP_REQUEST/FLOW_RESPONSE), `step_id`, `response_name`, `seq`, `target_type` (BODY/HEADER/QUERY/PATH/STATUS/FILE), `target_path`, `source_path` **or** `constant_value` **or** an error map (`error_map_code`, `error_map_where`, `error_map_output`, `error_map_fill`, `error_map_index`), `default_value`, `converter`, `lookup_code`, `field_handler`, `required` |
+| `gw_lookup_entry` | value translation | `lookup_code`, `source_value` (`*` = fallback), `target_value` |
+| `gw_error_map` | list of errors (JSON) | `code`, `description`, `entries` (JSON array of objects) |
+| `gw_json_schema` | JSON Schema (2020-12) | `code`, `schema_text` |
+| `gw_target_system` / `gw_target_system_header` | downstream system | `code`, `base_url`, timeouts, `body_codec`, `tls_mode` and stores; fixed headers |
+| `gw_storage` | file storage | `code`, `storage_type` (LOCAL/S3), location, allowed types, max size |
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+Then call `POST /admin/config/reload` with header `X-Admin-Token`, or restart the app. Invalid config is rejected with the complete list of errors, and the current config stays live.
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+### What mappings can read
 
-## License
-For open source projects, say how it is licensed.
+```
+$.request.headers.<lower-case-name>   $.request.path.<var>   $.request.query.<name>   $.request.body...
+$.steps.<name>.outcome   (SUCCESS / FAILED / SKIPPED / TIMEOUT)
+$.steps.<name>.status    $.steps.<name>.headers.<lower-case-name>   $.steps.<name>.body...
+$.correlationId
+```
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+A step can only read steps with a lower `step_order`. Paths support `.name`, `['odd name']`, `[0]` and `[*]`. With `[*]`, arrays are mapped element by element, e.g. `$.steps.history.body.items[*].amt` → `$.transactions[*].amount`. `target_path = $` copies a whole object.
+
+Rule order: value (source, constant or error map) → `default_value` (if missing/null) → `lookup_code` → `converter` → `field_handler` → `required` check → write.
+
+### Converters
+
+`TO_STRING`, `TO_NUMBER`, `TO_BOOLEAN`, `TRIM`, `UPPER`, `LOWER`, `PAD_LEFT:12:0`, `PAD_RIGHT:20: `, `SUBSTRING:0:6`, `DATE_FORMAT:yyyy-MM-dd:ddMMyyyy`, `DECIMAL_SCALE:2`. Use `\:` for a literal colon, as in `DATE_FORMAT:HH\:mm:HHmm`. Decimal values keep their exact scale (`12500.50` stays `12500.50`).
+
+### Conditions and success checks
+
+`condition_expr` decides whether a step runs. `success_expr` decides whether a 2xx response is really a success; if it is false, the error type is `DOWNSTREAM_BUSINESS_ERROR`.
+
+```
+${steps.inquiry.body.status} == 'ACTIVE' and ${request.body.amount} > 0
+${steps.debit.body.responseCode} == '00'
+```
+
+Only comparisons, `and`/`or`/`not`, arithmetic, `?:` and `matches` are allowed. Method calls, type references, constructors and bean references are rejected when the config is loaded.
+
+## Custom classes
+
+Implement one of these as a Spring bean in `com.mhamzah.gateway.extension.custom` (or in any jar on the classpath), then put the **bean name** in the config column. For an API over your own table (no downstream call), see the `tbl_ms_user` CRUD example: flows without steps whose `request_handler` answers directly ([`docs/CUSTOM-CLASSES.md`](docs/CUSTOM-CLASSES.md#47-msuserhandlers-a-crud-api-over-your-own-table-tbl_ms_user)).
+
+| Interface | Column | Use for |
+|---|---|---|
+| `FieldHandler` | `gw_mapping_rule.field_handler` | one field: value in, value out (masking, check digits, special formats) |
+| `MessageHandler` | flow/step `request_handler` / `response_handler` | whole message: HTTP headers + JSON body (signatures, tokens, restructuring). A flow `request_handler` can return a response to short-circuit the flow. |
+| `ErrorHandler` | `gw_flow.error_handler` | turning failures into the client error response |
+| `BodyCodec` | `gw_target_system.body_codec` / `gw_flow_step.body_codec` | the wire format of downstream calls. Built in: `xmlCodec`, `soapCodec`, `soap12Codec`; write one for SOAP headers / WS-Security / signed XML ([guide](docs/CONFIGURATION-GUIDE.md#415-xml-or-soap-downstream)) |
+
+**Error mapping** is the common case, so it has a base class. Extend `LookupErrorHandler`, say where the downstream code is and which lookup table translates it, and put the mappings in `gw_lookup_entry`:
+
+```java
+@Component("coreBankingErrorHandler")
+public class CoreBankingErrorHandler extends LookupErrorHandler {
+    protected String errorCodePath() { return "$.body.responseCode"; }
+    protected String lookupCode()    { return "CORE_BANKING_ERRORS"; }
+}
+```
+
+```
+lookup_code=CORE_BANKING_ERRORS  source_value=51
+target_value={"status":422,"errorCode":"INSUFFICIENT_FUNDS","errorMessage":"Insufficient balance"}
+```
+
+Unmapped codes and other error types fall back to the standard error body:
+
+```json
+{ "errorCode": "GW-502-DOWNSTREAM", "errorMessage": "Downstream call failed", "correlationId": "...", "step": "debit", "details": [] }
+```
+
+### Error responses with their own shape
+
+`FLOW_RESPONSE` rules only build **successful** responses. When a step with `on_failure = STOP` fails, the flow's `error_handler` builds the response instead, so an error response can look completely different from a success response. The handler receives the downstream status, headers and body of the failed call in `GatewayError`.
+
+| You need | Use |
+|---|---|
+| Translate the downstream error code to your own status / code / message | `LookupErrorHandler` plus `gw_lookup_entry` rows (above). New codes need only new rows. |
+| The same translation, but a different body layout or fields copied from the downstream error body | `LookupErrorHandler` and override `buildBody(...)` |
+| Full control, e.g. HTTP 200 with a response code for every failure | Implement `ErrorHandler` (see `PartnerErrorHandler`) |
+| A failed call should not fail the request | `on_failure = CONTINUE`. `FLOW_RESPONSE` rules can then read `$.steps.<name>.outcome` and `$.steps.<name>.body`. |
+
+```java
+@Component("cardSystemErrorHandler")
+public class CardSystemErrorHandler extends LookupErrorHandler {
+    @Override protected String errorCodePath() { return "$.body.error.code"; }
+    @Override protected String lookupCode()    { return "CARD_ERRORS"; }
+
+    @Override
+    protected ObjectNode buildBody(String errorCode, String errorMessage, JsonNode downstreamCode,
+            GatewayError error, ExecutionContext ctx) {
+        ObjectNode body = JsonNodeFactory.instance.objectNode();
+        body.put("responseCode", errorCode);
+        body.put("responseMessage", error.downstreamBody().path("error").path("desc").asString(errorMessage));
+        body.put("referenceNo", ctx.correlationId());
+        return body;
+    }
+}
+```
+
+Details: [CONFIGURATION-GUIDE §3.9 and §5.3](docs/CONFIGURATION-GUIDE.md#39-error-responses), [CUSTOM-CLASSES §4.4–4.5](docs/CUSTOM-CLASSES.md#44-partnererrorhandler-errorhandler-written-from-scratch).
+
+## Logging
+
+Every inbound call is logged in a standard format (`com.mhamzah.gateway.logging`): one `REQUEST` line and one `RESPONSE` line. Both carry the correlation ID through the log pattern (`logging.pattern.correlation`); the timestamp, thread and logger are left out below.
+
+```
+[abc-123] REQUEST method=[GET] path=[/api/v1/accounts/1001/transactions] headers=[{..., X-Correlation-Id=abc-123}] parameters=[{limit=5}]
+[abc-123] RESPONSE method=[GET] path=[/api/v1/accounts/1001/transactions] responseHeaders=[{X-Correlation-Id=abc-123, Content-Type=application/json}] responseBody=[{...}]
+```
+
+- `parameters` and `body` / `responseBody` appear only when present. Parameters come from the query string only, so a form-encoded body is never consumed.
+- Headers, query parameters and JSON bodies are masked with `gateway.masking.fields`. A body that is not JSON is logged as it is.
+- The correlation ID is the client's `X-Correlation-Id` when safe (up to 64 characters of `A-Z a-z 0-9 . _ : -`), otherwise a new UUID. The same ID is sent downstream, returned in the `X-Correlation-Id` response header, and written to the audit trail.
+- `/actuator/**` calls are not logged.
+- Besides these lines, the gateway logs one summary line per request (`GET /v1/... flow=... status=... 12ms`) and one per downstream call (`step=... target=... status=... outcome=...`).
+
+## Production: the API only
+
+The same jar runs everywhere; what it serves is set by configuration. Without the `dev` profile, Gateway Studio (`/studio`, `/studio/api/*`), the project assistant and the API docs (`/docs`, `/docs/openapi.json`, `/webjars/swagger-ui/*`) are off and return 404, so a production deployment serves only the gateway API (`/api/*`), `/admin/config/reload` (admin token) and the actuator endpoints. Do not activate the `dev` profile there (it also seeds the demo flows), and leave `GATEWAY_STUDIO_ENABLED` and `GATEWAY_DOCS_ENABLED` unset or `false`. To keep a read-only Studio for support, set `GATEWAY_STUDIO_ENABLED=true` with `GATEWAY_STUDIO_MODE=view-only` (and `GATEWAY_ASSISTANT_ENABLED=false` unless the AI endpoint is approved). Flow changes reach production as Liquibase changesets (Studio's **Rows (SQL)** tab gives the INSERTs).
+
+Also set `GATEWAY_TLS_ALLOW_INSECURE=false` in production: a target system with `tls_mode` `INSECURE` (trust any certificate) is then a configuration error instead of a warning in the log.
+
+**Container image and memory.** The `Dockerfile` builds the jar with Maven and runs it on a JDK 25 runtime image; `oc-template.yaml` is the OpenShift deployment. The JVM sizes its heap from the container's memory limit, and with no option it takes only 25% of it, which is tight for Spring Boot plus Studio (Word / PDF generation, large error maps). Give the heap a share of the limit and keep the request equal to the limit, for example:
+
+```yaml
+env:
+  - name: JAVA_TOOL_OPTIONS
+    value: "-XX:MaxRAMPercentage=65 -XX:+ExitOnOutOfMemoryError"
+resources:
+  limits:   { memory: 768Mi }
+  requests: { memory: 768Mi }
+```
+
+The configuration itself is small in memory (every flow, lookup, schema and error map is compiled once per reload; a 1,700-entry error map is a few MB). Check the real use at `/actuator/metrics/jvm.memory.used?tag=area:heap` during a reload and a spec download.
+
+## Configuration (`application.yml`)
+
+| Setting | Purpose |
+|---|---|
+| `gateway.target-systems.<NAME>.base-url / connect-timeout-ms / read-timeout-ms / static-headers / tls.*` | Optional: downstream systems from application config. Usually they're rows in `gw_target_system` (IP/port reloadable); a DB row with the same code wins. See [recipe 4.13](docs/CONFIGURATION-GUIDE.md#413-downstream-systems-add-one-change-its-ip--port). |
+| HTTPS downstream (`gw_target_system.tls_mode`, `tls_trust_store`, `tls_key_store`, passwords) | `http://` or `https://` comes from `base_url`. For HTTPS per target: `VERIFY` (default, JVM CAs), `INSECURE` (no certificate checks, dev/test only) or `CUSTOM` (own CA trust store and/or client certificate for mutual TLS; PEM, PKCS12 or JKS, by path or `${ENV}`). Editable in Studio's **Target systems** > **TLS**. See [recipe 4.16](docs/CONFIGURATION-GUIDE.md#416-https-downstream-certificates-and-keys). |
+| `gateway.audit.enabled`, `store-payloads`, `queue-capacity`, `batch-size` | DB audit trail. `enabled` is the global default; each flow can override it with `audit_mode`. |
+| `gateway.audit.partition.interval`, `premake`, `retention`, `maintenance-cron` | The audit tables are partitioned by time (`DAY` or `MONTH`). `retention` (e.g. `6m`) drops old partitions. See CONFIGURATION-GUIDE §3.10. |
+| `gateway.masking.fields` (`GATEWAY_MASKING_FIELDS`) | Field/header/query parameter names masked in audit payloads and in the request/response logs, case-insensitive. Default `pin,password,cardNo,cvv,authorization,x-admin-token`. The environment variable is comma-separated and **replaces** the whole list, so repeat the defaults you still want: `GATEWAY_MASKING_FIELDS=pin,password,cardNo,cvv,authorization,x-admin-token,nik`. |
+| `gateway.db.schema`, `gateway.db.tables.*`, `gateway.db.liquibase-tables.*` | Schema and table names. Letters, digits and `_` only; tables ≤ 25 characters. |
+| `spring.datasource.hikari.*` (`DB_POOL_MAX`, `DB_POOL_MIN_IDLE`, …) | HikariCP pool `gateway-pool`. Metrics are at `/actuator/metrics/hikaricp.*`. |
+| `GATEWAY_ADMIN_TOKEN` | Required for `/admin/config/reload`. When blank, reload is disabled. |
+| `gateway.docs.enabled` (`GATEWAY_DOCS_ENABLED`), `gateway.docs.title` (`GATEWAY_DOCS_TITLE`) | Swagger UI at `/docs` and OpenAPI at `/docs/openapi.json`. **Off by default**, on with the `dev` profile; when off, both return 404, and so do the Swagger UI files under `/webjars/`. The description lists every endpoint, so enable it in production only on purpose. |
+| `gateway.studio.enabled` (`GATEWAY_STUDIO_ENABLED`) | Gateway Studio at `/studio` and its API at `/studio/api/*` (admin token required). **Off by default**, on with the `dev` profile; when off, both return 404. In `edit` mode it writes straight to the config tables, so in production use it off or view-only, and let DBAs apply changes as Liquibase changesets. |
+| `gateway.snap.service-code-pattern` (`GATEWAY_SNAP_SERVICE_CODE_PATTERN`) | What `gw_flow.service_code` may be, checked on every reload. `application.yml` sets `[0-9A-Z]{2}[a-z]?` (two digits or capital letters, optionally followed by one lower-case letter); without a setting the built-in default is `[0-9]{2}([0-9]{2})?` (two or four digits, so `responseCode` stays numeric as SNAP defines it). Only the first two characters go into `responseCode` (`2401` gives `2002400`). |
+| `gateway.snap.no-body-status` (`GATEWAY_SNAP_NO_BODY_STATUS`) | The HTTP status a SNAP response is sent with when it would be 204, 205, 304 or 1xx, which cannot carry a body. Default `200`; `responseCode` keeps the original (`204G000`). |
+| `gateway.tls.allow-insecure` (`GATEWAY_TLS_ALLOW_INSECURE`) | Default `true`. `false` (production): a target system with `tls_mode` `INSECURE` is a configuration error, so the gateway does not start and a Studio save with it is refused. |
+| `gateway.studio.mode` (`GATEWAY_STUDIO_MODE`) | `edit` (default): the full editor. `view-only`: browse flows, mappings, previews, targets, lookups, schemas, the generated SQL and the assistant, but **Save & reload** and unit-test runs are gone from the UI and refused by the server (403), so nothing can be changed or called. |
+
+**Oracle:** activate profile `oracle` and set `DB_URL` (e.g. `jdbc:oracle:thin:@//host:1521/SERVICE`), `DB_USERNAME` and `DB_PASSWORD`. Locally, `make run DB=oracle` starts Oracle Database Free in Docker and runs the app on it with the demo data (see [docs/MAKEFILE.md](docs/MAKEFILE.md#oracle-instead-of-postgresql)).
+
+**DBA-managed schemas:** set `LIQUIBASE_ENABLED=false`, and generate the DDL for review. The output is written to `target/liquibase/update.sql`:
+
+```bash
+# without a database connection (offline):
+./mvnw liquibase:updateSQL -Dliquibase.url=offline:oracle -Dtbl.flow=MW_ROUTE   # or offline:postgresql
+# against the target database:
+./mvnw liquibase:updateSQL -Dliquibase.url=... -Dliquibase.username=... -Dliquibase.password=... \
+    -Dliquibase.defaultSchemaName=GATEWAY -Dtbl.flow=MW_ROUTE
+```
+
+Override any table name with `-Dtbl.<logical_name>=...` (`flow`, `flow_step`, `mapping_rule`, `lookup_entry`, `json_schema`, `audit_transaction`, `audit_step`, `target_system`, `target_system_header`, `storage`, `application`, `flow_response`, `error_map`). Choose table names before the first deployment: Liquibase checksums include them, so renaming later needs a migration.

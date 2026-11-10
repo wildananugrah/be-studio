@@ -256,14 +256,15 @@ Then run `make reload`. To switch a flow off without deleting it, use `UPDATE gw
 | `request_schema_code` | | | `gw_json_schema.code` that validates the request body → `400 GW-400-SCHEMA` |
 | `response_schema_code` | | | Validates the final response body → `500 GW-500-RESPONSE-SCHEMA` |
 | `schema_validation` | | `BOTH` (null) | Which schemas are checked at run time: `BOTH`, `REQUEST` (only `request_schema_code`), `RESPONSE` (only the steps' `response_schema_code` and this flow's `response_schema_code`) or `NONE`. A schema that is not checked is still used for mapping in Studio, OpenAPI and the API spec. A step can override it for its own response with `response_validation`. |
-| `request_handler` | | | `MessageHandler` bean run before the steps; can short-circuit ([§5.2](#52-messagehandler--headers--body)) |
+| `request_handler` | | | `MessageHandler` bean run before the steps; can short-circuit ([§5.2](#52-messagehandler-headers--body)) |
 | `response_handler` | | | `MessageHandler` bean run on the final response |
-| `error_handler` | | `defaultErrorHandler` | `ErrorHandler` bean that builds error responses ([§5.3](#53-errorhandler--error-responses)) |
+| `error_handler` | | `defaultErrorHandler` | `ErrorHandler` bean that builds error responses ([§5.3](#53-errorhandler-error-responses)) |
 | `success_status` | | `200` | HTTP status of a successful response |
 | `timeout_ms` | | `gateway.default-flow-timeout-ms` (30000) | Limit for the whole flow → `504 GW-504-FLOW` |
 | `audit_mode` | | `INHERIT` | `INHERIT` (follow `gateway.audit.enabled`), `ON`, `OFF` |
 | `enabled` | | `true` | `false` = the route does not exist (404) |
 | `application_code` | ✔ | `DEFAULT` | `gw_application.code` of the application the flow belongs to ([§3.1a](#31a-gw_application)) |
+| `service_code` | ✔ | | SNAP service code, up to 4 characters, unique within the application; must match `gateway.snap.service-code-pattern` (application.yml: `[0-9A-Z]{2}[a-z]?`). The first two characters go into a SNAP `responseCode` ([§4.19](#419-snap-responses-bank-indonesia)) |
 
 ### 3.1a `gw_application`
 
@@ -340,7 +341,7 @@ scripts/flow-changelog.sh export TRADE_CALLBACK,OTHER_FLOW                      
 | `default_value` | | Used when the source is missing or null |
 | `lookup_code` | | Translate the value through `gw_lookup_entry` |
 | `converter` | | Format/convert the value ([§3.3.5](#335-converters)) |
-| `field_handler` | | `FieldHandler` bean for custom logic ([§5.1](#51-fieldhandler--one-field)) |
+| `field_handler` | | `FieldHandler` bean for custom logic ([§5.1](#51-fieldhandler-one-field)) |
 | `required` | default `false` | Missing after default/lookup/converter/handler → error (instead of omitting the field) |
 | `error_map_code` | | Take the value from this `gw_error_map` instead of `source_path` / `constant_value` ([§3.5a](#35a-gw_error_map)) |
 | `error_map_where` | with `error_map_code` | JSON conditions: `[{"field": "errorCode", "source": "$.steps.x.body.errorCode"}, {"field": "service", "value": "trade"}]` |
@@ -583,7 +584,7 @@ Values arrive as text, numbers, booleans, or `null` when missing. **Numeric comp
 | Cannot connect | `FAILED` | `DOWNSTREAM_CONNECTION` |
 | Mapping / handler failed | `FAILED` | `MAPPING_ERROR` / `HANDLER_ERROR` |
 
-The result (`outcome`, `status`, `headers`, `body`) is stored in `$.steps.<name>` for **every** outcome. A failed step's body holds the downstream error payload, which later rules and error handlers can read. When a `STOP` step fails inside a parallel group, the other steps of that group are cancelled.
+The result (`outcome`, `status`, `headers`, `body`) is stored in `$.steps.<name>` for **every** outcome. For a failed step, the audit trail also records **why** (`gw_audit_step.error_message`: the error type, message and details, e.g. `DOWNSTREAM_BUSINESS_ERROR: success_expr of step 'debit' is false`), and the step's log line ends with `error=...`, so a `FAILED` next to a 201 is never a mystery. A failed step's body holds the downstream error payload, which later rules and error handlers can read. When a `STOP` step fails inside a parallel group, the other steps of that group are cancelled.
 
 ### 3.9 Error responses
 
@@ -617,7 +618,7 @@ Every response, error or not, carries the `X-Correlation-Id` header. The ID is t
 
 ### 3.10 Audit
 
-When audit is on for a flow, every request writes one `gw_audit_transaction` row, plus one `gw_audit_step` row per step, including skipped and cancelled ones. Payloads and headers are stored with sensitive fields masked (`gateway.masking.fields`): `request_headers` / `response_headers` (JSON objects) hold what the client sent and got, and per step what was sent downstream and what came back. Writing is asynchronous and never slows down or fails a request.
+When audit is on for a flow, every request writes one `gw_audit_transaction` row, plus one `gw_audit_step` row per step, including skipped and cancelled ones. Payloads and headers are stored with sensitive fields masked (`gateway.masking.fields`): `request_headers` / `response_headers` (JSON objects) hold what the client sent and got, and per step what was sent downstream and what came back. A failed step's `error_message` says why it failed ([§3.8](#38-how-a-step-ends)); Studio's audit trail shows it on the step. Writing is asynchronous and never slows down or fails a request.
 
 ```sql
 SELECT correlation_id, flow_code, client_status, error_code, duration_ms
@@ -772,7 +773,7 @@ WHERE name = 'debit' AND flow_id = (SELECT id FROM gw_flow WHERE code = 'TRANSFE
 
 Many core systems answer `200 {"responseCode":"51"}` for a business failure:
 1. Set `success_expr` so that only `00` counts as success.
-2. Translate the failure codes with a `LookupErrorHandler` ([§5.3](#53-errorhandler--error-responses)). The demo has one called `coreBankingErrorHandler`.
+2. Translate the failure codes with a `LookupErrorHandler` ([§5.3](#53-errorhandler-error-responses)). The demo has one called `coreBankingErrorHandler`.
 
 ```sql
 UPDATE gw_flow_step SET success_expr = '${steps.debit.body.responseCode} == ''00''' WHERE ...;
@@ -931,7 +932,7 @@ A **transform step** calls nothing. Its `STEP_REQUEST` BODY rules build a JSON d
 | `response_schema_code` | validates what it built → `500 GW-500-MAPPING` |
 | `response_handler` | optional Java `MessageHandler` that can change the result after the rules |
 
-Rules: BODY targets only (`$.a.b`, or `$` for the whole result). Or write the result as a JSON **`body_template`** with `${...}` placeholders (as for HTTP steps, [§4.15](#415-body-templates-xml-soap-json-written-out)): `${request...}`, `${steps...}`, `${correlationId}`, `${x:default}`, and `${body.x}` for what the step's rules built (with converters and lookups). Text goes in quotes (`"${steps.a.body.name}"`), numbers, objects and arrays without (`${body.amount}`); the filled template must be valid JSON (otherwise `500 GW-500-MAPPING`) and becomes the result. Its outcome is `SUCCESS`; the audit trail shows it with method `TRANSFORM`, no URL, and what it built as the response.
+Rules: BODY targets only (`$.a.b`, or `$` for the whole result). Or write the result as a JSON **`body_template`** with `${...}` placeholders (as for HTTP steps, [§4.15](#415-xml-or-soap-downstream)): `${request...}`, `${steps...}`, `${correlationId}`, `${x:default}`, and `${body.x}` for what the step's rules built (with converters and lookups). Text goes in quotes (`"${steps.a.body.name}"`), numbers, objects and arrays without (`${body.amount}`); the filled template must be valid JSON (otherwise `500 GW-500-MAPPING`) and becomes the result. Its outcome is `SUCCESS`; the audit trail shows it with method `TRANSFORM`, no URL, and what it built as the response.
 
 The dev data has `ACCOUNT_SUMMARY` (`GET /api/v1/accounts/{accountNo}/summary`, `110-dev-demo-transform.xml`):
 
@@ -1451,6 +1452,67 @@ curl -X POST localhost:8080/api/v1/documents/forward \
 
 The same works with BODY rules instead of a template (`$.document.content ← $.request.files.file.base64`), and together with a storage step that keeps a copy.
 
+### 4.19 SNAP responses (Bank Indonesia)
+
+A flow answers in the SNAP format with two bean names and some rows:
+
+```json
+{"responseCode": "4032414", "responseMessage": "Insufficient Funds", "additionalInfo": {"referenceNo": "..."}}
+```
+
+`responseCode` is the HTTP status (3 digits), the flow's **service code** (the first 2 characters of `gw_flow.service_code`) and the case code (2), so `403` + `24` + `14`.
+
+| Set | To |
+|---|---|
+| `gw_flow.response_handler` | `snapResponseHandler`: a success gets `responseCode` (`<status><service code>00`, e.g. `2002400`) and `responseMessage` (e.g. `Successful`) first, the body your rules built after, `additionalInfo` last |
+| `gw_flow.error_handler` | `snapErrorHandler`: failures become SNAP error responses (below) |
+| `gw_flow.service_code` | e.g. `24`, unique within the application ([§3.1](#31-gw_flow)) |
+
+**The codes are rows** in `gw_lookup_entry`, all editable in Studio → Lookups:
+
+| Lookup | Rows |
+|---|---|
+| `SNAP_RESPONSE_CODE` | The SNAP catalog: `source_value` `403.14` (status, dot, case), `target_value` the message (`Insufficient Funds`) or `{"message": "..."}`. Messages may hold `{field name}` and `[reason]`, filled per error. The codes the gateway itself uses are built in, so a missing row never breaks a response. |
+| `SNAP_ERR_<target system>` | A downstream's own codes to SNAP codes, e.g. `SNAP_ERR_CORE_BANKING`: `51` → `403.14`, `14` → `404.11`, `HTTP_404` → `404.01`, `*` → `500.02`. The row `@codePath` lists where the code is in the failed call (default `["$.body.errorCode", "$.body.code", "$.body.responseCode"]`); numbers and text match the same row. Keys are tried in order: `<status>:<code>`, `<code>`, `HTTP_<status>`, `*`. |
+| `SNAP_GATEWAY_ERROR` | The gateway's own failures by error type (`REQUEST_SCHEMA_INVALID`, `DOWNSTREAM_TIMEOUT`, …), with built-in defaults |
+
+A row's value is a SNAP code (`"403.14"`) or an object: `{"snap": "403.14", "message": "...", "reason": "...", "messagePath": "$.body.message", "httpStatus": 200}`. `message` replaces the catalog text, `reason` fills `[reason]`, `messagePath` copies the text from the failed call (`{status, headers, body}`; the downstream's own message is only ever copied this way), and `httpStatus` sends another HTTP status than the SNAP code's (`responseCode` keeps the SNAP one).
+
+**`additionalInfo`** is optional: add a named response called `additionalInfo` (Studio: **+ Response**) and give it BODY rules. It is sent, on success and on error, only when its rules produce at least one field; on an error they can read `$.error.*` and the failed call at `$.steps.<step>.*`.
+
+A status that cannot carry a body (204, 205, 304, 1xx) is sent as `gateway.snap.no-body-status` (200), with `responseCode` still telling the original (`204G000`).
+
+Example (dev profile): `SNAP_TRANSFER`, `POST /api/v1/snap/transfers`, service code `24`. An unknown source account gives `404 4042411 Invalid Card/Account/Customer`, too large an amount `403 4032414 Insufficient Funds`, a success `200 {"responseCode":"2002400","responseMessage":"Successful", ...}`.
+
+### 4.20 Friendly error messages from an error list
+
+Backends answer errors with their own codes and messages, often in another language. With an **error map** ([§3.5a](#35a-gw_error_map)) you keep the list of every backend error, with the message the client should see, as one JSON array, and a mapping rule picks the right message.
+
+1. **Prepare the list**, e.g. from a spreadsheet: one object per error, with the fields you match on and the fields you want to send.
+   ```json
+   [{"service": "direct-trade", "httpStatus": 409, "errorCode": "INVALID_STATE",
+     "message": "Aplikasi {applicationNo} tidak dalam status DRAFT.",
+     "messageEn": "Application {applicationNo} is not in DRAFT status.",
+     "generalMessage": "The application is not in the right status for this action. Reload the page."}]
+   ```
+2. **Studio → Error maps → + New error map**, paste it. The screen shows the number of entries and the fields it found.
+3. **In the flow, Mapping → the error response** (the named response the `error_handler` `RESPOND:<name>` answers with, [§4.11e](#411e-map-the-error-response-error_handler-respond)): **+ Error map rule**, target `$.message`, then:
+
+   | WHERE | | value |
+   |---|---|---|
+   | `httpStatus` | = | `$.error.downstream.status` |
+   | `errorCode` | = | `$.error.downstream.body.errorCode` |
+   | `message` | matches template | `$.error.downstream.body.message` |
+
+   **TAKE** `messageEn`, tick **fill {placeholders}**, and give the rule a **default** such as `"Your request cannot be processed right now."`.
+4. The backend's `409 {"errorCode": "INVALID_STATE", "message": "Aplikasi LC-2026-0042 tidak dalam status DRAFT."}` now reaches the client as `Application LC-2026-0042 is not in DRAFT status.`
+
+Tips:
+- Match on **codes**, and use a template only for the message: the backend fills in values (`{applicationNo}`), so the text never equals the list exactly.
+- A general message per code is simpler: match `errorCode` (and `service` if two backends share codes) and take `generalMessage`.
+- Several entries matching is normal (one code, many messages). The most specific template comes first; **index** picks another.
+- To check a rule, look at the call's **Logs** in Studio's audit trail: each lookup writes a line with the values it compared, how many entries matched and what it took.
+
 ## 5. Custom classes (Java)
 
 > **Full step-by-step guide with five working examples, tests, API reference and troubleshooting: [CUSTOM-CLASSES.md](CUSTOM-CLASSES.md).** This section is a short overview.
@@ -1632,6 +1694,15 @@ Reload (and startup) report every problem at once. The common ones:
 | `lookup_code 'X' has no gw_lookup_entry rows` | No rows for that table | Insert the lookup rows |
 | `condition_expr` / `success_expr` + `not allowed` | Method call, `T(...)` etc. | Use only the [allowed operators](#36-expressions-condition_expr-success_expr) |
 | `source_path must start with $.request, $.steps or $.correlationId` | Typo in the root | Fix the path |
+| `schema_validation 'X' is not one of` / `response_validation 'X' must be INHERIT, ON or OFF` | Typo in the validation mode | Use BOTH, REQUEST, RESPONSE or NONE (flow), INHERIT, ON or OFF (step) |
+| `error map 'X': entries must be a JSON array of objects` / `entries are not valid JSON` | The pasted error list is not `[{...}, {...}]` | Fix the JSON in Studio → Error maps (the screen shows the parse error) |
+| `error_map_code 'X' is not an error map` | The rule names a map that does not exist (renamed or deleted) | Create the map or pick another on the rule |
+| `takes its value from the map: leave source_path and constant_value empty` | An error map rule also has a source or constant | Remove the source / constant |
+| `error_map_output ... is required` / `error_map_where needs at least one condition` | The rule has no TAKE field or no WHERE condition | Pick the output field; add a condition |
+| `condition on 'x' must set exactly one of source / value` / `match '...' must be equals or template` | A condition without a value, with both, or an unknown match type | Give each condition one `$.` path or one constant; match `equals` or `template` |
+| `error_map_index must be 0 or more` | Negative index | Use 0 (the best match), 1, … |
+| `tls_mode INSECURE is not allowed here (gateway.tls.allow-insecure=false)` | A target system trusts any certificate on a gateway that forbids it (production) | Use `VERIFY`, or `CUSTOM` with the server's CA as trust store ([4.16](#416-https-downstream-certificates-and-keys)) |
+| `service_code is required` / `must match ...` / `is already used by flow` | Missing or invalid SNAP service code, or a second flow of the application uses it | Give each flow its own code that matches `gateway.snap.service-code-pattern` |
 
 The message names the flow, step or rule ID, so you can find the row: `mapping rule 36 of flow 'ACCOUNT_OVERVIEW'` is `gw_mapping_rule.id = 36`.
 
