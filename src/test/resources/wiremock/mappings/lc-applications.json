@@ -1,0 +1,66 @@
+{
+  "mappings": [
+    {
+      "request": { "method": "GET", "url": "/core/lc/applications" },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "responseCode": "200E000",
+          "responseMessage": "Successful",
+          "code": 200,
+          "message": "Success",
+          "data": [
+            {
+              "applicationNo": "ELJPU07631S26",
+              "lcNumber": "ELJPU07631S26-ADV001",
+              "status": "PENDING_APPROVAL",
+              "currentEvent": "LC_TRANSFER",
+              "amount": "IDR 1,000,000.00",
+              "applicantName": "PT JAYA ABADI",
+              "createdDate": "2026-11-06T15:30:19",
+              "beneficiaryName": "BRANTAS ABIPRAYA, PT",
+              "submittedDate": "2026-06-26T00:00:00",
+              "expiryDate": "2026-12-26",
+              "actionable": false,
+              "openEventCount": 1,
+              "bniReferenceNo": null
+            },
+            {
+              "applicationNo": "20261007014",
+              "lcNumber": null,
+              "status": "PENDING_APPROVAL",
+              "currentEvent": "LC_EXP_CANCELLATION",
+              "amount": "IDR 100,000,000.00",
+              "applicantName": "PT Intisco Niagatama Semesta",
+              "createdDate": "2026-10-07T16:28:09",
+              "beneficiaryName": "PT Semen Indonesia",
+              "submittedDate": "2026-10-07T16:28:09",
+              "expiryDate": "2027-04-05",
+              "actionable": false,
+              "openEventCount": 1,
+              "bniReferenceNo": null
+            },
+            {
+              "applicationNo": "DUMC-0008",
+              "lcNumber": "DUMMY/CANCEL/2026/0008",
+              "status": "ADVISED",
+              "currentEvent": null,
+              "amount": "USD 50,000.00",
+              "applicantName": "Dummy Cancel Buyer Ltd",
+              "createdDate": "2026-09-28T00:00:00",
+              "beneficiaryName": "PT Nusantara Tekstil Jaya",
+              "submittedDate": "2026-09-28T00:00:00",
+              "expiryDate": "2027-06-30",
+              "actionable": false,
+              "openEventCount": null,
+              "bniReferenceNo": null
+            }
+          ],
+          "meta": { "page": 1, "size": 50, "totalItems": 58, "totalPages": 2 },
+          "partnerReferenceNo": "REF-VALERIE"
+        }
+      }
+    }
+  ]
+}

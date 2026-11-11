@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Dev data: LC_APPLICATIONS sends the backend's LC list as it is, except that every item's applicationNo is
+        renamed to referenceNumber. Pass-through (COPY) of every top-level field, including the whole data array, plus
+        one BODY rule; that rule reads data[*].applicationNo, so the copied items leave applicationNo out.
+
+          GET /api/v1/lc/applications → CORE_BANKING GET /core/lc/applications
+
+          COPY  responseCode, responseMessage, code, message, data, meta, partnerReferenceNo
+          BODY  $.data[*].referenceNumber ← $.steps.lcList.body.data[*].applicationNo   (by position)
+    -->
+    <changeSet id="117-demo-lc-applications" author="json-gateway" context="dev">
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="LC_APPLICATIONS"/>
+            <column name="name" value="LC applications (list passed through, applicationNo renamed)"/>
+            <column name="http_method" value="GET"/>
+            <column name="path_pattern" value="/v1/lc/applications"/>
+            <column name="success_status" valueNumeric="200"/>
+            <column name="application_code" value="CORE_BANKING_API"/>
+            <column name="service_code" value="91"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'LC_APPLICATIONS')"/>
+            <column name="name" value="lcList"/><column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="CORE_BANKING"/><column name="http_method" value="GET"/>
+            <column name="path_template" value="/core/lc/applications"/>
+            <column name="response_example" value='{"responseCode": "200E000", "responseMessage": "Successful", "code": 200, "message": "Success", "data": [{"applicationNo": "ELJPU07631S26", "lcNumber": "ELJPU07631S26-ADV001", "status": "PENDING_APPROVAL", "currentEvent": "LC_TRANSFER", "amount": "IDR 1,000,000.00", "applicantName": "PT JAYA ABADI", "createdDate": "2026-11-06T15:30:19", "beneficiaryName": "BRANTAS ABIPRAYA, PT", "submittedDate": "2026-06-26T00:00:00", "expiryDate": "2026-12-26", "actionable": false, "openEventCount": 1, "bniReferenceNo": null}], "meta": {"page": 1, "size": 50, "totalItems": 58, "totalPages": 2}, "partnerReferenceNo": "REF-VALERIE"}'/>
+        </insert>
+
+        <!-- pass-through: every top-level field of the backend's answer -->
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'LC_APPLICATIONS')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="COPY"/><column name="target_path" value="$.responseCode"/>
+            <column name="source_path" value="$.steps.lcList.body.responseCode"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'LC_APPLICATIONS')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_type" value="COPY"/><column name="target_path" value="$.responseMessage"/>
+            <column name="source_path" value="$.steps.lcList.body.responseMessage"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'LC_APPLICATIONS')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="3"/>
+            <column name="target_type" value="COPY"/><column name="target_path" value="$.code"/>
+            <column name="source_path" value="$.steps.lcList.body.code"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'LC_APPLICATIONS')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="4"/>
+            <column name="target_type" value="COPY"/><column name="target_path" value="$.message"/>
+            <column name="source_path" value="$.steps.lcList.body.message"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'LC_APPLICATIONS')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="5"/>
+            <column name="target_type" value="COPY"/><column name="target_path" value="$.data"/>
+            <column name="source_path" value="$.steps.lcList.body.data"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'LC_APPLICATIONS')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="6"/>
+            <column name="target_type" value="COPY"/><column name="target_path" value="$.meta"/>
+            <column name="source_path" value="$.steps.lcList.body.meta"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'LC_APPLICATIONS')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="7"/>
+            <column name="target_type" value="COPY"/><column name="target_path" value="$.partnerReferenceNo"/>
+            <column name="source_path" value="$.steps.lcList.body.partnerReferenceNo"/>
+        </insert>
+
+        <!-- the rename: overrides applicationNo inside every copied item -->
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'LC_APPLICATIONS')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="8"/>
+            <column name="target_path" value="$.data[*].referenceNumber"/>
+            <column name="source_path" value="$.steps.lcList.body.data[*].applicationNo"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

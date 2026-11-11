@@ -183,7 +183,8 @@ public final class OpenApiGenerator {
         for (CompiledRule r : flow.responseRules()) {
             if (r.targetType() == TargetType.HEADER) {
                 headers.putObject(r.targetName()).putObject("schema").put("type", "string");
-            } else if (r.targetType() == TargetType.BODY && r.targetPath() != null) {
+            } else if ((r.targetType() == TargetType.BODY || r.targetType() == TargetType.COPY && r.remappedBy() == null)
+                    && r.targetPath() != null) {
                 addPath(responseBody, r.targetPath().fieldNames(), false);
             }
         }
@@ -193,7 +194,8 @@ public final class OpenApiGenerator {
         for (FlowDefinition.Response named : flow.responses().values()) {
             ObjectNode body = objectSchema();
             for (CompiledRule r : named.rules()) {
-                if (r.targetType() == TargetType.BODY && r.targetPath() != null) {
+                if ((r.targetType() == TargetType.BODY || r.targetType() == TargetType.COPY && r.remappedBy() == null)
+                    && r.targetPath() != null) {
                     addPath(body, r.targetPath().fieldNames(), false);
                 }
             }

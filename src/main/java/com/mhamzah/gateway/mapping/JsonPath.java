@@ -298,6 +298,80 @@ public final class JsonPath {
         }
     }
 
+    /** Number of segments; 0 for {@code $}. */
+    public int size() {
+        return segments.size();
+    }
+
+    /** True when {@code prefix} is this path or a parent of it, segment by segment ({@code [*]} only matches {@code [*]}). */
+    public boolean startsWith(JsonPath prefix) {
+        return prefix.segments.size() <= segments.size()
+                && segments.subList(0, prefix.segments.size()).equals(prefix.segments);
+    }
+
+    /** The path from segment {@code from} on, as a path of its own: {@code $.a.b.c}.tail(1) is {@code $.b.c}. */
+    public JsonPath tail(int from) {
+        List<Segment> out = segments.subList(Math.min(from, segments.size()), segments.size());
+        StringBuilder sb = new StringBuilder("$");
+        out.forEach(s -> appendText(sb, s));
+        return new JsonPath(sb.toString(), out);
+    }
+
+    /** Removes what this path points to from {@code root} (every element for a {@code [*]}); missing parts are ignored. */
+    public void remove(JsonNode root) {
+        if (!segments.isEmpty()) {
+            remove(root, 0);
+        }
+    }
+
+    private void remove(JsonNode current, int i) {
+        if (current == null) {
+            return;
+        }
+        Segment s = segments.get(i);
+        boolean last = i == segments.size() - 1;
+        switch (s) {
+            case Wildcard w -> {
+                if (current instanceof ArrayNode arr) {
+                    if (last) {
+                        arr.removeAll();
+                    } else {
+                        arr.forEach(e -> remove(e, i + 1));
+                    }
+                }
+            }
+            case Field f -> {
+                if (current instanceof ObjectNode obj) {
+                    if (last) {
+                        obj.remove(f.name());
+                    } else {
+                        remove(obj.get(f.name()), i + 1);
+                    }
+                }
+            }
+            case Index ix -> {
+                if (current instanceof ArrayNode arr && ix.index() < arr.size()) {
+                    if (last) {
+                        arr.remove(ix.index());
+                    } else {
+                        remove(arr.get(ix.index()), i + 1);
+                    }
+                }
+            }
+        }
+    }
+
+    /** Equal when the segments are: {@code $.a['b']} equals {@code $.a.b}. */
+    @Override
+    public boolean equals(Object o) {
+        return o instanceof JsonPath p && p.segments.equals(segments);
+    }
+
+    @Override
+    public int hashCode() {
+        return segments.hashCode();
+    }
+
     @Override
     public String toString() {
         return text;

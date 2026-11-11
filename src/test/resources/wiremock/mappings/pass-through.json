@@ -1,0 +1,17 @@
+{
+  "mappings": [
+    {
+      "request": { "method": "GET", "url": "/core/accounts/1001/detail" },
+      "response": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "jsonBody": {
+          "acctNo": "1001",
+          "acctName": "BUDI SANTOSO",
+          "detail": { "branch": "JKT01", "openDate": "20200101" },
+          "internalRef": "X-778"
+        }
+      }
+    }
+  ]
+}

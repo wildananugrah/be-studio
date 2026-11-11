@@ -14,5 +14,14 @@ public enum TargetType {
      * Content-Type and Content-Disposition; BODY rules and the flow's response_handler then do not apply. When the step
      * has no file (it answered JSON), the response is built as usual.
      */
-    FILE
+    FILE,
+    /**
+     * Pass-through: copies the field at {@code source_path} unchanged to the same place in the output body. The source
+     * is under {@code $.request.body} or {@code $.steps.<name>.body}; the target is the rest of that path, e.g.
+     * {@code $.steps.account.body.detail.openDate} goes to {@code $.detail.openDate}. Copies are written before the
+     * other rules. A field that another rule of the same list reads is remapped, not copied: a copy whose source
+     * (or a parent of it) is another rule's source is skipped, and a copied object leaves out the fields other rules
+     * read. See {@link CopyRules}.
+     */
+    COPY
 }

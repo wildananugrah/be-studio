@@ -12,7 +12,7 @@ import tools.jackson.databind.node.JsonNodeFactory;
 
 /**
  * Applies mapping rules in order (spec Section 6.3): value (source, constant or error map), default, lookup,
- * converter, field handler, required check, write.
+ * converter, field handler, required check, write. Pass-through (COPY) rules run before the others.
  */
 public class MappingEngine {
 
@@ -27,8 +27,10 @@ public class MappingEngine {
         Map<String, String> pathVars = new LinkedHashMap<>();
         Integer[] status = {null};
         String fileStep = null;
-        for (CompiledRule rule : rules) {
-            if (rule.targetType() == TargetType.FILE) {
+        for (CompiledRule rule : ordered(rules)) {
+            if (rule.targetType() == TargetType.COPY && rule.remappedBy() != null) {
+                log.debug("{} not copied: remapped by {}", rule.describe(), rule.remappedBy());
+            } else if (rule.targetType() == TargetType.FILE) {
                 // names the step whose downloaded file is the response; the engine takes the file from the context
                 fileStep = rule.source().secondField();
             } else if (rule.source() != null && rule.source().wildcardCount() > 0) {
@@ -43,6 +45,17 @@ public class MappingEngine {
             }
         }
         return new MappedMessage(body[0], headers, query, pathVars, status[0], fileStep);
+    }
+
+    /** Pass-through (COPY) rules first, then the others, each group in its own order. */
+    private static List<CompiledRule> ordered(List<CompiledRule> rules) {
+        if (rules.stream().noneMatch(r -> r.targetType() == TargetType.COPY)) {
+            return rules;
+        }
+        List<CompiledRule> out = new java.util.ArrayList<>(rules.size());
+        rules.stream().filter(r -> r.targetType() == TargetType.COPY).forEach(out::add);
+        rules.stream().filter(r -> r.targetType() != TargetType.COPY).forEach(out::add);
+        return out;
     }
 
     private void applyWildcard(CompiledRule rule, ExecutionContext ctx, JsonNode[] body) {
@@ -115,6 +128,13 @@ public class MappingEngine {
 
     /** Default, lookup, converter, handler and required check. Returns null when the value is missing. */
     private JsonNode process(CompiledRule rule, JsonNode value, ExecutionContext ctx) {
+        if (rule.targetType() == TargetType.COPY && value != null) {
+            // a copy of its own: later rules that write into it must not change the step's (or request's) body
+            value = value.deepCopy();
+            for (JsonPath remapped : rule.copyExclude()) {
+                remapped.remove(value);
+            }
+        }
         if (JsonValues.isAbsent(value) && rule.defaultValue() != null) {
             value = rule.defaultValue();
         }
@@ -157,7 +177,7 @@ public class MappingEngine {
     private void write(CompiledRule rule, JsonNode value, JsonNode[] body,
             Map<String, String> headers, Map<String, String> query, Map<String, String> pathVars, Integer[] status) {
         switch (rule.targetType()) {
-            case BODY -> writeBody(rule, rule.targetPath(), value, body);
+            case BODY, COPY -> writeBody(rule, rule.targetPath(), value, body);
             case HEADER -> putText(headers, rule.targetName(), value);
             case QUERY -> putText(query, rule.targetName(), value);
             case PATH -> putText(pathVars, rule.targetName(), value);

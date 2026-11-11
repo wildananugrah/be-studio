@@ -17,6 +17,7 @@ import com.mhamzah.gateway.extension.FieldHandler;
 import com.mhamzah.gateway.extension.MessageHandler;
 import com.mhamzah.gateway.mapping.BodyTemplate;
 import com.mhamzah.gateway.mapping.CompiledRule;
+import com.mhamzah.gateway.mapping.CopyRules;
 import com.mhamzah.gateway.mapping.Converters;
 import com.mhamzah.gateway.mapping.JsonPath;
 import com.mhamzah.gateway.mapping.JsonValues;
@@ -700,13 +701,13 @@ public class ConfigCompiler {
                         continue;
                     }
                     CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.HEADER, TargetType.STATUS,
-                            TargetType.FILE), FLOW_RESPONSE);
+                            TargetType.FILE, TargetType.COPY), FLOW_RESPONSE);
                     if (r.responseName() != null && !namedRules.containsKey(r.responseName())) {
                         errors.add(rw + ": response '" + r.responseName() + "' is not a response of this flow");
                     } else if (rule != null && FlowDefinition.ADDITIONAL_INFO_RESPONSE.equals(r.responseName())
-                            && rule.targetType() != TargetType.BODY) {
+                            && rule.targetType() != TargetType.BODY && rule.targetType() != TargetType.COPY) {
                         errors.add(rw + ": the response '" + FlowDefinition.ADDITIONAL_INFO_RESPONSE
-                                + "' builds additionalInfo of SNAP responses and takes BODY rules only");
+                                + "' builds additionalInfo of SNAP responses and takes BODY and COPY rules only");
                     } else if (rule != null && rule.targetType() == TargetType.FILE && !fileRule(rule, r, rw, fileRules)) {
                         continue;
                     } else if (rule != null) {
@@ -758,7 +759,7 @@ public class ConfigCompiler {
             }
             return new FlowDefinition(f.code(), method, pattern, requestSchema, responseSchema, requestHandler,
                     responseHandler, errorHandler, errorHandlerName, successStatus, timeout, auditMode,
-                    new ArrayList<>(groups.values()), responseRules, responses(responseStatus, namedRules),
+                    new ArrayList<>(groups.values()), CopyRules.prepare(responseRules), responses(responseStatus, namedRules),
                     schemaValidation == null ? SchemaValidation.BOTH : schemaValidation, f.serviceCode());
         }
 
@@ -786,7 +787,8 @@ public class ConfigCompiler {
         private static Map<String, FlowDefinition.Response> responses(Map<String, Integer> status,
                 Map<String, List<CompiledRule>> rules) {
             Map<String, FlowDefinition.Response> out = new java.util.LinkedHashMap<>();
-            status.forEach((name, code) -> out.put(name, new FlowDefinition.Response(name, code, rules.get(name))));
+            status.forEach((name, code) -> out.put(name,
+                    new FlowDefinition.Response(name, code, CopyRules.prepare(rules.get(name)))));
             return out;
         }
 
@@ -915,7 +917,8 @@ public class ConfigCompiler {
             List<CompiledRule> rules = new ArrayList<>();
             for (RuleRow r : ruleRows) {
                 String rw = "mapping rule " + r.id() + " of " + where;
-                CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.HEADER, TargetType.QUERY, TargetType.PATH), STEP_REQUEST);
+                CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.HEADER, TargetType.QUERY, TargetType.PATH,
+                        TargetType.COPY), STEP_REQUEST);
                 if (rule != null) {
                     rule.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), null, rw));
                     rules.add(rule);
@@ -933,7 +936,7 @@ public class ConfigCompiler {
             }
             return new StepDefinition(s.name(), s.stepOrder(), s.targetSystem(), target, method, s.pathTemplate(),
                     condition, success, onFailure, timeout, responseSchema, requestHandler, responseHandler, codec, codecName,
-                    rules, null, null, template);
+                    CopyRules.prepare(rules), null, null, template);
         }
 
         /**
@@ -1108,7 +1111,8 @@ public class ConfigCompiler {
             List<CompiledRule> rules = new ArrayList<>();
             for (RuleRow r : ruleRows) {
                 String rw = "mapping rule " + r.id() + " of " + where;
-                CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY), "a transform step (its rules build its result)");
+                CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.COPY),
+                        "a transform step (its rules build its result)");
                 if (rule != null) {
                     rule.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), null, rw));
                     rules.add(rule);
@@ -1116,7 +1120,7 @@ public class ConfigCompiler {
             }
             return new StepDefinition(s.name(), s.stepOrder(), StepDefinition.TRANSFORM, null, null, null, condition,
                     success, onFailure, defaultStepTimeout, responseSchema, null, responseHandler, JsonCodec.INSTANCE,
-                    JsonCodec.BEAN_NAME, rules, null, null, template);
+                    JsonCodec.BEAN_NAME, CopyRules.prepare(rules), null, null, template);
         }
 
         /**
@@ -1187,6 +1191,8 @@ public class ConfigCompiler {
             JsonPath target = null;
             if (targetType == TargetType.BODY) {
                 target = path(r.targetPath(), where, "target_path");
+            } else if (targetType == TargetType.COPY) {
+                target = copyTarget(r, where);
             } else if (targetType != null && targetType != TargetType.STATUS && targetType != TargetType.FILE
                     && (r.targetPath() == null || r.targetPath().isBlank())) {
                 errors.add(where + ": target_path must be a " + targetType + " name");
@@ -1211,7 +1217,7 @@ public class ConfigCompiler {
                 errors.add(where + ": must set exactly one of source_path / constant_value (or a field_handler)");
             }
             int sourceWildcards = source == null ? 0 : source.wildcardCount();
-            if (targetType != null && targetType != TargetType.BODY && sourceWildcards > 0) {
+            if (targetType != null && targetType != TargetType.BODY && targetType != TargetType.COPY && sourceWildcards > 0) {
                 errors.add(where + ": a wildcard source cannot be written to a " + targetType + " target");
             }
             if (target != null) {
@@ -1241,9 +1247,45 @@ public class ConfigCompiler {
                 return null;
             }
             return new CompiledRule(r.id(), r.seq(), targetType, target,
-                    targetType == TargetType.BODY ? null : r.targetPath(), source,
+                    targetType == TargetType.BODY || targetType == TargetType.COPY ? null : r.targetPath(), source,
                     JsonValues.parseLiteral(r.constantValue()), JsonValues.parseLiteral(r.defaultValue()),
                     converter, lookup, fieldHandler, r.fieldHandler(), r.required(), errorMap);
+        }
+
+        /**
+         * A COPY (pass-through) rule's target: the source's path inside its body ({@code $.steps.<name>.body.a.b} or
+         * {@code $.request.body.a.b} gives {@code $.a.b}). target_path must be that path. Only the source and
+         * {@code required} are used: a copy is the value as it is.
+         */
+        private JsonPath copyTarget(RuleRow r, String where) {
+            JsonPath source = null;
+            try {
+                source = r.sourcePath() == null ? null : JsonPath.compile(r.sourcePath());
+            } catch (IllegalArgumentException e) {
+                return null; // reported with the source_path
+            }
+            JsonPath target = CopyRules.target(source);
+            if (target == null) {
+                if (source != null) {
+                    errors.add(where + ": a COPY rule takes source_path $.steps.<step>.body.<field> or $.request.body.<field>");
+                } else if (r.sourcePath() == null) {
+                    errors.add(where + ": a COPY rule needs source_path (the field to copy)");
+                }
+                return null;
+            }
+            if (r.targetPath() != null && !r.targetPath().isBlank()) {
+                JsonPath given = path(r.targetPath(), where, "target_path");
+                if (given != null && !given.equals(target)) {
+                    errors.add(where + ": a COPY rule writes the field to the same place: target_path must be " + target
+                            + " (not " + r.targetPath() + ")");
+                }
+            }
+            if (r.constantValue() != null || r.defaultValue() != null || r.converter() != null || r.lookupCode() != null
+                    || r.fieldHandler() != null || (r.errorMapCode() != null && !r.errorMapCode().isBlank())) {
+                errors.add(where + ": a COPY rule copies the value as it is: no constant_value, default_value, converter,"
+                        + " lookup_code, field_handler or error_map_code (use a BODY rule to change it)");
+            }
+            return target;
         }
 
         /**
