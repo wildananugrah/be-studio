@@ -87,12 +87,7 @@ public class MappingEngine {
     private static JsonNode errorMap(CompiledRule rule, ExecutionContext ctx) {
         ErrorMap.Lookup lookup = rule.errorMap();
         ErrorMap.Result r = lookup.evaluate(ctx);
-        StringBuilder where = new StringBuilder();
-        for (int i = 0; i < lookup.where().size(); i++) {
-            ErrorMap.Condition c = lookup.where().get(i);
-            where.append(i == 0 ? "" : ", ").append(c.field()).append(c.template() ? " ~ " : " = ")
-                    .append(i < r.values().size() ? quote(r.values().get(i)) : "(not read)");
-        }
+        String where = describeWhere(lookup, r);
         if (r.entry() == null) {
             log.info("error map {} for {}: where {} -> {} match(es), {} -> no value{}", lookup.map().code(), rule.describe(),
                     where, r.matches(), r.matches() == 0 ? "none to take" : "no match at index " + lookup.index(),
@@ -105,12 +100,24 @@ public class MappingEngine {
         return r.value();
     }
 
-    private static String quote(String value) {
-        return value == null ? "(missing)" : "'" + cut(value) + "'";
+    /** The conditions with the values read, e.g. {@code httpStatus = '404', message ~ 'Upload …'}, for a log line. */
+    public static String describeWhere(ErrorMap.Lookup lookup, ErrorMap.Result r) {
+        StringBuilder where = new StringBuilder();
+        for (int i = 0; i < lookup.where().size(); i++) {
+            ErrorMap.Condition c = lookup.where().get(i);
+            where.append(i == 0 ? "" : ", ").append(c.field()).append(c.template() ? " ~ " : " = ")
+                    .append(i < r.values().size() ? quote(r.values().get(i)) : "(not read)");
+        }
+        return where.toString();
     }
 
-    private static String cut(String value) {
+    /** {@code value}, cut for a log line. */
+    public static String cut(String value) {
         return value.length() <= LOG_VALUE_MAX ? value : value.substring(0, LOG_VALUE_MAX) + "…";
+    }
+
+    private static String quote(String value) {
+        return value == null ? "(missing)" : "'" + cut(value) + "'";
     }
 
     /** Default, lookup, converter, handler and required check. Returns null when the value is missing. */

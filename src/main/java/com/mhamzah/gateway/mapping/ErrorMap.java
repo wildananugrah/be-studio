@@ -17,6 +17,11 @@ import tools.jackson.databind.node.JsonNodeFactory;
  */
 public record ErrorMap(String code, List<JsonNode> entries) {
 
+    /**
+     * The row of a lookup table that attaches an error map to it, e.g. in {@code SNAP_ERR_<target system>}: its value
+     * says which map, which fields to take and the conditions (see {@link Fields}).
+     */
+    public static final String LOOKUP_KEY = "@errorMap";
     /** A placeholder in a template text: anything in braces, e.g. {@code {applicationNo}} or {@code {master.currency()}}. */
     static final Pattern PLACEHOLDER = Pattern.compile("\\{[^{}]*}");
     /** Longer values are not matched against templates (a message, not a document). */
@@ -91,9 +96,32 @@ public record ErrorMap(String code, List<JsonNode> entries) {
     /**
      * What one lookup found, for the value and for the debug line in the log (and so in Studio's audit trail):
      * {@code values} the condition values read, {@code matches} how many entries matched, {@code entry} the position
-     * in the map of the one taken (null when none) and {@code value} its output.
+     * in the map of the one taken (null when none) and {@code value} its output. {@code picked} is that entry and
+     * {@code captured} what its templates captured, for {@link #take}.
      */
-    public record Result(JsonNode value, List<String> values, int matches, Integer entry) {}
+    public record Result(JsonNode value, List<String> values, int matches, Integer entry, JsonNode picked,
+            Map<String, String> captured, boolean fill) {
+
+        static Result none(List<String> values, int matches) {
+            return new Result(null, values, matches, null, null, Map.of(), false);
+        }
+
+        /** Field {@code name} of the picked entry, its placeholders filled when the lookup fills; null when none. */
+        public JsonNode take(String name) {
+            return Lookup.take(picked, name, fill, captured);
+        }
+    }
+
+    /**
+     * An error map attached to a lookup table ({@link #LOOKUP_KEY}): the picked entry's fields, under new names
+     * ({@code fields}: name in the output to the entry's field, in order).
+     */
+    public record Fields(Lookup lookup, Map<String, String> fields) {
+
+        public Fields {
+            fields = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(fields));
+        }
+    }
 
     /**
      * What a rule takes from a map: field {@code output} of an entry matching every condition. The matching entries
@@ -144,12 +172,21 @@ public record ErrorMap(String code, List<JsonNode> entries) {
 
         /** The lookup with what it found (see {@link Result}). */
         public Result evaluate(ExecutionContext ctx) {
+            return evaluate(ctx::read);
+        }
+
+        /** The lookup with its sources read from {@code root}, e.g. a failed call {@code {status, headers, body}}. */
+        public Result evaluate(JsonNode root) {
+            return evaluate(path -> path.read(root));
+        }
+
+        private Result evaluate(java.util.function.Function<JsonPath, JsonNode> reader) {
             List<String> values = new ArrayList<>();
             for (Condition c : where) {
-                JsonNode v = c.source() != null ? ctx.read(c.source()) : c.value();
+                JsonNode v = c.source() != null ? reader.apply(c.source()) : c.value();
                 if (JsonValues.isAbsent(v)) {
                     values.add(null);
-                    return new Result(null, values, 0, null); // a missing value matches nothing
+                    return Result.none(values, 0); // a missing value matches nothing
                 }
                 values.add(JsonValues.keyOf(v));
             }
@@ -184,14 +221,21 @@ public record ErrorMap(String code, List<JsonNode> entries) {
             // most fixed template text first; List.sort is stable, so equal scores keep the map's order
             matches.sort(java.util.Comparator.comparingInt(Match::score).reversed());
             if (index >= matches.size()) {
-                return new Result(null, values, matches.size(), null);
+                return Result.none(values, matches.size());
             }
             Match picked = matches.get(index);
-            JsonNode out = entries.get(picked.entry()).get(output);
+            JsonNode entry = entries.get(picked.entry());
+            return new Result(take(entry, output, fill, picked.captured()), values, matches.size(), picked.entry(),
+                    entry, picked.captured(), fill);
+        }
+
+        /** Field {@code name} of {@code entry}, with its placeholders filled when {@code fill}; null when none. */
+        static JsonNode take(JsonNode entry, String name, boolean fill, Map<String, String> captured) {
+            JsonNode out = entry == null || name == null ? null : entry.get(name);
             if (fill && out != null && out.isString()) {
-                out = JsonNodeFactory.instance.stringNode(fill(out.asString(), picked.captured()));
+                return JsonNodeFactory.instance.stringNode(fill(out.asString(), captured));
             }
-            return new Result(out, values, matches.size(), picked.entry());
+            return out;
         }
 
         /** {@code text} with each {@code {name}} replaced by the value captured under that name (others stay). */
