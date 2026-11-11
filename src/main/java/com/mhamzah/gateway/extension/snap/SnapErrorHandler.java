@@ -10,6 +10,7 @@ import com.mhamzah.gateway.extension.ErrorType;
 import com.mhamzah.gateway.extension.ExecutionContext;
 import com.mhamzah.gateway.extension.GatewayError;
 import com.mhamzah.gateway.extension.GatewayResponse;
+import com.mhamzah.gateway.mapping.ErrorMap;
 import com.mhamzah.gateway.mapping.JsonPath;
 import com.mhamzah.gateway.mapping.JsonValues;
 import com.mhamzah.gateway.mapping.LookupTable;
@@ -71,6 +72,11 @@ import tools.jackson.databind.node.ObjectNode;
  *       $.steps.*} — the failed call's {@code body} included — and the
  * request). The same response builds it for
  * success responses ({@link SnapResponseHandler}).</li>
+ * <li>For a downstream failure, the row {@value SnapCodes#ERROR_MAP_KEY} of
+ * {@code SNAP_ERR_<target system>} adds fields from an error map to
+ * {@code additionalInfo}, for every flow calling that target: the entry
+ * matching the failed call (conditions on {@code $.status}, {@code $.headers},
+ * {@code $.body}), its fields under new names. The named response's keys win.</li>
  * </ul>
  * It never throws: when something goes wrong it answers 500 Internal Server
  * Error in the same format.
@@ -350,11 +356,69 @@ public class SnapErrorHandler implements ErrorHandler {
     }
 
     /**
-     * {@code additionalInfo} from the flow's named response
-     * {@value #ADDITIONAL_INFO}; null when it has none.
+     * {@code additionalInfo}: the flow's named response {@value #ADDITIONAL_INFO}, then the fields of the error map
+     * attached to the failed target's lookup (the response's keys win); null when there is nothing.
      */
     private ObjectNode additionalInfo(FlowDefinition flow, GatewayError error, SnapCodes.Code code, String responseCode,
             String message, ExecutionContext ctx) {
+        ObjectNode info = flowAdditionalInfo(flow, error, code, responseCode, message, ctx);
+        ObjectNode mapped = errorMapFields(flow, error);
+        if (mapped == null) {
+            return info;
+        }
+        if (info == null) {
+            return mapped;
+        }
+        mapped.properties().forEach(f -> {
+            if (!info.has(f.getKey())) {
+                info.set(f.getKey(), f.getValue());
+            }
+        });
+        return info;
+    }
+
+    /**
+     * The fields of the error map attached to {@code SNAP_ERR_<target>} by its {@value SnapCodes#ERROR_MAP_KEY} row,
+     * matched against the failed call; null for other errors, without such a row, or when nothing matches.
+     */
+    private ObjectNode errorMapFields(FlowDefinition flow, GatewayError error) {
+        if (error.type() != ErrorType.DOWNSTREAM_HTTP_ERROR && error.type() != ErrorType.DOWNSTREAM_BUSINESS_ERROR) {
+            return null;
+        }
+        String target = targetOf(flow, error.stepName());
+        FlowRegistry current = target == null ? null : registry.get();
+        String lookupCode = SnapCodes.DOWNSTREAM_PREFIX + target;
+        ErrorMap.Fields attached = current == null ? null : current.lookupErrorMaps().get(lookupCode);
+        if (attached == null) {
+            return null;
+        }
+        try {
+            ErrorMap.Lookup lookup = attached.lookup();
+            ErrorMap.Result r = lookup.evaluate(stepResult(error));
+            ObjectNode out = F.objectNode();
+            attached.fields().forEach((name, field) -> {
+                JsonNode v = r.take(field);
+                if (!JsonValues.isAbsent(v)) {
+                    out.set(name, v);
+                }
+            });
+            log.info("error map {} for {}: where {} -> {} match(es), {}", lookup.map().code(), lookupCode,
+                    MappingEngine.describeWhere(lookup, r), r.matches(), r.entry() == null
+                            ? (r.matches() == 0 ? "none to take" : "no match at index " + lookup.index()) + " -> no value"
+                            : "took index " + lookup.index() + " (entry " + r.entry() + "): " + MappingEngine.cut(out.toString()));
+            return out.isEmpty() ? null : out;
+        } catch (RuntimeException e) {
+            log.warn("error map of {} could not be applied; leaving its fields out: {}", lookupCode, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * {@code additionalInfo} from the flow's named response
+     * {@value #ADDITIONAL_INFO}; null when it has none.
+     */
+    private ObjectNode flowAdditionalInfo(FlowDefinition flow, GatewayError error, SnapCodes.Code code,
+            String responseCode, String message, ExecutionContext ctx) {
         if (flow == null || !flow.responses().containsKey(ADDITIONAL_INFO)) {
             return null;
         }

@@ -395,6 +395,101 @@ class SnapFlowTest {
         assertThat(success.body().has("additionalInfo")).isFalse();
     }
 
+    /** An error map attached to SNAP_ERR_CORE: errorMessage and messageKey of the entry matching the failed call. */
+    private void coreErrorMap() {
+        rows.errorMap("CORE_ERRORS", """
+                [{"httpStatus":404,"errorCode":"NOT_FOUND","message":"{message}","messageEn":"{message}"},
+                 {"httpStatus":404,"errorCode":"NOT_FOUND","message":"Upload tidak ditemukan: {id}","messageEn":"Upload not found: {id}","messageKey":"errorsNotFound"}]""");
+        rows.lookup("SNAP_ERR_CORE", "@errorMap", """
+                {"map":"CORE_ERRORS","fields":{"errorMessage":"messageEn","messageKey":"messageKey"},"fill":true,
+                 "where":[{"field":"httpStatus","source":"$.status"},
+                          {"field":"errorCode","source":"$.body.errorCode","match":"template"},
+                          {"field":"message","source":"$.body.message","match":"template"}]}""");
+        rows.lookup("SNAP_ERR_CORE", "HTTP_404", "404.01");
+        rows.lookup("SNAP_RESPONSE_CODE", "404.01", "Transaction Not Found");
+    }
+
+    @Test
+    void anErrorMapOnTheTargetLookupFillsAdditionalInfoOfEveryFlowWithoutRules() {
+        snapFlow();
+        coreErrorMap();
+
+        debitAnswers(404, "{\"errorCode\":\"NOT_FOUND\",\"message\":\"Upload tidak ditemukan: X1\"}");
+        GatewayResponse found = post("{\"amount\":\"100\"}");
+        // the catch-all entry: an entry without messageKey leaves only that key out
+        debitAnswers(404, "{\"errorCode\":\"NOT_FOUND\",\"message\":\"Data lain\"}");
+        GatewayResponse other = post("{\"amount\":\"100\"}");
+        debitAnswers(404, "{\"errorCode\":\"GONE\",\"message\":\"Upload tidak ditemukan: X1\"}");
+        GatewayResponse none = post("{\"amount\":\"100\"}");
+        debitAnswers(200, "{\"responseCode\":\"00\",\"refNo\":\"TRX1\"}");
+        GatewayResponse success = post("{\"amount\":\"100\"}");
+
+        assertThat(found.status()).isEqualTo(404);
+        assertThat(text(found, "responseCode")).isEqualTo("4042401");
+        assertThat(text(found, "responseMessage")).isEqualTo("Transaction Not Found");
+        assertThat(found.body().get("additionalInfo").toString())
+                .isEqualTo("{\"errorMessage\":\"Upload not found: X1\",\"messageKey\":\"errorsNotFound\"}");
+        assertThat(other.body().get("additionalInfo").toString()).isEqualTo("{\"errorMessage\":\"Data lain\"}");
+        assertThat(text(none, "responseCode")).isEqualTo("4042401");
+        assertThat(none.body().has("additionalInfo")).isFalse();
+        assertThat(success.body().has("additionalInfo")).isFalse();
+    }
+
+    @Test
+    void theFlowsOwnAdditionalInfoWinsOverTheErrorMapAndBothAreSent() {
+        var flow = snapFlow();
+        coreErrorMap();
+        rows.response(flow, "additionalInfo", null);
+        rows.responseRule(flow, "additionalInfo", "$.errorMessage", "$.steps.debit.body.errorCode", null);
+        rows.responseRule(flow, "additionalInfo", "$.failedStep", "$.error.step", null);
+        debitAnswers(404, "{\"errorCode\":\"NOT_FOUND\",\"message\":\"Upload tidak ditemukan: X1\"}");
+
+        JsonNode info = post("{\"amount\":\"100\"}").body().get("additionalInfo");
+
+        assertThat(info.toString())
+                .isEqualTo("{\"errorMessage\":\"NOT_FOUND\",\"failedStep\":\"debit\",\"messageKey\":\"errorsNotFound\"}");
+    }
+
+    @Test
+    void theErrorMapIsOnlyForTheTargetsOwnFailures() {
+        snapFlow();
+        rows.errorMap("ANY", "[{\"always\":\"yes\",\"messageEn\":\"mapped\"}]");
+        rows.lookup("SNAP_ERR_CORE", "@errorMap",
+                "{\"map\":\"ANY\",\"fields\":{\"errorMessage\":\"messageEn\"},\"where\":[{\"field\":\"always\",\"value\":\"yes\"}]}");
+        downstream.on("/core/transfers", r -> {
+            throw new DownstreamException(DownstreamException.Kind.TIMEOUT, "read timed out", null);
+        });
+        GatewayResponse timeout = post("{\"amount\":\"100\"}");
+        debitAnswers(200, "{\"responseCode\":\"51\"}");
+        GatewayResponse business = post("{\"amount\":\"100\"}");
+
+        assertThat(text(timeout, "responseCode")).isEqualTo("5042400");
+        assertThat(timeout.body().has("additionalInfo")).isFalse();
+        assertThat(text(business, "responseCode")).isEqualTo("4032414");
+        assertThat(business.body().get("additionalInfo").get("errorMessage").asString()).isEqualTo("mapped");
+    }
+
+    @Test
+    void errorMapRowMistakesAreReportedOnReload() {
+        snapFlow();
+        rows.errorMap("ANY", "[{\"code\":\"X\",\"messageEn\":\"mapped\"}]");
+        rows.lookup("SNAP_ERR_CORE", "@errorMap",
+                "{\"map\":\"MISSING\",\"fields\":{},\"where\":[{\"field\":\"code\",\"source\":\"$.steps.debit.body.code\"},"
+                        + "{\"field\":\"code\",\"value\":\"X\",\"match\":\"regex\"}],\"index\":-1}");
+        rows.lookup("SNAP_ERR_OTHER", "@errorMap", "not json");
+        rows.lookup("SNAP_ERR_THIRD", "@errorMap", "{\"map\":\"ANY\",\"fields\":{\"m\":\"messageEn\"}}");
+
+        assertThatThrownBy(this::compile).isInstanceOf(ConfigValidationException.class)
+                .satisfies(e -> assertThat(((ConfigValidationException) e).errors())
+                        .anyMatch(m -> m.contains("lookup 'SNAP_ERR_CORE' @errorMap: map 'MISSING' is not an error map"))
+                        .anyMatch(m -> m.contains("lookup 'SNAP_ERR_CORE' @errorMap: fields needs at least one"))
+                        .anyMatch(m -> m.contains("condition on 'code' must read the failed call: $.status, $.headers or $.body"))
+                        .anyMatch(m -> m.contains("condition on 'code': match 'regex' must be equals or template"))
+                        .anyMatch(m -> m.contains("lookup 'SNAP_ERR_CORE' @errorMap: index must be 0 or more"))
+                        .anyMatch(m -> m.contains("lookup 'SNAP_ERR_OTHER' @errorMap: must be a JSON object"))
+                        .anyMatch(m -> m.contains("lookup 'SNAP_ERR_THIRD' @errorMap: where needs at least one condition")));
+    }
+
     @Test
     void additionalInfoResponseTakesBodyRulesOnlyAndCannotBeRoutedTo() {
         var flow = snapFlow();
