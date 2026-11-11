@@ -226,6 +226,45 @@ class ConfigCompilerTest {
     }
 
     @Test
+    void copyRulesPassFieldsThroughAndRemappedOnesAreOverridden() {
+        var flow = rows.flow("A", "POST", "/x");
+        var account = rows.step(flow, "account", 1);
+        var next = rows.step(flow, "next", 2);
+        rows.rule(flow.id(), null, "FLOW_RESPONSE", "COPY", "$.acctName", "$.steps.account.body.acctName", null);
+        rows.rule(flow.id(), null, "FLOW_RESPONSE", "COPY", "$.detail.branch", "$.steps.account.body.detail.branch", null);
+        rows.responseRule(flow, "$.detail.cabang", "$.steps.account.body.detail.branch");
+        rows.rule(flow.id(), next.id(), "STEP_REQUEST", "COPY", "$.customer", "$.request.body.customer", null);
+
+        FlowDefinition f = compiler.compile(rows.build()).flows().getFirst();
+
+        var rules = f.responseRules();
+        assertThat(rules).extracting(r -> r.targetType().name()).containsExactly("COPY", "COPY", "BODY");
+        assertThat(rules.get(0).targetPath()).hasToString("$.acctName");
+        assertThat(rules.get(0).remappedBy()).isNull();
+        assertThat(rules.get(1).remappedBy()).contains("$.detail.cabang");
+        StepDefinition nextStep = f.allSteps().stream().filter(s -> s.name().equals("next")).findFirst().orElseThrow();
+        assertThat(nextStep.requestRules().getFirst().targetPath()).hasToString("$.customer");
+        assertThat(account).isNotNull();
+    }
+
+    @Test
+    void copyRulesAreValidated() {
+        var flow = rows.flow("A", "POST", "/x");
+        rows.step(flow, "account", 1);
+        rows.rule(flow.id(), null, "FLOW_RESPONSE", "COPY", "$.status", "$.steps.account.status", null);
+        rows.rule(flow.id(), null, "FLOW_RESPONSE", "COPY", "$.elsewhere", "$.steps.account.body.acctNo", null);
+        rows.rule(flow.id(), null, "FLOW_RESPONSE", "COPY", "$.x", null, "1");
+        rows.rule(new RuleRow(9001, flow.id(), null, "FLOW_RESPONSE", 9, "COPY", "$.name", "$.request.body.name",
+                null, null, "UPPER", null, null, false));
+        rows.rule(flow.id(), null, "FLOW_RESPONSE", "COPY", "$.y", "$.steps.ghost.body.y", null);
+        assertInvalid("a COPY rule takes source_path $.steps.<step>.body.<field>",
+                "target_path must be $.acctNo (not $.elsewhere)",
+                "a COPY rule needs source_path",
+                "copies the value as it is",
+                "unknown step 'ghost'");
+    }
+
+    @Test
     void reportsAllErrorsAtOnce() {
         rows.flow("A", "FETCH", "/x");
         rows.flow("B", "GET", "/y", f -> f.withSchemas("NOPE", null));

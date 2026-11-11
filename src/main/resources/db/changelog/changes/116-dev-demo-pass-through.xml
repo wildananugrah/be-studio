@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Dev data: ACCOUNT_DETAIL passes chosen fields of the core's answer through unchanged (COPY rules) and renames
+        one of them with an ordinary rule, which overrides its copy.
+
+          GET /api/v1/accounts/{accountNo}/detail → CORE_BANKING GET /core/accounts/{accountNo}/detail
+
+          core:   {acctNo, acctName, detail: {branch, openDate}, internalRef}
+          COPY    acctName, detail.openDate, detail.branch (overridden: the BODY rule below reads it)
+          BODY    $.detail.cabang ← detail.branch, $.account.number ← acctNo
+          client: {acctName, detail: {openDate, cabang}, account: {number}}   (no internalRef, no detail.branch)
+    -->
+    <changeSet id="116-demo-pass-through" author="json-gateway" context="dev">
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="ACCOUNT_DETAIL"/>
+            <column name="name" value="Account detail (fields passed through, one renamed)"/>
+            <column name="http_method" value="GET"/>
+            <column name="path_pattern" value="/v1/accounts/{accountNo}/detail"/>
+            <column name="success_status" valueNumeric="200"/>
+            <column name="application_code" value="CORE_BANKING_API"/>
+            <column name="service_code" value="90"/>
+        </insert>
+        <insert tableName="${tbl.flow_step}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_DETAIL')"/>
+            <column name="name" value="account"/><column name="step_order" valueNumeric="1"/>
+            <column name="target_system" value="CORE_BANKING"/><column name="http_method" value="GET"/>
+            <column name="path_template" value="/core/accounts/{accountNo}/detail"/>
+            <column name="response_example" value='{"acctNo": "1001", "acctName": "BUDI SANTOSO", "detail": {"branch": "JKT01", "openDate": "20200101"}, "internalRef": "X-778"}'/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_DETAIL')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'ACCOUNT_DETAIL' AND s.name = 'account')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="PATH"/><column name="target_path" value="accountNo"/>
+            <column name="source_path" value="$.request.path.accountNo"/><column name="required" valueBoolean="true"/>
+        </insert>
+
+        <!-- pass-through: target_path is where the field already is inside the step's body -->
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_DETAIL')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="COPY"/><column name="target_path" value="$.acctName"/>
+            <column name="source_path" value="$.steps.account.body.acctName"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_DETAIL')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_type" value="COPY"/><column name="target_path" value="$.detail.openDate"/>
+            <column name="source_path" value="$.steps.account.body.detail.openDate"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_DETAIL')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="3"/>
+            <column name="target_type" value="COPY"/><column name="target_path" value="$.detail.branch"/>
+            <column name="source_path" value="$.steps.account.body.detail.branch"/>
+        </insert>
+
+        <!-- remapped: these rules override the copies of the fields they read -->
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_DETAIL')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="4"/>
+            <column name="target_path" value="$.detail.cabang"/><column name="source_path" value="$.steps.account.body.detail.branch"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'ACCOUNT_DETAIL')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="5"/>
+            <column name="target_path" value="$.account.number"/><column name="source_path" value="$.steps.account.body.acctNo"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

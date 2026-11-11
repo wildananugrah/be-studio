@@ -47,6 +47,13 @@ class SqlStepCompileTest {
     }
 
     @Test
+    void copyRulesAreNotAllowedInQuerySteps() {
+        var step = query("REPORTS", "select 1 from dual where a = :a");
+        rows.rule(step.flowId(), step.id(), "STEP_REQUEST", "COPY", "$.a", "$.request.body.a", null);
+        assertInvalid("target_type COPY is not allowed");
+    }
+
+    @Test
     void compilesAQueryStepWithItsParameters() {
         var step = query("REPORTS", "SELECT * FROM t WHERE id = :id");
         rows.stepRule(step, "$.id", "$.request.path.id");

@@ -334,8 +334,8 @@ scripts/flow-changelog.sh export TRADE_CALLBACK,OTHER_FLOW                      
 | `step_id` | for `STEP_REQUEST` | Step whose request this builds. Must be NULL for `FLOW_RESPONSE`. |
 | `phase` | ✔ | `STEP_REQUEST` (what a step sends) or `FLOW_RESPONSE` (what the client receives) |
 | `seq` | ✔ | Order of application within the step/response. A later rule writing the same target overwrites. |
-| `target_type` | default `BODY` | `BODY`, `HEADER`, `QUERY`, `PATH`, `STATUS`. `FLOW_RESPONSE` allows only `BODY`, `HEADER` and `STATUS` (the HTTP status, [§4.11d](#411d-pass-the-backends-http-status-through-success-and-failure)); steps don't allow `STATUS`. |
-| `target_path` | ✔ | `BODY`: a path like `$.a.b`. Otherwise the plain header / query parameter / path variable name. |
+| `target_type` | default `BODY` | `BODY`, `HEADER`, `QUERY`, `PATH`, `STATUS`, `COPY`. `FLOW_RESPONSE` allows only `BODY`, `HEADER`, `STATUS` (the HTTP status, [§4.11d](#411d-pass-the-backends-http-status-through-success-and-failure)), `FILE` and `COPY`; steps don't allow `STATUS`. `COPY` passes a field through unchanged ([§4.3a](#43a-pass-chosen-fields-through-copy)); HTTP calls, transforms and responses allow it, database and file steps don't. |
+| `target_path` | ✔ | `BODY`: a path like `$.a.b`. `COPY`: where the field is inside its body (`$.steps.x.body.a.b` → `$.a.b`). Otherwise the plain header / query parameter / path variable name. |
 | `source_path` | one of | Where the value comes from ([§3.3.1](#331-what-a-rule-can-read)) |
 | `constant_value` | one of | A fixed value ([§3.3.3](#333-literal-values)) |
 | `default_value` | | Used when the source is missing or null |
@@ -714,6 +714,35 @@ VALUES ('PAYMENT', 'Payment', 'POST', '/v1/payments', 'PAYMENT_REQUEST', 201);
 | 1 | `$` | `$.steps.core.body` | copy every field of the core response |
 | 2 | `$.status` | `$.steps.core.body.statusCd` + lookup | override one field |
 | 3 | `$.source` | constant `CORE` | add a field |
+
+### 4.3a Pass chosen fields through (`COPY`)
+
+Without a rule, a field isn't sent. Instead of writing a rule per field that only moves a value to the same place, mark the fields you want **as they are** with a `COPY` rule (in Studio: tick the field in the Mapping context). Write ordinary rules only for the fields you change.
+
+- `source_path` is a field under `$.steps.<step>.body` or `$.request.body`. `target_path` is where that field already is inside its body, so it **keeps its place and nesting**: `$.steps.account.body.detail.openDate` → `$.detail.openDate`. Whole objects and arrays can be copied too (`$.steps.account.body.detail`).
+- The value is copied as it is: no converter, lookup, default, constant, error map or field handler (use a `BODY` rule for that). `required` works as usual.
+- Copies are written **before** the other rules, whatever their `seq`. Other rules then add to the copied objects (`$.detail.cabang` lands next to the copied `$.detail.openDate`).
+- **A remap overrides the copy.** If another rule of the same list (the same step, response or named response) reads the copied field or a parent of it, the field is not copied. If it reads a field inside a copied object, the object is copied without that field. So ticking a field and also renaming it gives only the new name. This holds whatever that rule writes to (a `HEADER` rule counts too).
+- Fields that are neither copied nor mapped are left out, as before.
+
+The core answers `{"acctNo": "1001", "acctName": "BUDI SANTOSO", "detail": {"branch": "JKT01", "openDate": "20200101"}, "internalRef": "X-778"}`:
+
+| seq | target_type | target_path | source_path | |
+|---|---|---|---|---|
+| 1 | `COPY` | `$.acctName` | `$.steps.account.body.acctName` | passed through |
+| 2 | `COPY` | `$.detail.openDate` | `$.steps.account.body.detail.openDate` | passed through |
+| 3 | `COPY` | `$.detail.branch` | `$.steps.account.body.detail.branch` | overridden by rule 4: not copied |
+| 4 | `BODY` | `$.detail.cabang` | `$.steps.account.body.detail.branch` | renamed |
+| 5 | `BODY` | `$.account.number` | `$.steps.account.body.acctNo` | renamed |
+
+The client gets `{"acctName": "BUDI SANTOSO", "detail": {"openDate": "20200101", "cabang": "JKT01"}, "account": {"number": "1001"}}`. `internalRef` isn't sent. (The dev demo `ACCOUNT_DETAIL`, `GET /api/v1/accounts/1001/detail`, is this flow.)
+
+```sql
+INSERT INTO gw_mapping_rule (flow_id, phase, seq, target_type, target_path, source_path)
+SELECT id, 'FLOW_RESPONSE', 1, 'COPY', '$.acctName', '$.steps.account.body.acctName' FROM gw_flow WHERE code = 'ACCOUNT_DETAIL';
+```
+
+The Studio preview marks an overridden copy `not copied: mapping rule … maps this field`. To send the **whole** body and change a few fields, use [§4.3](#43-copy-everything-then-adjust) instead.
 
 ### 4.4 Move values between headers, path, query and body
 
@@ -1711,6 +1740,10 @@ Reload (and startup) report every problem at once. The common ones:
 | `STEP_REQUEST rule requires step_id` / `FLOW_RESPONSE rule must not have step_id` | `phase` and `step_id` don't match | Fix `step_id` or `phase` |
 | `target_type QUERY is not allowed for FLOW_RESPONSE` | Responses only have body, headers and a status | Use `BODY`, `HEADER` or `STATUS` |
 | `target_type STATUS is not allowed for STEP_REQUEST` | `STATUS` sets the client response's status | Put the rule on the client response (or a named one) |
+| `a COPY rule takes source_path $.steps.<step>.body.<field> or $.request.body.<field>` | A copy keeps the field's place in a body, so it must come from one | Pick a body field, or use a `BODY` rule |
+| `a COPY rule writes the field to the same place: target_path must be $.x` | `target_path` differs from where the field is in its body | Set it to the path shown, or use a `BODY` rule to move it |
+| `a COPY rule copies the value as it is` | A converter, lookup, default, constant, error map or handler on a `COPY` rule | Use a `BODY` rule to change the value |
+| `target_type COPY is not allowed` | Database and file storage steps take named parameters, not a body | Use `BODY` rules there |
 | `Invalid HTTP status for STATUS` (500 `GW-500-MAPPING`) | A `STATUS` rule gave something other than a whole number from 100 to 599 | Check its source, lookup or constant |
 | `target has N [*] but source has M` | Array shapes don't match | Use the same number of `[*]`, or none in the target |
 | `a wildcard source cannot be written to a HEADER target` | Arrays can't go into headers / query / path | Pick one element (`[0]`) instead |

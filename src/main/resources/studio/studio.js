@@ -152,6 +152,13 @@ const isStore = s => !isSql(s) && STORE_NAMES.has(s.target);
 // base64 / text are the content, built by the server only when a rule or template reads them (e.g. to send the file on in JSON)
 const fileSample = field => ({ field, filename: 'sample.pdf', contentType: 'application/pdf', size: 24680, sha256: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08', base64: 'JVBERi0xLjcKJcfsj6IK…', text: '%PDF-1.7 …' });
 /** The form field of a step's file rule ($.file <- $.request.files.<field>). */
+/**
+ * Where a pass-through (COPY) rule writes the field it copies: its path inside the body it comes from
+ * ($.steps.<step>.body.a.b or $.request.body.a.b → $.a.b); null when the path is not a field of such a body.
+ */
+const copyTarget = path => { const m = /^\$\.(?:request|steps\.[A-Za-z0-9_-]+)\.body((?:\.|\[).+)$/.exec(path || ''); return m ? '$' + m[1] : null; };
+/** True when rule path b is path a or inside it ($.x.y is inside $.x, $.x[*].y inside $.x[*] and $.x). */
+const pathWithin = (a, b) => b === a || b.startsWith(a + '.') || b.startsWith(a + '[');
 const fileField = st => { const r = st.rules.find(x => x.type === 'BODY' && x.target === '$.file'); const m = r && /^\$\.request\.files\.([A-Za-z0-9_-]+)$/.exec(r.source || ''); return m ? m[1] : ''; };
 
 /** A database query step (it has SQL; may be empty while being written). */
@@ -330,7 +337,7 @@ function synthSample(f, lookups) {
     if (isCondition(s)) { ctx.steps[s.name] = { outcome: 'SUCCESS', headers: {}, body: { matched: (s.cases[0] && s.cases[0].label) || 'case 1', case: 1, route: (s.cases[0] && s.cases[0].then) || '' } }; return; }
     if (isTransform(s)) {
       ctx.steps[s.name] = { outcome: 'SUCCESS', headers: {}, body: {} };
-      s.rules.forEach(r => { if (r.type === 'BODY' && /^\$(\.|\[|$)/.test(r.target || '')) { const tk = toks(r.target).filter(x => typeof x === 'string' && x !== '*'); place(ctx, '$.steps.' + s.name + '.body' + r.target.slice(1), r.constant !== '' && r.constant != null ? r.constant : guess(String(tk[tk.length - 1] || 'value'), r, lookups)); } });
+      s.rules.forEach(r => { if ((r.type === 'BODY' || r.type === 'COPY') && /^\$(\.|\[|$)/.test(r.target || '')) { const tk = toks(r.target).filter(x => typeof x === 'string' && x !== '*'); place(ctx, '$.steps.' + s.name + '.body' + r.target.slice(1), r.constant !== '' && r.constant != null ? r.constant : guess(String(tk[tk.length - 1] || 'value'), r, lookups)); } });
       return;
     }
     if (!isSql(s)) {
@@ -2977,12 +2984,19 @@ class App extends Component {
       if (!x.emWhere || !x.emWhere.length) x.emWhere = [{ field: fields.find(k => /^errorcode$/i.test(k)) || fields[0] || '', input: '' }];
       if (!x.emOut || !fields.includes(x.emOut)) x.emOut = fields.find(k => /^generalmessage$/i.test(k)) || fields.find(k => /message/i.test(k)) || '';
     };
-    const types = scopeStep ? (isSql(scopeStep) || isTransform(scopeStep) ? ['BODY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes.filter(t => t !== 'STATUS' && t !== 'FILE')) : respSel && isInfoResp(respSel) ? ['BODY'] : ['BODY', 'HEADER', 'STATUS', 'FILE'];
+    const types = scopeStep ? (isSql(scopeStep) ? ['BODY'] : isTransform(scopeStep) ? ['BODY', 'COPY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes.filter(t => t !== 'STATUS' && t !== 'FILE')) : respSel && isInfoResp(respSel) ? ['BODY', 'COPY'] : ['BODY', 'HEADER', 'STATUS', 'FILE', 'COPY'];
+    /** Pass-through: the COPY rule of this scope that copies the context field at path, if any. */
+    const copyOf = path => rules.find(r => r.type === 'COPY' && r.source === path);
+    /** The rule (1-based number) that remaps a copied field: one that reads the field or a parent of it. */
+    const remapOf = path => { const i = rules.findIndex(r => r.type !== 'COPY' && r.type !== 'FILE' && r.source && pathWithin(r.source, path)); return i < 0 ? 0 : i + 1; };
+    const canCopy = types.includes('COPY');
+    const toggleCopy = path => this.mut(fl => { const list = listOf(fl); const i = list.findIndex(r => r.type === 'COPY' && r.source === path); if (i >= 0) list.splice(i, 1); else list.splice(list.filter(r => r.type === 'COPY').length ? list.map(r => r.type).lastIndexOf('COPY') + 1 : 0, 0, { id: uid('r'), type: 'COPY', target: copyTarget(path), source: path, constant: '', def: '', lookup: '', conv: '', fh: '', required: false }); });
 
     const pv = s.preview && s.preview.key === f.code + '/' + (scopeStep ? scopeStep.name : respSel ? '@' + respSel.name : '') ? s.preview : null;
     const resText = (r, i) => {
       const x = pv && pv.rules && pv.rules[i];
       if (!x) return { t: '', c: '#9A9CA2' };
+      if (x.error && r.type === 'COPY' && x.error.startsWith('not copied')) return { t: x.error, c: '#9A9CA2' };
       if (x.error) return { t: 'error · ' + x.error, c: 'oklch(0.55 0.18 25)' };
       if (x.written) return { t: '→ ' + JSON.stringify(x.value), c: 'oklch(0.48 0.11 160)' };
       return r.required ? { t: 'missing (required)', c: 'oklch(0.55 0.18 25)' } : { t: r.em ? 'skipped · no matching entry, no default' : 'skipped · source missing', c: '#9A9CA2' };
@@ -3052,10 +3066,11 @@ class App extends Component {
       <div style="flex:1;min-height:0;display:flex">
         <aside style="width:290px;flex:none;background:#fff;border-right:1px solid #E4E1D8;overflow:auto;padding:16px 10px 32px">
           <div style=${`margin:0 6px 4px;font:600 10px ${MONO};letter-spacing:.08em;color:#6A6D75`}>CONTEXT</div>
-          <div style="margin:0 6px 10px;font-size:11.5px;color:#9A9CA2;line-height:1.4">${scopeStep ? 'Inbound request plus steps with a lower step_order than ' + scopeStep.name + '.' : 'Inbound request plus every step result.'} Drag a field onto a rule.</div>
+          <div style="margin:0 6px 10px;font-size:11.5px;color:#9A9CA2;line-height:1.4">${scopeStep ? 'Inbound request plus steps with a lower step_order than ' + scopeStep.name + '.' : 'Inbound request plus every step result.'} Drag a field onto a rule${canCopy ? ', or tick a body field to pass it through unchanged' : ''}.</div>
           <div style="display:flex;flex-direction:column">
             ${tree.map(n => { const sec = ADDABLE[n.path]; return html`
               <div class="ctx" draggable="true" onDragStart=${this.ds({ kind: 'src', path: n.path })} onDragEnd=${this.dragEnd} title=${n.path} style=${`display:flex;align-items:center;gap:8px;padding:4px 6px 4px ${6 + n.depth * 14}px;border-radius:5px;cursor:grab;font:11.5px ${MONO}`}>
+                ${canCopy && copyTarget(n.path) && n.key !== '[*]' && (() => { const c = copyOf(n.path); const by = c && remapOf(n.path); return html`<input type="checkbox" class="ro-hide" checked=${!!c} onClick=${e => e.stopPropagation()} onChange=${() => toggleCopy(n.path)} title=${c ? (by ? 'Pass-through, but rule ' + by + ' remaps this field, so it is not copied' : 'Passed through to ' + copyTarget(n.path) + ' unchanged. Uncheck to leave it out') : 'Pass through: copy to ' + copyTarget(n.path) + ' unchanged (a rule that maps it overrides the copy)'} style=${`flex:none;margin:0 -2px 0 0;width:12px;height:12px;cursor:pointer;accent-color:#17181C;opacity:${by ? 0.45 : 1}`}/>`; })()}
                 <span style=${`color:${n.depth === 0 ? '#17181C' : n.sample === '' ? '#3E4047' : 'oklch(0.42 0.12 255)'};font-weight:${n.depth === 0 ? 600 : 400}`}>${n.key}</span>
                 <span class="hscroll" style="flex:1;min-width:0;text-align:right;color:#9A9CA2">${n.sample}</span>
                 ${(() => { const m = /^\$\.steps\.([^.\[]+)\.body$/.exec(n.path); const st = m && f.steps.find(x => x.name === m[1] && !isSql(x) && !isStore(x) && !isLocal(x)); return st && html`<button class="ro-hide" title=${'Teach Studio what ' + st.target + ' answers: paste an example response (JSON, XML or SOAP) or take the last real one'} onClick=${e => { e.stopPropagation(); this.setState({ exEdit: s.exEdit && s.exEdit.step === st.id ? null : { step: st.id, text: st.example || '', error: '', busy: false, note: '' } }); }} style=${`flex:none;border:1px solid ${st.example ? 'oklch(0.85 0.06 160)' : '#E4E1D8'};background:${s.exEdit && s.exEdit.step === st.id ? '#17181C' : '#fff'};color:${s.exEdit && s.exEdit.step === st.id ? '#fff' : st.example ? 'oklch(0.45 0.11 160)' : '#6A6D75'};border-radius:4px;padding:0 6px;height:18px;cursor:pointer;font:10px ${MONO}`}>${st.example ? 'example ✓' : 'example'}</button>`; })()}
@@ -3107,16 +3122,16 @@ class App extends Component {
 
           <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;max-width:880px">
             ${rules.map((r, i) => {
-              const z = this.zone('rule-' + r.id, ruleAccept, d => (d.kind === 'conv' && !this.ro ? this.openConv({ id: r.id, conv: d.v, fromDrop: true }) : null, updRule(r.id, x => { if (d.kind === 'src' && x.em) { const w = (x.emWhere || []).find(c => !c.input); if (w) w.input = d.path; else x.emWhere = [...(x.emWhere || []), { field: '', input: d.path }]; } else if (d.kind === 'src') { x.source = d.path; x.constant = ''; } if (d.kind === 'em') useMap(x, d.v); if (d.kind === 'conv') x.conv = d.v; if (d.kind === 'lookup') x.lookup = d.v; if (d.kind === 'fh') x.fh = d.v; })));
+              const z = this.zone('rule-' + r.id, ruleAccept, d => (d.kind === 'conv' && !this.ro ? this.openConv({ id: r.id, conv: d.v, fromDrop: true }) : null, updRule(r.id, x => { if (d.kind === 'src' && x.em) { const w = (x.emWhere || []).find(c => !c.input); if (w) w.input = d.path; else x.emWhere = [...(x.emWhere || []), { field: '', input: d.path }]; } else if (d.kind === 'src') { x.source = d.path; x.constant = ''; if (x.type === 'COPY') x.target = copyTarget(d.path) || x.target; } if (x.type === 'COPY') return; if (d.kind === 'em') useMap(x, d.v); if (d.kind === 'conv') x.conv = d.v; if (d.kind === 'lookup') x.lookup = d.v; if (d.kind === 'fh') x.fh = d.v; })));
               const res = resText(r, i); const set = k => e => { const v = e.currentTarget.value; updRule(r.id, x => { x[k] = v; }); };
               return html`
               <div ...${zoneProps(z)} style="position:relative;background:#fff;border:1px solid #E4E1D8;border-radius:9px;padding:9px 10px;display:flex;flex-direction:column;gap:7px">
                 <div style="display:flex;align-items:center;gap:8px">
                   <span style=${`width:18px;text-align:right;font:11px ${MONO};color:#9A9CA2`}>${i + 1}</span>
-                  <select value=${r.type} onChange=${e => { const v = e.currentTarget.value; updRule(r.id, x => { x.type = v; if (v === 'STATUS') { x.target = 'status'; return; } if (v === 'FILE') { x.target = 'file'; return; } if (v !== 'BODY' && x.target.startsWith('$.')) x.target = x.target.slice(2); if (v === 'BODY' && !x.target.startsWith('$')) x.target = '$.' + x.target; }); }} style=${`height:28px;border:1px solid #E4E1D8;border-radius:5px;background:#FAF9F6;font:600 10.5px ${MONO};padding:0 4px`}>
+                  <select value=${r.type} onChange=${e => { const v = e.currentTarget.value; updRule(r.id, x => { x.type = v; if (v === 'STATUS') { x.target = 'status'; return; } if (v === 'FILE') { x.target = 'file'; return; } if (v === 'COPY') { x.target = copyTarget(x.source) || '$.field'; x.constant = ''; x.def = ''; x.conv = ''; x.lookup = ''; x.fh = ''; x.em = ''; x.emWhere = []; x.emOut = ''; return; } if (v !== 'BODY' && x.target.startsWith('$.')) x.target = x.target.slice(2); if (v === 'BODY' && !x.target.startsWith('$')) x.target = '$.' + x.target; }); }} style=${`height:28px;border:1px solid #E4E1D8;border-radius:5px;background:#FAF9F6;font:600 10.5px ${MONO};padding:0 4px`}>
                     ${withType(types, r.type).map(o => html`<option value=${o}>${o}</option>`)}
                   </select>
-                  <input class="inp" value=${r.type === 'STATUS' ? 'HTTP status (100-599)' : r.type === 'FILE' ? 'the file of the step (source $.steps.<step>)' : r.target} readOnly=${r.type === 'STATUS' || r.type === 'FILE'} title=${r.type === 'FILE' ? 'Sends the file a step with body_codec fileCodec downloaded, with its Content-Type; BODY rules and the response handler do not apply' : r.type === 'STATUS' ? 'Sets the HTTP status of this response, e.g. from $.steps.<step>.status; wins over the fixed status' : ''} onInput=${set('target')} style=${`flex:1;min-width:120px;height:28px;border:1px solid #E4E1D8;border-radius:5px;padding:0 8px;font:12px ${MONO};background:${r.type === 'STATUS' || r.type === 'FILE' ? '#FAF9F6' : '#fff'};color:${r.type === 'STATUS' || r.type === 'FILE' ? '#6A6D75' : 'inherit'}`}/>
+                  <input class="inp" value=${r.type === 'STATUS' ? 'HTTP status (100-599)' : r.type === 'FILE' ? 'the file of the step (source $.steps.<step>)' : r.type === 'COPY' ? (copyTarget(r.source) || 'drop a body field: copied to the same place') : r.target} readOnly=${r.type === 'STATUS' || r.type === 'FILE' || r.type === 'COPY'} title=${r.type === 'FILE' ? 'Sends the file a step with body_codec fileCodec downloaded, with its Content-Type; BODY rules and the response handler do not apply' : r.type === 'STATUS' ? 'Sets the HTTP status of this response, e.g. from $.steps.<step>.status; wins over the fixed status' : r.type === 'COPY' ? 'Pass-through: copies the field unchanged to the same place in this body. Written before the other rules; a rule that reads the field (or a parent of it) remaps it, and then it is not copied' : ''} onInput=${set('target')} style=${`flex:1;min-width:120px;height:28px;border:1px solid #E4E1D8;border-radius:5px;padding:0 8px;font:12px ${MONO};background:${r.type === 'STATUS' || r.type === 'FILE' || r.type === 'COPY' ? '#FAF9F6' : '#fff'};color:${r.type === 'STATUS' || r.type === 'FILE' || r.type === 'COPY' ? '#6A6D75' : 'inherit'}`}/>
                   <span style="color:#ADA99E">←</span>
                   ${r.em ? html`
                     <div style=${`flex:1.25;min-width:0;height:28px;display:flex;align-items:center;gap:6px;padding:0 4px 0 9px;border-radius:5px;background:oklch(0.96 0.025 25);font:11.5px ${MONO};color:oklch(0.42 0.13 25)`}>
@@ -3127,14 +3142,14 @@ class App extends Component {
                       <span class="hscroll" style="flex:1;min-width:0" title=${r.source}>${r.source}</span>
                       <button onClick=${() => updRule(r.id, x => { x.source = ''; })} style="border:0;background:none;color:oklch(0.5 0.08 255);cursor:pointer;font-size:13px;padding:0 3px">×</button>
                     </div>` : html`
-                    <input class="inp" value=${r.constant} onInput=${set('constant')} placeholder="constant, or drop a field" style=${`flex:1.25;min-width:0;height:28px;border:1px dashed #C9C6BC;border-radius:5px;padding:0 9px;font:11.5px ${MONO};background:#FAF9F6`}/>`}
+                    <input class="inp" value=${r.constant} onInput=${set('constant')} readOnly=${r.type === 'COPY'} placeholder=${r.type === 'COPY' ? 'drop a body field to pass through' : 'constant, or drop a field'} style=${`flex:1.25;min-width:0;height:28px;border:1px dashed #C9C6BC;border-radius:5px;padding:0 9px;font:11.5px ${MONO};background:#FAF9F6`}/>`}
                 </div>
                 ${r.em && this.renderErrorMapRule(r, updRule)}
                 <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-left:26px">
                   ${r.lookup && html`<span style=${`display:flex;align-items:center;gap:4px;padding:2px 3px 2px 7px;border-radius:5px;background:oklch(0.96 0.03 160);font:11px ${MONO};color:oklch(0.38 0.1 160)`}>lookup ${r.lookup}<button onClick=${() => updRule(r.id, x => { x.lookup = ''; })} style="border:0;background:none;color:inherit;cursor:pointer;padding:0 3px">×</button></span>`}
                   ${r.conv && html`<span style=${`display:flex;flex:0 1 auto;max-width:100%;min-width:0;align-items:center;gap:2px;padding:2px 3px;border-radius:5px;background:${s.convEdit && s.convEdit.id === r.id ? 'oklch(0.9 0.06 300)' : 'oklch(0.95 0.03 300)'};font:11px ${MONO};color:oklch(0.4 0.13 300)`}><button class="hscroll" title=${'Edit converter · ' + r.conv} onClick=${() => this.openConv(r)} style=${`border:0;background:transparent;font:11px ${MONO};color:inherit;cursor:pointer;padding:0 4px;max-width:340px`}>${convLabel(r.conv)} ✎</button><button class="ro-hide" onClick=${() => updRule(r.id, x => { x.conv = ''; })} style="border:0;background:none;color:inherit;cursor:pointer;padding:0 3px">×</button></span>`}
                   ${r.fh && html`<span style=${`display:flex;align-items:center;gap:4px;padding:2px 3px 2px 7px;border-radius:5px;background:#F6EDD5;font:11px ${MONO};color:#7A5B12`}>${r.fh}<button onClick=${() => updRule(r.id, x => { x.fh = ''; })} style="border:0;background:none;color:inherit;cursor:pointer;padding:0 3px">×</button></span>`}
-                  <input class="inp" value=${r.def} onInput=${set('def')} placeholder="default" style=${`width:104px;height:24px;border:1px solid #EFEDE6;border-radius:5px;padding:0 7px;font:11px ${MONO};background:#FAF9F6`}/>
+                  ${r.type !== 'COPY' && html`<input class="inp" value=${r.def} onInput=${set('def')} placeholder="default" style=${`width:104px;height:24px;border:1px solid #EFEDE6;border-radius:5px;padding:0 7px;font:11px ${MONO};background:#FAF9F6`}/>`}
                   <button onClick=${() => updRule(r.id, x => { x.required = !x.required; })} style=${`height:24px;border:1px solid ${r.required ? '#17181C' : '#E4E1D8'};background:${r.required ? '#17181C' : '#fff'};color:${r.required ? '#fff' : '#9A9CA2'};border-radius:5px;padding:0 8px;font:11px ${MONO};cursor:pointer`}>required</button>
                   <span style="flex:1"></span>
                   <span class="hscroll" title=${res.t} style=${`font:11px ${MONO};color:${res.c};max-width:300px`}>${res.t}</span>

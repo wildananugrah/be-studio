@@ -357,8 +357,11 @@ public class StudioService {
     /** What one rule wrote ({@code written} false: nothing, e.g. the source was missing), or why it failed. */
     public record RuleResult(JsonNode value, boolean written, String error) {
         static RuleResult of(CompiledRule rule, MappedMessage m) {
+            if (rule.targetType() == TargetType.COPY && rule.remappedBy() != null) {
+                return new RuleResult(null, false, "not copied: " + rule.remappedBy() + " maps this field");
+            }
             JsonNode value = switch (rule.targetType()) {
-                case BODY -> rule.targetPath().wildcardCount() > 0
+                case BODY, COPY -> rule.targetPath().wildcardCount() > 0
                         ? rule.targetPath().prefixBeforeWildcard().read(m.body())
                         : rule.targetPath().read(m.body());
                 case HEADER -> text(m.headers().get(rule.targetName()));

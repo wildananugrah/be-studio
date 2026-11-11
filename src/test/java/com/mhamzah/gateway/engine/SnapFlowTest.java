@@ -499,7 +499,7 @@ class SnapFlowTest {
 
         assertThatThrownBy(this::compile).isInstanceOf(ConfigValidationException.class)
                 .satisfies(e -> assertThat(((ConfigValidationException) e).errors())
-                        .anyMatch(m -> m.contains("takes BODY rules only"))
+                        .anyMatch(m -> m.contains("takes BODY and COPY rules only"))
                         .anyMatch(m -> m.contains("cannot be answered with")));
     }
 

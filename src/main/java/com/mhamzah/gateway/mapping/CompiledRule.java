@@ -10,6 +10,8 @@ import tools.jackson.databind.JsonNode;
  * @param targetName set for HEADER / QUERY / PATH targets
  * @param source null when the value comes from {@code constant}, an error map or only from the field handler
  * @param errorMap set when the value comes from an error map (then {@code source} and {@code constant} are null)
+ * @param copyExclude COPY rules: the fields (relative to the copied value) other rules remap, left out of the copy
+ * @param remappedBy COPY rules: the rule that remaps the whole field, which is then not copied; null when copied
  */
 public record CompiledRule(
         long id,
@@ -25,13 +27,33 @@ public record CompiledRule(
         FieldHandler fieldHandler,
         String fieldHandlerName,
         boolean required,
-        ErrorMap.Lookup errorMap) {
+        ErrorMap.Lookup errorMap,
+        java.util.List<JsonPath> copyExclude,
+        String remappedBy) {
+
+    public CompiledRule {
+        copyExclude = copyExclude == null ? java.util.List.of() : java.util.List.copyOf(copyExclude);
+    }
+
+    public CompiledRule(long id, int seq, TargetType targetType, JsonPath targetPath, String targetName,
+            JsonPath source, JsonNode constant, JsonNode defaultValue, Converters.Converter converter,
+            LookupTable lookup, FieldHandler fieldHandler, String fieldHandlerName, boolean required,
+            ErrorMap.Lookup errorMap) {
+        this(id, seq, targetType, targetPath, targetName, source, constant, defaultValue, converter, lookup,
+                fieldHandler, fieldHandlerName, required, errorMap, null, null);
+    }
 
     public CompiledRule(long id, int seq, TargetType targetType, JsonPath targetPath, String targetName,
             JsonPath source, JsonNode constant, JsonNode defaultValue, Converters.Converter converter,
             LookupTable lookup, FieldHandler fieldHandler, String fieldHandlerName, boolean required) {
         this(id, seq, targetType, targetPath, targetName, source, constant, defaultValue, converter, lookup,
                 fieldHandler, fieldHandlerName, required, null);
+    }
+
+    /** This COPY rule with what other rules remap (see {@link CopyRules}). */
+    public CompiledRule withCopyOverrides(java.util.List<JsonPath> exclude, String remappedBy) {
+        return new CompiledRule(id, seq, targetType, targetPath, targetName, source, constant, defaultValue, converter,
+                lookup, fieldHandler, fieldHandlerName, required, errorMap, exclude, remappedBy);
     }
 
     /** The context paths this rule reads: its source and its error map conditions. */
@@ -52,7 +74,8 @@ public record CompiledRule(
     }
 
     public String describe() {
-        String target = targetType == TargetType.BODY ? targetPath.toString() : targetType + ":" + targetName;
+        String target = targetType == TargetType.BODY ? targetPath.toString()
+                : targetType == TargetType.COPY ? "copy " + targetPath : targetType + ":" + targetName;
         String from = source != null ? source + " -> " : errorMap != null ? "error map " + errorMap.map().code() + " -> " : "";
         return "mapping rule " + id + " (" + from + target + ")";
     }

@@ -236,7 +236,7 @@ const schemaColumn = (heading, code, texts) => ({ heading, source: { label: code
 
 /** A body written by rules: BODY targets as a tree (required from the rule), other types as parameter lines. */
 function rulesColumn(heading, rules, scope) {
-  const body = rules.filter(r => r.type === 'BODY' && r.target);
+  const body = rules.filter(r => (r.type === 'BODY' || r.type === 'COPY') && r.target);
   const byType = {};
   rules.filter(r => PARAMS.includes(r.type) && r.target).forEach(r => (byType[r.type] = byType[r.type] || []).push(r.target));
   return { heading, source: { label: 'mapping rules', scope }, params: params(byType),
