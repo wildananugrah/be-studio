@@ -360,6 +360,9 @@ public class StudioService {
             if (rule.targetType() == TargetType.COPY && rule.remappedBy() != null) {
                 return new RuleResult(null, false, "not copied: " + rule.remappedBy() + " maps this field");
             }
+            if (rule.targetType() == TargetType.REMOVE) {
+                return new RuleResult(null, false, "removed after the other rules (see the preview)");
+            }
             JsonNode value = switch (rule.targetType()) {
                 case BODY, COPY -> rule.targetPath().wildcardCount() > 0
                         ? rule.targetPath().prefixBeforeWildcard().read(m.body())
@@ -368,6 +371,7 @@ public class StudioService {
                 case QUERY -> text(m.query().get(rule.targetName()));
                 case PATH -> text(m.pathVariables().get(rule.targetName()));
                 case STATUS -> m.status() == null ? null : JsonNodeFactory.instance.numberNode(m.status());
+                case REMOVE -> null;
                 case FILE -> m.fileStep() == null ? null : JsonNodeFactory.instance.stringNode("file of step " + m.fileStep());
             };
             return new RuleResult(value, value != null, null);

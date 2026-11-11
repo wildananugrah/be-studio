@@ -158,6 +158,25 @@ class FlowExecutorTest {
     }
 
     @Test
+    void removeRulesDropBodyFieldsAndHeadersIncludingTheTargetsDefaults() {
+        var flow = rows.flow("F", "POST", "/f");
+        var step = rows.step(flow, "s", 1);
+        rows.stepRule(step, "$", "$.request.body");
+        rows.rule(flow.id(), step.id(), "STEP_REQUEST", "REMOVE", "$.internal", null, null);
+        rows.rule(flow.id(), step.id(), "STEP_REQUEST", "REMOVE", "x-channel-id", null, null);
+        rows.responseRule(flow, "$", "$.steps.s.body");
+        rows.rule(flow.id(), null, "FLOW_RESPONSE", "REMOVE", "$.items[*].secret", null, null);
+        downstream.ok("/s", "{\"items\":[{\"id\":1,\"secret\":\"a\"},{\"id\":2,\"secret\":\"b\"}]}");
+
+        var result = run("POST", "/f", "{\"amount\":10,\"internal\":\"x\"}");
+
+        var sent = downstream.last("/s");
+        assertThat(sent.body().toString()).isEqualTo("{\"amount\":10}");
+        assertThat(sent.headers()).doesNotContainKey("X-Channel-Id").containsEntry("X-Correlation-Id", "corr-1");
+        assertThat(result.response().body().toString()).isEqualTo("{\"items\":[{\"id\":1},{\"id\":2}]}");
+    }
+
+    @Test
     void stopFailureCancelsSiblingsAndUsesErrorHandler() {
         var flow = rows.flow("F", "POST", "/f");
         rows.step(flow, "bad", 1);

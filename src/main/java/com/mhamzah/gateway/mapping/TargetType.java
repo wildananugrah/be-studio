@@ -23,5 +23,12 @@ public enum TargetType {
      * (or a parent of it) is another rule's source is skipped, and a copied object leaves out the fields other rules
      * read. See {@link CopyRules}.
      */
-    COPY
+    COPY,
+    /**
+     * Removes a field or a header from what the rules built, after every other rule (whatever its seq). target_path
+     * {@code $.a.b} (or {@code $.items[*].x}, every element) is a body field; a plain name ({@code X-Internal}) is a
+     * header, matched without case. No source or constant. On a step request a header REMOVE also drops the target
+     * system's default headers; X-Correlation-Id is always sent. Removing something that is not there does nothing.
+     */
+    REMOVE
 }

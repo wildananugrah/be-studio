@@ -75,7 +75,9 @@ public record CompiledRule(
 
     public String describe() {
         String target = targetType == TargetType.BODY ? targetPath.toString()
-                : targetType == TargetType.COPY ? "copy " + targetPath : targetType + ":" + targetName;
+                : targetType == TargetType.COPY ? "copy " + targetPath
+                : targetType == TargetType.REMOVE ? "remove " + (targetPath != null ? targetPath : "header " + targetName)
+                : targetType + ":" + targetName;
         String from = source != null ? source + " -> " : errorMap != null ? "error map " + errorMap.map().code() + " -> " : "";
         return "mapping rule " + id + " (" + from + target + ")";
     }

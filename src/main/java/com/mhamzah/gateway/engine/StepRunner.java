@@ -114,6 +114,7 @@ final class StepRunner {
 
         Map<String, String> headers = new LinkedHashMap<>(target.staticHeaders());
         headers.putAll(mapped.headers());
+        mapped.removeHeadersFrom(headers); // REMOVE rules also drop the target system's default headers
         // the handler must see exactly what will be sent (no body for GET), e.g. so signatures match
         MessageView request = new MessageView(headers, sendsBody(step.method(), mapped.body()) ? mapped.body() : null);
         if (step.requestHandler() != null) {

@@ -248,6 +248,7 @@ public class FlowExecutor implements AutoCloseable {
             headers.keySet().removeIf(name::equalsIgnoreCase);
             headers.put(name, value);
         });
+        out.removeHeadersFrom(headers); // e.g. a REMOVE of Content-Disposition
         return new GatewayResponse(status, headers, file.describe(), file);
     }
 

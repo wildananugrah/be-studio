@@ -61,6 +61,7 @@
     <include file="changes/115-dev-demo-snap.xml" relativeToChangelogFile="true"/>
     <include file="changes/116-dev-demo-pass-through.xml" relativeToChangelogFile="true"/>
     <include file="changes/117-dev-demo-lc-applications.xml" relativeToChangelogFile="true"/>
+    <include file="changes/119-dev-demo-remove.xml" relativeToChangelogFile="true"/>
     <!-- after the dev data, which fills in the demo flows' service codes first -->
     <include file="changes/019-flow-service-code-not-null.xml" relativeToChangelogFile="true"/>
     <include file="changes/021-flow-service-code-length.xml" relativeToChangelogFile="true"/>

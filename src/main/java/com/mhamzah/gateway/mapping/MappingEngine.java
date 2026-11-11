@@ -12,7 +12,8 @@ import tools.jackson.databind.node.JsonNodeFactory;
 
 /**
  * Applies mapping rules in order (spec Section 6.3): value (source, constant or error map), default, lookup,
- * converter, field handler, required check, write. Pass-through (COPY) rules run before the others.
+ * converter, field handler, required check, write. Pass-through (COPY) rules run before the others, REMOVE rules after
+ * them.
  */
 public class MappingEngine {
 
@@ -27,8 +28,23 @@ public class MappingEngine {
         Map<String, String> pathVars = new LinkedHashMap<>();
         Integer[] status = {null};
         String fileStep = null;
+        java.util.Set<String> removedHeaders = new java.util.LinkedHashSet<>();
+        boolean ownBody = false;
         for (CompiledRule rule : ordered(rules)) {
-            if (rule.targetType() == TargetType.COPY && rule.remappedBy() != null) {
+            if (rule.targetType() == TargetType.REMOVE) {
+                if (rule.targetPath() != null) {
+                    if (!ownBody) {
+                        // a BODY rule writes the source's own nodes (e.g. $ ← $.steps.x.body): never remove from those
+                        body[0] = body[0].deepCopy();
+                        ownBody = true;
+                    }
+                    rule.targetPath().remove(body[0]);
+                } else {
+                    String name = rule.targetName().toLowerCase(java.util.Locale.ROOT);
+                    removedHeaders.add(name);
+                    headers.keySet().removeIf(h -> h.toLowerCase(java.util.Locale.ROOT).equals(name));
+                }
+            } else if (rule.targetType() == TargetType.COPY && rule.remappedBy() != null) {
                 log.debug("{} not copied: remapped by {}", rule.describe(), rule.remappedBy());
             } else if (rule.targetType() == TargetType.FILE) {
                 // names the step whose downloaded file is the response; the engine takes the file from the context
@@ -44,17 +60,18 @@ public class MappingEngine {
                 }
             }
         }
-        return new MappedMessage(body[0], headers, query, pathVars, status[0], fileStep);
+        return new MappedMessage(body[0], headers, query, pathVars, status[0], fileStep, removedHeaders);
     }
 
-    /** Pass-through (COPY) rules first, then the others, each group in its own order. */
+    /** Pass-through (COPY) rules first, then the others, REMOVE rules last; each group in its own order. */
     private static List<CompiledRule> ordered(List<CompiledRule> rules) {
-        if (rules.stream().noneMatch(r -> r.targetType() == TargetType.COPY)) {
+        if (rules.stream().noneMatch(r -> r.targetType() == TargetType.COPY || r.targetType() == TargetType.REMOVE)) {
             return rules;
         }
         List<CompiledRule> out = new java.util.ArrayList<>(rules.size());
         rules.stream().filter(r -> r.targetType() == TargetType.COPY).forEach(out::add);
-        rules.stream().filter(r -> r.targetType() != TargetType.COPY).forEach(out::add);
+        rules.stream().filter(r -> r.targetType() != TargetType.COPY && r.targetType() != TargetType.REMOVE).forEach(out::add);
+        rules.stream().filter(r -> r.targetType() == TargetType.REMOVE).forEach(out::add);
         return out;
     }
 
@@ -189,7 +206,7 @@ public class MappingEngine {
             case QUERY -> putText(query, rule.targetName(), value);
             case PATH -> putText(pathVars, rule.targetName(), value);
             case STATUS -> status[0] = httpStatus(rule, value);
-            case FILE -> { } // handled in apply
+            case FILE, REMOVE -> { } // handled in apply
         }
     }
 
