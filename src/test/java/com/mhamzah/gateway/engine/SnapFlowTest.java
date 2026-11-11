@@ -343,6 +343,29 @@ class SnapFlowTest {
     }
 
     @Test
+    void failedRequestChecksAreMandatoryFieldOrFieldFormat() {
+        Rows other = new Rows();
+        other.flow("SNAP_TRANSFER", "POST", "/snap/transfers", f -> f
+                .withHandlers(null, SnapResponseHandler.BEAN_NAME, SnapErrorHandler.BEAN_NAME).withServiceCode("24")
+                .withRequestValidation("""
+                        {"checks": [{"field": "$.request.body.purpose", "check": "ENUM", "values": ["new", "modify"]}]}"""));
+        FlowRegistry reg = compileOther(other);
+        var match = reg.match(HttpMethod.POST, "/snap/transfers").orElseThrow();
+
+        GatewayResponse missing = executor.execute(reg, match,
+                new InboundRequest(HttpMethod.POST, "/snap/transfers", Map.of(), Map.of(), "{}"), "c").response();
+        assertThat(missing.status()).isEqualTo(400);
+        assertThat(text(missing, "responseCode")).isEqualTo("4002402");
+        assertThat(text(missing, "responseMessage")).isEqualTo("Invalid Mandatory Field purpose");
+
+        GatewayResponse wrong = executor.execute(reg, match,
+                new InboundRequest(HttpMethod.POST, "/snap/transfers", Map.of(), Map.of(), "{\"purpose\":\"new2\"}"), "c")
+                .response();
+        assertThat(text(wrong, "responseCode")).isEqualTo("4002401");
+        assertThat(text(wrong, "responseMessage")).isEqualTo("Invalid Field Format purpose");
+    }
+
+    @Test
     void errorAdditionalInfoComesFromTheNamedResponse() {
         var flow = snapFlow();
         rows.response(flow, "additionalInfo", null);

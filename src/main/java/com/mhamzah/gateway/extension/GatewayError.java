@@ -17,6 +17,18 @@ public class GatewayError extends RuntimeException {
     private final JsonNode downstreamBody;
     private final List<String> details;
     private final boolean clientError;
+    private final Validation validation;
+
+    /**
+     * What a failed request check was about ({@link ErrorType#REQUEST_VALIDATION_FAILED}).
+     *
+     * @param path the checked path, e.g. {@code $.request.body.purpose}
+     * @param field how the client names it, e.g. {@code purpose}
+     * @param check the check that failed: REQUIRED, ENUM, ..., or SCHEMA_BY (no schema for the value)
+     * @param code the check's own code (null when it has none)
+     * @param missing true when the field is missing (not just wrong)
+     */
+    public record Validation(String path, String field, String check, String code, boolean missing) {}
 
     private GatewayError(Builder b) {
         super(b.message != null ? b.message : b.type.defaultMessage(), b.cause);
@@ -27,6 +39,12 @@ public class GatewayError extends RuntimeException {
         this.downstreamBody = b.downstreamBody;
         this.details = b.details == null ? List.of() : List.copyOf(b.details);
         this.clientError = b.clientError;
+        this.validation = b.validation;
+    }
+
+    /** The failed request check; null for other errors. */
+    public Validation validation() {
+        return validation;
     }
 
     public static Builder of(ErrorType type) {
@@ -74,6 +92,7 @@ public class GatewayError extends RuntimeException {
         private JsonNode downstreamBody;
         private List<String> details;
         private boolean clientError;
+        private Validation validation;
 
         private Builder(ErrorType type) {
             this.type = type;
@@ -108,6 +127,11 @@ public class GatewayError extends RuntimeException {
 
         public Builder clientError(boolean clientError) {
             this.clientError = clientError;
+            return this;
+        }
+
+        public Builder validation(Validation validation) {
+            this.validation = validation;
             return this;
         }
 

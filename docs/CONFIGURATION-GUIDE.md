@@ -253,7 +253,7 @@ Then run `make reload`. To switch a flow off without deleting it, use `UPDATE gw
 | `name` | | | Description |
 | `http_method` | ✔ | | `GET`, `POST`, `PUT`, `PATCH`, `DELETE` |
 | `path_pattern` | ✔ | | Starts with `/`, relative to `/api`. `{name}` captures a segment into `$.request.path.name`. When several patterns match, the most specific wins (`/accounts/me` before `/accounts/{id}`). Two flows with the same method and pattern are rejected. |
-| `request_schema_code` | | | `gw_json_schema.code` that validates the request body → `400 GW-400-SCHEMA` |
+| `request_schema_code` | | | `gw_json_schema.code` that validates the request body → `400 GW-400-SCHEMA` (only the first error is reported) |
 | `response_schema_code` | | | Validates the final response body → `500 GW-500-RESPONSE-SCHEMA` |
 | `schema_validation` | | `BOTH` (null) | Which schemas are checked at run time: `BOTH`, `REQUEST` (only `request_schema_code`), `RESPONSE` (only the steps' `response_schema_code` and this flow's `response_schema_code`) or `NONE`. A schema that is not checked is still used for mapping in Studio, OpenAPI and the API spec. A step can override it for its own response with `response_validation`. |
 | `request_handler` | | | `MessageHandler` bean run before the steps; can short-circuit ([§5.2](#52-messagehandler-headers--body)) |
@@ -264,6 +264,7 @@ Then run `make reload`. To switch a flow off without deleting it, use `UPDATE gw
 | `audit_mode` | | `INHERIT` | `INHERIT` (follow `gateway.audit.enabled`), `ON`, `OFF` |
 | `enabled` | | `true` | `false` = the route does not exist (404) |
 | `application_code` | ✔ | `DEFAULT` | `gw_application.code` of the application the flow belongs to ([§3.1a](#31a-gw_application)) |
+| `request_validation` | | | JSON: checks on the request, their order against the schema, and the request schema picked by a field's value ([§4.1a](#41a-check-fields-first-and-pick-the-schema-by-a-field)) → `400 GW-400-VALIDATION` |
 | `service_code` | ✔ | | SNAP service code, up to 4 characters, unique within the application; must match `gateway.snap.service-code-pattern` (application.yml: `[0-9A-Z]{2}[a-z]?`). The first two characters go into a SNAP `responseCode` ([§4.19](#419-snap-responses-bank-indonesia)) |
 
 ### 3.1a `gw_application`
@@ -604,6 +605,7 @@ Without a custom `error_handler`, errors look like this:
 | `ROUTE_NOT_FOUND` | 404 | `GW-404-ROUTE` |
 | `INVALID_JSON` | 400 | `GW-400-JSON` |
 | `REQUEST_SCHEMA_INVALID` | 400 | `GW-400-SCHEMA` |
+| `REQUEST_VALIDATION_FAILED` (a `request_validation` check, or no schema for the value) | 400 | `GW-400-VALIDATION` |
 | `MAPPING_ERROR` from a `$.request.*` source (the client's fault) | 400 | `GW-400-MAPPING` |
 | `MAPPING_ERROR` otherwise | 500 | `GW-500-MAPPING` |
 | `DOWNSTREAM_HTTP_ERROR` | 502 | `GW-502-DOWNSTREAM` |
@@ -698,6 +700,47 @@ INSERT INTO gw_json_schema (code, schema_text) VALUES ('PAYMENT_REQUEST',
 INSERT INTO gw_flow (code, name, http_method, path_pattern, request_schema_code, success_status)
 VALUES ('PAYMENT', 'Payment', 'POST', '/v1/payments', 'PAYMENT_REQUEST', 201);
 ```
+
+### 4.1a Check fields first, and pick the schema by a field
+
+`gw_flow.request_validation` adds checks to the inbound request and can pick the request schema by the value of a field. Example: `purpose` must be `new`, `modify` or `delete`, and each value has its own schema:
+
+```json
+{"order": "CHECKS_FIRST",
+ "checks": [
+   {"field": "$.request.body.purpose", "check": "ENUM", "values": ["new", "modify", "delete"],
+    "message": "purpose must be new, modify or delete", "code": "PURPOSE_INVALID"}],
+ "schemaBy": {"field": "$.request.body.purpose",
+              "schemas": {"new": "LC_REQ_NEW", "modify": "LC_REQ_MODIFY", "delete": "LC_REQ_DELETE"}}}
+```
+
+- **`order`**: `CHECKS_FIRST` (default) runs the checks, then the schema; `SCHEMA_FIRST` the other way round.
+- **`checks`** run top to bottom. The **first** that fails stops the request with `400 GW-400-VALIDATION`, which goes to the flow's error handler like any error. Each check has a `field` (`$.request.body.x`, `$.request.headers.x`, `$.request.query.x` or `$.request.path.x`; no `[*]`), a `check`, and optionally a `message` (otherwise a standard one) and a `code`:
+
+| check | takes | passes when |
+|---|---|---|
+| `REQUIRED` | | the field is there and not `null` |
+| `ENUM` | `values: [...]` | the value is one of them (compared as text) |
+| `LOOKUP` | `lookup: "CODE"` | the value is a key of that `gw_lookup_entry` table (add a value without touching the flow) |
+| `PATTERN` | `pattern: "[0-9]{10}"` | the whole value matches the regular expression |
+| `LENGTH` | `min` / `max` | text length (or number of items of an array) is within them |
+| `RANGE` | `min` / `max` | the value (a number, or numeric text) is within them |
+| `EXPR` | `expr: "${request.body.endDate} >= ${request.body.startDate}"` (no `field`) | the expression is true; it can read only `${request…}`. Values that cannot be compared fail the check (400), not the gateway |
+
+  A missing or `null` field fails every check unless the check has `"optional": true`.
+- **`schemaBy`**: the field's value picks the schema. A value it doesn't list uses `request_schema_code`; without one the request fails with `GW-400-VALIDATION` ("purpose must be one of [...]"). `schema_validation` `NONE` / `RESPONSE` turns the schema check off, not the checks.
+- **One error only.** Checks stop at the first failure, and a schema reports only its first error.
+
+What the client gets (default error handler):
+
+```json
+{"errorCode": "GW-400-VALIDATION", "errorMessage": "Request validation failed", "correlationId": "…",
+ "details": ["purpose must be new, modify or delete"], "field": "purpose", "validationCode": "PURPOSE_INVALID"}
+```
+
+With `error_handler = RESPOND:<response>` ([§4.11e](#411e-map-the-error-response-error_handler-respond)), the response's rules read `$.error.validation.field`, `.path`, `.check`, `.code` and `.missing` (plus `$.error.details[0]`, the message). `snapErrorHandler` answers `400xx02` (Invalid Mandatory Field) when the field is missing and `400xx01` (Invalid Field Format) otherwise, naming the field. In Studio: Pipeline → **Inbound** → Request validation. The OpenAPI document shows the request body as `oneOf` the picked schemas. Demo: `LC_REQUEST`, `POST /api/v1/lc/requests`.
+
+**Samples.** [`examples/request-validation.sql`](examples/request-validation.sql) adds two flows to any database: `LC_SUBMIT` (this purpose example) and `LC_AMEND` (every kind of check, `SCHEMA_FIRST`, and an error response `RESPOND:invalid` built from `$.error.validation`). The matching requests, with the response each one gets, are under "Request validation" in [`http/gateway.http`](../http/gateway.http).
 
 ### 4.2 Rename, nest and flatten fields
 

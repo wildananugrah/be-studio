@@ -77,7 +77,17 @@ public record ConfigRows(
             boolean enabled,
             String applicationCode,
             String schemaValidation,
-            String serviceCode) {
+            String serviceCode,
+            String requestValidation) {
+
+        public FlowRow(long id, String code, String name, String httpMethod, String pathPattern,
+                String requestSchemaCode, String responseSchemaCode, String requestHandler, String responseHandler,
+                String errorHandler, Integer successStatus, Integer timeoutMs, String auditMode, boolean enabled,
+                String applicationCode, String schemaValidation, String serviceCode) {
+            this(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode, requestHandler,
+                    responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled, applicationCode,
+                    schemaValidation, serviceCode, null);
+        }
 
         public FlowRow(long id, String code, String name, String httpMethod, String pathPattern,
                 String requestSchemaCode, String responseSchemaCode, String requestHandler, String responseHandler,
@@ -105,41 +115,48 @@ public record ConfigRows(
 
         public FlowRow withApplication(String value) {
             return new FlowRow(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode,
-                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled, value, schemaValidation, serviceCode);
+                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled, value, schemaValidation, serviceCode, requestValidation);
         }
 
         public FlowRow withHandlers(String request, String response, String error) {
             return new FlowRow(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode,
-                    request, response, error, successStatus, timeoutMs, auditMode, enabled, applicationCode, schemaValidation, serviceCode);
+                    request, response, error, successStatus, timeoutMs, auditMode, enabled, applicationCode, schemaValidation, serviceCode, requestValidation);
         }
 
         public FlowRow withSchemas(String request, String response) {
             return new FlowRow(id, code, name, httpMethod, pathPattern, request, response,
-                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled, applicationCode, schemaValidation, serviceCode);
+                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled, applicationCode, schemaValidation, serviceCode, requestValidation);
         }
 
         public FlowRow withAuditMode(String mode) {
             return new FlowRow(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode,
-                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, mode, enabled, applicationCode, schemaValidation, serviceCode);
+                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, mode, enabled, applicationCode, schemaValidation, serviceCode, requestValidation);
         }
 
         /** BOTH (null), REQUEST, RESPONSE or NONE: which of the flow's schemas are checked at run time. */
         public FlowRow withSchemaValidation(String value) {
             return new FlowRow(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode,
                     requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled,
-                    applicationCode, value, serviceCode);
+                    applicationCode, value, serviceCode, requestValidation);
         }
 
         /** The SNAP service code (two characters, {@code gateway.snap.service-code-pattern}); required on every flow. */
         public FlowRow withServiceCode(String value) {
             return new FlowRow(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode,
                     requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled,
-                    applicationCode, schemaValidation, value);
+                    applicationCode, schemaValidation, value, requestValidation);
+        }
+
+        /** JSON: the request checks, their order against the schema and the schema picked by a field (see RequestValidation). */
+        public FlowRow withRequestValidation(String value) {
+            return new FlowRow(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode,
+                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled,
+                    applicationCode, schemaValidation, serviceCode, value);
         }
 
         public FlowRow withEnabled(boolean value) {
             return new FlowRow(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode,
-                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, value, applicationCode, schemaValidation, serviceCode);
+                    requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, value, applicationCode, schemaValidation, serviceCode, requestValidation);
         }
     }
 

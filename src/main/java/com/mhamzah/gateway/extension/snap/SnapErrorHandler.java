@@ -99,6 +99,8 @@ public class SnapErrorHandler implements ErrorHandler {
             Map.entry("INVALID_JSON", "400.00"),
             Map.entry("REQUEST_SCHEMA_INVALID", "400.01"),
             Map.entry("REQUEST_SCHEMA_MISSING", "400.02"),
+            Map.entry("REQUEST_VALIDATION_FAILED", "400.01"),
+            Map.entry("REQUEST_VALIDATION_MISSING", "400.02"),
             Map.entry("MAPPING_ERROR_CLIENT", "400.02"),
             Map.entry("MAPPING_ERROR", "500.00"),
             Map.entry("FILE_TOO_LARGE", "400.01"),
@@ -316,6 +318,9 @@ public class SnapErrorHandler implements ErrorHandler {
         if (error.type() == ErrorType.MAPPING_ERROR && error.clientError()) {
             return "MAPPING_ERROR_CLIENT";
         }
+        if (error.type() == ErrorType.REQUEST_VALIDATION_FAILED && error.validation() != null && error.validation().missing()) {
+            return "REQUEST_VALIDATION_MISSING";
+        }
         return error.type().name();
     }
 
@@ -324,6 +329,9 @@ public class SnapErrorHandler implements ErrorHandler {
      * cannot be told.
      */
     static String field(GatewayError error) {
+        if (error.validation() != null) {
+            return error.validation().field();
+        }
         if (error.type() == ErrorType.REQUEST_SCHEMA_INVALID && !error.details().isEmpty()) {
             String detail = error.details().stream().filter(d -> d.contains("required")).findFirst()
                     .orElse(error.details().getFirst());

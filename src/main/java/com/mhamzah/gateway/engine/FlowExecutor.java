@@ -9,6 +9,8 @@ import com.mhamzah.gateway.config.StepDefinition;
 import com.mhamzah.gateway.engine.StepRunner.StepOutcome;
 import com.mhamzah.gateway.extension.ErrorHandler;
 import com.mhamzah.gateway.extension.ErrorType;
+import com.mhamzah.gateway.schema.CompiledSchema;
+import com.mhamzah.gateway.validation.RequestValidation;
 import com.mhamzah.gateway.extension.ExecutionContext;
 import com.mhamzah.gateway.extension.GatewayError;
 import com.mhamzah.gateway.extension.GatewayResponse;
@@ -108,16 +110,36 @@ public class FlowExecutor implements AutoCloseable {
         return finish(handleError(defaultErrorHandler, error, ctx), error, ctx, in, startedAt, start, List.of());
     }
 
+    /**
+     * The request checks (request_validation) and the request schema, in the flow's order; the first problem is thrown
+     * (GW-400-VALIDATION or GW-400-SCHEMA, with one detail). The schema is the one request_validation's schemaBy picks,
+     * else request_schema_code; schema_validation REQUEST / BOTH turns the schema check on.
+     */
+    private static void validateRequest(FlowDefinition flow, ExecutionContext ctx) {
+        RequestValidation v = flow.requestValidation();
+        boolean checksFirst = v == null || v.order() == RequestValidation.Order.CHECKS_FIRST;
+        if (checksFirst && v != null) {
+            v.check(ctx);
+        }
+        if (flow.schemaValidation().request()) {
+            CompiledSchema schema = v == null ? flow.requestSchema() : v.schemaFor(ctx, flow.requestSchema());
+            if (schema != null) {
+                List<String> errors = schema.validate(ctx.request().get("body"));
+                if (!errors.isEmpty()) {
+                    throw GatewayError.of(ErrorType.REQUEST_SCHEMA_INVALID).details(List.of(errors.getFirst())).build();
+                }
+            }
+        }
+        if (!checksFirst) {
+            v.check(ctx);
+        }
+    }
+
     private GatewayResponse run(FlowDefinition flow, InboundRequest in, ExecutionContext ctx, long deadline,
             List<StepRecord> records) {
         ObjectNode request = ctx.request();
         request.set("body", in.form() != null ? in.form() : parseInbound(in.body()));
-        if (flow.requestSchema() != null && flow.schemaValidation().request()) {
-            List<String> errors = flow.requestSchema().validate(request.get("body"));
-            if (!errors.isEmpty()) {
-                throw GatewayError.of(ErrorType.REQUEST_SCHEMA_INVALID).details(errors).build();
-            }
-        }
+        validateRequest(flow, ctx);
         if (flow.requestHandler() != null) {
             Map<String, String> headers = new LinkedHashMap<>();
             request.get("headers").properties().forEach(e -> headers.put(e.getKey(), e.getValue().asString()));
@@ -386,6 +408,19 @@ public class FlowExecutor implements AutoCloseable {
         }
         var details = e.putArray("details");
         error.details().forEach(details::add);
+        if (error.validation() != null) {
+            ObjectNode v = e.putObject("validation");
+            GatewayError.Validation val = error.validation();
+            if (val.field() != null) { // an EXPR check is about no single field
+                v.put("field", val.field());
+                v.put("path", val.path());
+            }
+            v.put("check", val.check());
+            if (val.code() != null) {
+                v.put("code", val.code());
+            }
+            v.put("missing", val.missing());
+        }
         ctx.putError(e);
         try {
             MappedMessage out = mapping.apply(respond.rules(), ctx);

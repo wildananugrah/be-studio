@@ -28,12 +28,14 @@ public class FlowEntity {
     private String applicationCode;
     private String schemaValidation;
     private String serviceCode;
+    /** CLOB / text: the JSON request checks (see RequestValidation). */
+    private String requestValidation;
 
     protected FlowEntity() {}
 
     public FlowRow toRow() {
         return new FlowRow(id, code, name, httpMethod, pathPattern, requestSchemaCode, responseSchemaCode,
                 requestHandler, responseHandler, errorHandler, successStatus, timeoutMs, auditMode, enabled, applicationCode,
-                schemaValidation, serviceCode);
+                schemaValidation, serviceCode, requestValidation);
     }
 }

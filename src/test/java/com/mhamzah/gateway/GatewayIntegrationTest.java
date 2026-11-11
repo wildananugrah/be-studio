@@ -170,7 +170,9 @@ class GatewayIntegrationTest {
 
         assertThat(r.status()).isEqualTo(400);
         assertThat(r.text("errorCode")).isEqualTo("GW-400-SCHEMA");
-        assertThat(r.body().get("details").toString()).contains("toAccount").contains("amount");
+        // two problems (toAccount missing, amount below 0): only the first is reported
+        assertThat(r.body().get("details")).hasSize(1);
+        assertThat(r.body().get("details").toString()).containsAnyOf("toAccount", "amount");
     }
 
     @Test

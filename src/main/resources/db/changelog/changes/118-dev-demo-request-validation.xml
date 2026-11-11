@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Dev data: LC_REQUEST checks "purpose" first and validates the body with the schema that purpose picks
+        (gw_flow.request_validation). No downstream call: it answers {accepted, purpose}.
+
+          POST /api/v1/lc/requests
+          check 1: purpose must be new / modify / delete      → 400 GW-400-VALIDATION, code PURPOSE_INVALID
+          schema:  new → LC_REQ_NEW, modify → LC_REQ_MODIFY, delete → LC_REQ_DELETE   → 400 GW-400-SCHEMA (first error)
+    -->
+    <changeSet id="118-demo-request-validation" author="json-gateway" context="dev">
+        <insert tableName="${tbl.json_schema}">
+            <column name="code" value="LC_REQ_NEW"/>
+            <column name="description" value="New LC request"/>
+            <column name="schema_text" value='{"type":"object","required":["purpose","applicantName","amount"],"properties":{"purpose":{"const":"new"},"applicantName":{"type":"string","minLength":1},"amount":{"type":"number","exclusiveMinimum":0}}}'/>
+        </insert>
+        <insert tableName="${tbl.json_schema}">
+            <column name="code" value="LC_REQ_MODIFY"/>
+            <column name="description" value="LC modification request"/>
+            <column name="schema_text" value='{"type":"object","required":["purpose","applicationNo","amount"],"properties":{"purpose":{"const":"modify"},"applicationNo":{"type":"string","minLength":1},"amount":{"type":"number","exclusiveMinimum":0}}}'/>
+        </insert>
+        <insert tableName="${tbl.json_schema}">
+            <column name="code" value="LC_REQ_DELETE"/>
+            <column name="description" value="LC deletion request"/>
+            <column name="schema_text" value='{"type":"object","required":["purpose","applicationNo"],"properties":{"purpose":{"const":"delete"},"applicationNo":{"type":"string","minLength":1},"reason":{"type":"string"}}}'/>
+        </insert>
+        <insert tableName="${tbl.flow}">
+            <column name="code" value="LC_REQUEST"/>
+            <column name="name" value="LC request (purpose checked first, schema picked by purpose)"/>
+            <column name="http_method" value="POST"/>
+            <column name="path_pattern" value="/v1/lc/requests"/>
+            <column name="success_status" valueNumeric="200"/>
+            <column name="application_code" value="CORE_BANKING_API"/>
+            <column name="service_code" value="92"/>
+            <column name="request_validation" value='{"order": "CHECKS_FIRST", "checks": [{"field": "$.request.body.purpose", "check": "ENUM", "values": ["new", "modify", "delete"], "message": "purpose must be new, modify or delete", "code": "PURPOSE_INVALID"}], "schemaBy": {"field": "$.request.body.purpose", "schemas": {"new": "LC_REQ_NEW", "modify": "LC_REQ_MODIFY", "delete": "LC_REQ_DELETE"}}}'/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'LC_REQUEST')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="1"/>
+            <column name="target_path" value="$.accepted"/><column name="constant_value" value="true"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'LC_REQUEST')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="2"/>
+            <column name="target_path" value="$.purpose"/><column name="source_path" value="$.request.body.purpose"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

@@ -66,4 +66,7 @@
     <include file="changes/021-flow-service-code-length.xml" relativeToChangelogFile="true"/>
     <include file="changes/022-error-map.xml" relativeToChangelogFile="true"/>
     <include file="changes/023-error-map-template.xml" relativeToChangelogFile="true"/>
+    <include file="changes/024-request-validation.xml" relativeToChangelogFile="true"/>
+    <!-- dev data that needs the columns above -->
+    <include file="changes/118-dev-demo-request-validation.xml" relativeToChangelogFile="true"/>
 </databaseChangeLog>

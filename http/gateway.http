@@ -408,3 +408,148 @@ POST {{baseUrl}}/api/v1/snap/transfers
 Content-Type: application/json
 
 {"sourceAccountNo": "1001", "beneficiaryAccountNo": "2002", "amount": {"value": "10.00", "currency": "IDR"}}
+
+###############################################################################
+# Request validation (docs/CONFIGURATION-GUIDE.md §4.1a, gw_flow.request_validation)
+#
+# LC_REQUEST is in the dev demo data (POST /v1/lc/requests).
+# LC_SUBMIT and LC_AMEND come from docs/examples/request-validation.sql:
+#   docker compose exec -T postgres psql -U gateway -d gateway < docs/examples/request-validation.sql
+#   make reload
+# Only the first problem is reported: the first failing check, or the first schema error.
+###############################################################################
+
+### ---------------------------------------------------------------------------------------------------------------
+### LC_SUBMIT: purpose is checked first (new / modify / delete), then picks the schema; standard error body
+### ---------------------------------------------------------------------------------------------------------------
+
+### purpose new → schema LC_SUBMIT_NEW → 200 {"accepted":true,"purpose":"new"}
+POST {{baseUrl}}/api/v2/lc/submissions
+Content-Type: application/json
+
+{"purpose": "new", "applicantName": "PT JAYA ABADI", "beneficiaryName": "BRANTAS ABIPRAYA, PT", "amount": 1000000}
+
+### purpose modify → schema LC_SUBMIT_MODIFY → 200 {"accepted":true,"purpose":"modify"}
+POST {{baseUrl}}/api/v2/lc/submissions
+Content-Type: application/json
+
+{"purpose": "modify", "applicationNo": "ELJPU07631S26", "amount": 3000000}
+
+### purpose delete → schema LC_SUBMIT_DELETE → 200 {"accepted":true,"purpose":"delete"}
+POST {{baseUrl}}/api/v2/lc/submissions
+Content-Type: application/json
+
+{"purpose": "delete", "applicationNo": "ELJPU07631S26", "reason": "duplicate"}
+
+### purpose new2 → the check fails before any schema → 400
+### {"errorCode":"GW-400-VALIDATION","errorMessage":"Request validation failed","correlationId":"…",
+###  "details":["purpose must be new, modify or delete"],"field":"purpose","validationCode":"PURPOSE_INVALID"}
+POST {{baseUrl}}/api/v2/lc/submissions
+Content-Type: application/json
+
+{"purpose": "new2", "applicantName": "PT JAYA ABADI"}
+
+### no purpose → the same check fails (a missing field fails a check unless it is optional) → 400 GW-400-VALIDATION
+POST {{baseUrl}}/api/v2/lc/submissions
+Content-Type: application/json
+
+{"applicantName": "PT JAYA ABADI"}
+
+### purpose new without amount → schema LC_SUBMIT_NEW fails → 400
+### {"errorCode":"GW-400-SCHEMA",…,"details":["$: required property 'amount' not found"]}
+POST {{baseUrl}}/api/v2/lc/submissions
+Content-Type: application/json
+
+{"purpose": "new", "applicantName": "PT JAYA ABADI", "beneficiaryName": "BRANTAS ABIPRAYA, PT"}
+
+### purpose modify with nothing else → two fields missing, only the first is reported → 400
+### {"errorCode":"GW-400-SCHEMA",…,"details":["$: required property 'applicationNo' not found"]}
+POST {{baseUrl}}/api/v2/lc/submissions
+Content-Type: application/json
+
+{"purpose": "modify"}
+
+### ---------------------------------------------------------------------------------------------------------------
+### LC_AMEND: SCHEMA_FIRST, every kind of check, errors answered by the response "invalid" (RESPOND:invalid)
+###   {"status":"REJECTED","code":<check code>,"field":<field>,"message":<message>,"gwCode":<GW code>}
+### ---------------------------------------------------------------------------------------------------------------
+
+### everything valid → 200 {"accepted":true,"applicationNo":"ELJPU07631S26"}
+POST {{baseUrl}}/api/v2/lc/amendments
+Content-Type: application/json
+X-Channel: MB
+
+{"applicationNo": "ELJPU07631S26", "currency": "IDR", "amount": 1000000, "expiryDate": "2026-12-26", "newExpiryDate": "2027-03-31", "remarks": "extend expiry"}
+
+### SCHEMA_FIRST: no currency (and no X-Channel) → the schema answers first → 400
+### {"status":"REJECTED","code":"SCHEMA_INVALID","message":"$: required property 'currency' not found","gwCode":"GW-400-SCHEMA"}
+POST {{baseUrl}}/api/v2/lc/amendments
+Content-Type: application/json
+
+{"applicationNo": "ELJPU07631S26", "amount": 1}
+
+### REQUIRED header missing → 400
+### {"status":"REJECTED","code":"CHANNEL_MISSING","field":"x-channel","message":"header X-Channel is required","gwCode":"GW-400-VALIDATION"}
+POST {{baseUrl}}/api/v2/lc/amendments
+Content-Type: application/json
+
+{"applicationNo": "ELJPU07631S26", "currency": "IDR", "amount": 1000000, "expiryDate": "2026-12-26", "newExpiryDate": "2027-03-31"}
+
+### PATTERN: applicationNo in the wrong format → 400 {"status":"REJECTED","code":"APPLICATION_NO_FORMAT","field":"applicationNo",…}
+POST {{baseUrl}}/api/v2/lc/amendments
+Content-Type: application/json
+X-Channel: MB
+
+{"applicationNo": "LC-123", "currency": "IDR", "amount": 1000000, "expiryDate": "2026-12-26", "newExpiryDate": "2027-03-31"}
+
+### LOOKUP: JPY is not a key of lookup LC_CURRENCY (IDR, USD, EUR) → 400 {"status":"REJECTED","code":"CURRENCY_UNSUPPORTED","field":"currency",…}
+POST {{baseUrl}}/api/v2/lc/amendments
+Content-Type: application/json
+X-Channel: MB
+
+{"applicationNo": "ELJPU07631S26", "currency": "JPY", "amount": 1000000, "expiryDate": "2026-12-26", "newExpiryDate": "2027-03-31"}
+
+### RANGE: amount 0 → 400 {"status":"REJECTED","code":"AMOUNT_RANGE","field":"amount","message":"amount must be from 1 to 10,000,000,000",…}
+POST {{baseUrl}}/api/v2/lc/amendments
+Content-Type: application/json
+X-Channel: MB
+
+{"applicationNo": "ELJPU07631S26", "currency": "IDR", "amount": 0, "expiryDate": "2026-12-26", "newExpiryDate": "2027-03-31"}
+
+### LENGTH: remarks over 50 characters → 400 {"status":"REJECTED","code":"REMARKS_TOO_LONG","field":"remarks",…}
+POST {{baseUrl}}/api/v2/lc/amendments
+Content-Type: application/json
+X-Channel: MB
+
+{"applicationNo": "ELJPU07631S26", "currency": "IDR", "amount": 1000000, "expiryDate": "2026-12-26", "newExpiryDate": "2027-03-31", "remarks": "please extend the expiry date of this letter of credit by three months"}
+
+### optional: no remarks and no newExpiryDate → 200 {"accepted":true,"applicationNo":"ELJPU07631S26"}
+POST {{baseUrl}}/api/v2/lc/amendments
+Content-Type: application/json
+X-Channel: MB
+
+{"applicationNo": "ELJPU07631S26", "currency": "USD", "amount": 5, "expiryDate": "2026-12-26"}
+
+### EXPR: newExpiryDate before expiryDate → 400 {"status":"REJECTED","code":"EXPIRY_ORDER","message":"newExpiryDate must be after expiryDate","gwCode":"GW-400-VALIDATION"}
+### (an EXPR check names no single field, so there is no "field")
+POST {{baseUrl}}/api/v2/lc/amendments
+Content-Type: application/json
+X-Channel: MB
+
+{"applicationNo": "ELJPU07631S26", "currency": "IDR", "amount": 1000000, "expiryDate": "2026-12-26", "newExpiryDate": "2026-01-01"}
+
+### ---------------------------------------------------------------------------------------------------------------
+### LC_REQUEST (dev demo data): the same idea as LC_SUBMIT, on /v1
+### ---------------------------------------------------------------------------------------------------------------
+
+### purpose new → 200 {"accepted":true,"purpose":"new"}
+POST {{baseUrl}}/api/v1/lc/requests
+Content-Type: application/json
+
+{"purpose": "new", "applicantName": "PT JAYA ABADI", "amount": 1000000}
+
+### purpose new2 → 400 GW-400-VALIDATION "purpose must be new, modify or delete" (validationCode PURPOSE_INVALID)
+POST {{baseUrl}}/api/v1/lc/requests
+Content-Type: application/json
+
+{"purpose": "new2"}

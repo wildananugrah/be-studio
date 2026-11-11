@@ -24,6 +24,7 @@ import com.mhamzah.gateway.mapping.JsonValues;
 import com.mhamzah.gateway.mapping.ErrorMap;
 import com.mhamzah.gateway.mapping.LookupTable;
 import com.mhamzah.gateway.mapping.TargetType;
+import com.mhamzah.gateway.validation.RequestValidation;
 import com.mhamzah.gateway.schema.CompiledSchema;
 import com.mhamzah.gateway.sql.SqlDatasources;
 import com.mhamzah.gateway.sql.SqlStatement;
@@ -812,13 +813,15 @@ public class ConfigCompiler {
                 errors.add(where + ": error_handler cannot answer with '" + errorResponse
                         + "', which builds additionalInfo of SNAP responses");
             }
+            RequestValidation requestValidation = RequestValidation.compile(f.requestValidation(), where,
+                    schemas::get, lookups::get, errors);
             if (method == null || pattern == null) {
                 return null;
             }
             return new FlowDefinition(f.code(), method, pattern, requestSchema, responseSchema, requestHandler,
                     responseHandler, errorHandler, errorHandlerName, successStatus, timeout, auditMode,
                     new ArrayList<>(groups.values()), CopyRules.prepare(responseRules), responses(responseStatus, namedRules),
-                    schemaValidation == null ? SchemaValidation.BOTH : schemaValidation, f.serviceCode());
+                    schemaValidation == null ? SchemaValidation.BOTH : schemaValidation, f.serviceCode(), requestValidation);
         }
 
         /** The step's response_validation (ON / OFF) when set, else what the flow's schema_validation says. */

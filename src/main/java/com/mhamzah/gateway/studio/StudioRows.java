@@ -76,7 +76,8 @@ final class StudioRows {
                                         cases(s.cases()), s.responseValidation()))
                                 .toList(),
                         rules(responseByFlow.getOrDefault(f.id(), List.of())), f.applicationCode(),
-                        responsesByFlow.getOrDefault(f.id(), List.of()), f.schemaValidation(), f.serviceCode()))
+                        responsesByFlow.getOrDefault(f.id(), List.of()), f.schemaValidation(), f.serviceCode(),
+                        requestValidation(f.requestValidation())))
                 .toList();
 
         Map<String, List<Header>> headers = new TreeMap<>();
@@ -159,6 +160,30 @@ final class StudioRows {
         return out.toString();
     }
 
+    /** {@code gw_flow.request_validation} for Studio: the JSON object, or the text as it is when it is not valid JSON. */
+    private static tools.jackson.databind.JsonNode requestValidation(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        try {
+            return com.mhamzah.gateway.mapping.JsonValues.MAPPER.readTree(text);
+        } catch (RuntimeException e) {
+            return tools.jackson.databind.node.JsonNodeFactory.instance.stringNode(text);
+        }
+    }
+
+    /** Studio's request validation back to the column: null when empty (no checks and no schemaBy). */
+    private static String requestValidationText(tools.jackson.databind.JsonNode v) {
+        if (v == null || v.isNull() || v.isMissingNode()) {
+            return null;
+        }
+        if (v.isString()) {
+            return text(v.asString());
+        }
+        boolean empty = v.isObject() && v.path("checks").isEmpty() && (v.path("schemaBy").isNull() || v.path("schemaBy").isMissingNode());
+        return empty ? null : v.toString();
+    }
+
     private static List<Rule> rules(List<RuleRow> rows) {
         return rows.stream()
                 .sorted(Comparator.comparingInt(RuleRow::seq))
@@ -229,7 +254,8 @@ final class StudioRows {
                     text(f.responseHandler()), text(f.errorHandler()),
                     f.successStatus() == null ? 200 : f.successStatus(), f.timeoutMs(),
                     or(f.auditMode(), "INHERIT"), f.enabled(), or(f.application(), DEFAULT_APPLICATION),
-                    unlessDefault(f.schemaValidation(), "BOTH"), text(f.serviceCode())));
+                    unlessDefault(f.schemaValidation(), "BOTH"), text(f.serviceCode()),
+                    requestValidationText(f.requestValidation())));
             for (Step s : f.steps()) {
                 stepId++;
                 // a database query step has no HTTP method, path or wire format

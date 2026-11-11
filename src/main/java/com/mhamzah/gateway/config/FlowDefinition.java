@@ -15,7 +15,8 @@ import org.springframework.web.util.pattern.PathPattern;
  * {@code responses} are the named ones a branch can answer with ({@code RESPOND:<name>}). {@code schemaValidation}
  * says whether {@code requestSchema} / {@code responseSchema} are checked; each step resolves its own
  * ({@link StepDefinition#validateResponse()}). {@code serviceCode} is the flow's SNAP service code
- * ({@code gw_flow.service_code}).
+ * ({@code gw_flow.service_code}). {@code requestValidation} holds the request checks and the schema picked by a field
+ * ({@code gw_flow.request_validation}); null when not set.
  */
 public record FlowDefinition(
         String code,
@@ -34,7 +35,18 @@ public record FlowDefinition(
         List<CompiledRule> responseRules,
         java.util.Map<String, Response> responses,
         SchemaValidation schemaValidation,
-        String serviceCode) {
+        String serviceCode,
+        com.mhamzah.gateway.validation.RequestValidation requestValidation) {
+
+    public FlowDefinition(String code, HttpMethod method, PathPattern pathPattern, CompiledSchema requestSchema,
+            CompiledSchema responseSchema, MessageHandler requestHandler, MessageHandler responseHandler,
+            ErrorHandler errorHandler, String errorHandlerName, int successStatus, Duration timeout,
+            AuditMode auditMode, List<List<StepDefinition>> groups, List<CompiledRule> responseRules,
+            java.util.Map<String, Response> responses, SchemaValidation schemaValidation, String serviceCode) {
+        this(code, method, pathPattern, requestSchema, responseSchema, requestHandler, responseHandler, errorHandler,
+                errorHandlerName, successStatus, timeout, auditMode, groups, responseRules, responses, schemaValidation,
+                serviceCode, null);
+    }
 
     /**
      * Reserved named response: its BODY rules build the optional {@code additionalInfo} of SNAP responses

@@ -131,6 +131,19 @@ final class ApplicationExport {
         return f.application() == null ? StudioRows.DEFAULT_APPLICATION : f.application();
     }
 
+    /** The schemas (schemaBy) and lookups (LOOKUP checks) a flow's request_validation uses. */
+    private static void requestValidationRefs(tools.jackson.databind.JsonNode v, Set<String> schemaCodes, Set<String> lookupCodes) {
+        if (v == null || !v.isObject()) {
+            return;
+        }
+        v.path("schemaBy").path("schemas").forEach(code -> addIf(schemaCodes, code.isString() ? code.asString() : null));
+        v.path("checks").forEach(c -> {
+            if ("LOOKUP".equalsIgnoreCase(c.path("check").asString("")) && c.path("lookup").isString()) {
+                addIf(lookupCodes, c.path("lookup").asString());
+            }
+        });
+    }
+
     /** The flows plus the shared items they use, and what they need on the target gateway. */
     private static Bundle collect(StudioConfig config, List<Application> apps, List<Flow> flows, boolean flowsOnly) {
         Set<String> targetCodes = new TreeSet<>();
@@ -147,6 +160,7 @@ final class ApplicationExport {
             if (f.errorHandler() == null || !f.errorHandler().startsWith(com.mhamzah.gateway.config.StepDefinition.RESPOND)) {
                 addIf(handlers, f.errorHandler()); // RESPOND:<response> is one of the flow's responses, not a bean
             }
+            requestValidationRefs(f.requestValidation(), schemaCodes, lookupCodes);
             f.response().forEach(r -> rule(r, lookupCodes, errorMapCodes, handlers));
             f.responses().forEach(x -> x.rules().forEach(r -> rule(r, lookupCodes, errorMapCodes, handlers)));
             for (Step s : f.steps()) {
@@ -385,14 +399,14 @@ final class ApplicationExport {
         rows.steps().forEach(s -> stepById.put(s.id(), s));
         List<Insert> flows = new ArrayList<>();
         for (FlowRow f : rows.flows()) {
-            flows.add(new Insert("flow", optional(List.of(Col.v("code", f.code()), Col.v("name", f.name()),
+            flows.add(new Insert("flow", optional(optional(List.of(Col.v("code", f.code()), Col.v("name", f.name()),
                     Col.v("http_method", f.httpMethod()), Col.v("path_pattern", f.pathPattern()),
                     Col.v("request_schema_code", f.requestSchemaCode()), Col.v("response_schema_code", f.responseSchemaCode()),
                     Col.v("request_handler", f.requestHandler()), Col.v("response_handler", f.responseHandler()),
                     Col.v("error_handler", f.errorHandler()), Col.v("success_status", f.successStatus()),
                     Col.v("timeout_ms", f.timeoutMs()), Col.v("audit_mode", f.auditMode()), Col.v("enabled", f.enabled()),
                     Col.v("application_code", f.applicationCode()), Col.v("service_code", f.serviceCode())),
-                    "schema_validation", f.schemaValidation())));
+                    "schema_validation", f.schemaValidation()), "request_validation", f.requestValidation())));
         }
         for (StepRow s : rows.steps()) {
             flows.add(new Insert("flow_step", optional(List.of(Col.expr("flow_id", flowId(flowCode.get(s.flowId()))),
