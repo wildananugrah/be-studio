@@ -9,6 +9,8 @@ public enum ErrorType {
     /** A file storage step got a content type outside its storage's {@code allowed-types}, or no file. */
     FILE_REJECTED(415, "GW-415-FILE", "File type is not accepted"),
     REQUEST_SCHEMA_INVALID(400, "GW-400-SCHEMA", "Request validation failed"),
+    /** A check of the flow's request_validation failed, or no request schema fits the value that picks it. */
+    REQUEST_VALIDATION_FAILED(400, "GW-400-VALIDATION", "Request validation failed"),
     /** Default is the server-side variant; a mapping that fails on a {@code $.request.*} source is a 400 (see {@link GatewayError#clientError()}). */
     MAPPING_ERROR(500, "GW-500-MAPPING", "Message mapping failed"),
     DOWNSTREAM_HTTP_ERROR(502, "GW-502-DOWNSTREAM", "Downstream call failed"),

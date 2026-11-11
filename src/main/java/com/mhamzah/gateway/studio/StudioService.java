@@ -266,7 +266,7 @@ public class StudioService {
                 flow.responseSchema(), flow.requestHandler(), flow.responseHandler(), flow.errorHandler(),
                 flow.successStatus(), flow.timeoutMs(), flow.auditMode(), true,
                 flow.steps().stream().map(StudioService::enabled).toList(), flow.response(), null, flow.responses(),
-                flow.schemaValidation(), flow.serviceCode());
+                flow.schemaValidation(), flow.serviceCode(), flow.requestValidation());
         StudioConfig single = new StudioConfig(null, List.of(only), draft.targets(), draft.lookups(), draft.schemas(),
                 draft.storages(), List.of(), draft.errorMaps());
         FlowRegistry registry;

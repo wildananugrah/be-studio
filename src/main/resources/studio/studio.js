@@ -70,6 +70,45 @@ function setStatusFrom(rules, step) {
 const ruleOut = r => ({ type: r.type, target: r.target, source: r.em ? null : nn(r.source), constant: r.em || r.source ? null : nn(r.constant), defaultValue: nn(r.def), lookup: nn(r.lookup), converter: nn(r.conv), fieldHandler: nn(r.fh), required: r.required,
   errorMap: nn(r.em), errorMapWhere: r.em ? (r.emWhere || []).map(emCond) : [], errorMapOutput: r.em ? nn(r.emOut) : null, errorMapFill: !!(r.em && r.emFill), errorMapIndex: r.em && int(r.emIndex) > 0 ? int(r.emIndex) : null });
 
+/** CHECK kinds of a flow's request validation (gw_flow.request_validation), with what each one needs. */
+const RV_KINDS = ['REQUIRED', 'ENUM', 'LOOKUP', 'PATTERN', 'LENGTH', 'RANGE', 'EXPR'];
+/** gw_flow.request_validation (JSON) → the Studio draft: order, checks (values as comma text) and schemaBy rows. */
+const rvIn = v => {
+  if (typeof v === 'string') return { order: 'CHECKS_FIRST', checks: [], byField: '', by: [], raw: v };
+  const o = v && typeof v === 'object' ? v : {};
+  const by = o.schemaBy || {};
+  return { order: o.order || 'CHECKS_FIRST', raw: null,
+    checks: (o.checks || []).map(c => ({ id: uid('v'), field: str(c.field), check: str(c.check || 'REQUIRED').toUpperCase(), values: (c.values || []).join(', '), lookup: str(c.lookup), pattern: str(c.pattern),
+      min: c.min == null ? '' : String(c.min), max: c.max == null ? '' : String(c.max), expr: str(c.expr), message: str(c.message), code: str(c.code), optional: !!c.optional })),
+    byField: str(by.field), by: Object.keys(by.schemas || {}).map(k => ({ id: uid('b'), value: k, schema: str(by.schemas[k]) })) };
+};
+const numOrText = t => (t === '' || t == null ? null : (isNaN(Number(t)) ? t : Number(t)));
+/** The draft back to the column's JSON; null when there is nothing (no checks, no schemaBy). */
+const rvOut = rv => {
+  if (!rv) return null;
+  if (rv.raw) return rv.raw;
+  const checks = rv.checks.map(c => {
+    const o = { check: c.check };
+    if (c.check !== 'EXPR') o.field = c.field;
+    if (c.check === 'ENUM') o.values = c.values.split(',').map(x => x.trim()).filter(x => x !== '');
+    if (c.check === 'LOOKUP') o.lookup = c.lookup;
+    if (c.check === 'PATTERN') o.pattern = c.pattern;
+    if (c.check === 'LENGTH' || c.check === 'RANGE') { if (c.min !== '') o.min = numOrText(c.min); if (c.max !== '') o.max = numOrText(c.max); }
+    if (c.check === 'EXPR') o.expr = c.expr;
+    if (c.message) o.message = c.message;
+    if (c.code) o.code = c.code;
+    if (c.optional && c.check !== 'REQUIRED' && c.check !== 'EXPR') o.optional = true;
+    return o;
+  });
+  const rows = rv.by.filter(b => b.value !== '' || b.schema !== '');
+  if (!checks.length && !rows.length && !rv.byField) return null;
+  const out = {};
+  if (rv.order === 'SCHEMA_FIRST') out.order = 'SCHEMA_FIRST';
+  if (checks.length) out.checks = checks;
+  if (rv.byField || rows.length) { const schemas = {}; rows.forEach(b => { schemas[b.value] = b.schema; }); out.schemaBy = { field: rv.byField, schemas }; }
+  return out;
+};
+
 function fromApi(c) {
   const lookups = {};
   c.lookups.forEach(l => { lookups[l.code] = l.entries.map(e => ({ src: str(e.source), tgt: str(e.target) })); });
@@ -77,7 +116,7 @@ function fromApi(c) {
     flows: c.flows.map(f => ({
       code: str(f.code), name: str(f.name), method: f.method || 'GET', path: str(f.path), reqSchema: str(f.requestSchema), respSchema: str(f.responseSchema),
       reqHandler: str(f.requestHandler), respHandler: str(f.responseHandler), errorHandler: str(f.errorHandler), successStatus: str(f.successStatus || 200),
-      timeout: str(f.timeoutMs), audit: f.auditMode || 'INHERIT', validation: f.schemaValidation || 'BOTH', enabled: f.enabled, application: str(f.application) || 'DEFAULT', serviceCode: str(f.serviceCode),
+      timeout: str(f.timeoutMs), audit: f.auditMode || 'INHERIT', validation: f.schemaValidation || 'BOTH', enabled: f.enabled, application: str(f.application) || 'DEFAULT', serviceCode: str(f.serviceCode), rv: rvIn(f.requestValidation),
       steps: f.steps.map(s => ({ id: uid('s'), name: str(s.name), order: s.order, target: str(s.targetSystem), method: s.method || 'GET', path: str(s.path), onFailure: s.onFailure || 'STOP',
         timeout: str(s.timeoutMs), condition: str(s.condition), success: str(s.success), reqHandler: str(s.requestHandler), respHandler: str(s.responseHandler),
         respSchema: str(s.responseSchema), respValidation: s.responseValidation || 'INHERIT', bodyCodec: str(s.bodyCodec), enabled: s.enabled, rules: s.rules.map(ruleIn), sql: s.sql == null ? null : String(s.sql), bodyTemplate: str(s.bodyTemplate), nextOk: str(s.nextOnSuccess), nextFail: str(s.nextOnFailure), example: str(s.responseExample), cases: (s.cases || []).map(c => ({ id: uid('c'), when: str(c.when), then: str(c.then), label: str(c.label), builder: c.builder || null })) })),
@@ -261,7 +300,7 @@ function toApi(cfg) {
   return {
     flows: cfg.flows.map(f => ({
       code: f.code, name: nn(f.name), method: f.method, path: f.path, requestSchema: nn(f.reqSchema), responseSchema: nn(f.respSchema), requestHandler: nn(f.reqHandler),
-      responseHandler: nn(f.respHandler), errorHandler: nn(f.errorHandler), successStatus: int(f.successStatus) || 200, timeoutMs: int(f.timeout), auditMode: f.audit, schemaValidation: f.validation && f.validation !== 'BOTH' ? f.validation : null, enabled: f.enabled, application: nn(f.application), serviceCode: nn(f.serviceCode),
+      responseHandler: nn(f.respHandler), errorHandler: nn(f.errorHandler), successStatus: int(f.successStatus) || 200, timeoutMs: int(f.timeout), auditMode: f.audit, schemaValidation: f.validation && f.validation !== 'BOTH' ? f.validation : null, enabled: f.enabled, application: nn(f.application), serviceCode: nn(f.serviceCode), requestValidation: rvOut(f.rv),
       steps: [...f.steps].sort((a, b) => a.order - b.order).map(s => ({ name: s.name, order: s.order, targetSystem: s.target, method: isSql(s) || isLocal(s) ? null : s.method, path: isSql(s) || isLocal(s) ? null : s.path, sql: isSql(s) ? s.sql : null, bodyTemplate: isSql(s) || isStore(s) || isCondition(s) ? null : nn(s.bodyTemplate), condition: nn(s.condition), success: nn(s.success),
         onFailure: s.onFailure, timeoutMs: int(s.timeout), responseSchema: nn(s.respSchema), responseValidation: s.respValidation && s.respValidation !== 'INHERIT' && !isCondition(s) ? s.respValidation : null, requestHandler: nn(s.reqHandler), responseHandler: nn(s.respHandler), bodyCodec: nn(s.bodyCodec),
         enabled: s.enabled, rules: s.rules.map(ruleOut), nextOnSuccess: nn(s.nextOk), nextOnFailure: nn(s.nextFail), responseExample: isSql(s) || isStore(s) || isLocal(s) ? null : nn(s.example), cases: isCondition(s) ? (s.cases || []).map(c => ({ when: c.when, then: c.then, label: nn(c.label), builder: c.builder || null })) : [] })),
@@ -519,6 +558,7 @@ const jsonError = t => { try { JSON.parse(t); return ''; } catch (e) { return e.
 /** Where a schema code is referenced: ['TRANSFER request', 'TRANSFER step debit', 'schema PAYMENT_REQUEST', ...]. */
 const schemaUses = (cfg, code) => [...cfg.flows.flatMap(f => [
   ...(f.reqSchema === code ? [f.code + ' request'] : []), ...(f.respSchema === code ? [f.code + ' response'] : []),
+  ...((f.rv && f.rv.by) || []).filter(b => b.schema === code).map(b => f.code + ' request (' + (f.rv.byField || 'field').replace(/^\$\.request\.(body\.)?/, '') + ' = ' + b.value + ')'),
   ...f.steps.filter(st => st.respSchema === code).map(st => f.code + ' step ' + st.name)]),
   ...cfg.schemas.filter(x => x.code !== code && refsTo(x.text, code)).map(x => 'schema ' + x.code)];
 
@@ -529,6 +569,7 @@ function flowSql(f, lookupsUsed) {
   const fc = ['code', 'name', 'http_method', 'path_pattern'], fv = [q(f.code), q(f.name || f.code), q(f.method), q(f.path)];
   opt('request_schema_code', f.reqSchema, 0, fc, fv); opt('response_schema_code', f.respSchema, 0, fc, fv); opt('request_handler', f.reqHandler, 0, fc, fv); opt('response_handler', f.respHandler, 0, fc, fv); opt('error_handler', f.errorHandler, 0, fc, fv);
   if (String(f.successStatus) !== '200') opt('success_status', f.successStatus, 1, fc, fv); opt('timeout_ms', f.timeout, 1, fc, fv); if (f.audit !== 'INHERIT') opt('audit_mode', f.audit, 0, fc, fv); if (f.validation && f.validation !== 'BOTH') opt('schema_validation', f.validation, 0, fc, fv); if (!f.enabled) opt('enabled', 'false', 1, fc, fv); opt('application_code', f.application, 0, fc, fv); opt('service_code', f.serviceCode, 0, fc, fv);
+  { const rv = rvOut(f.rv); if (rv) opt('request_validation', typeof rv === 'string' ? rv : JSON.stringify(rv), 0, fc, fv); }
   out.push('-- ' + (f.name || f.code) + '\nINSERT INTO gw_flow (' + fc.join(', ') + ')\nVALUES (' + fv.join(', ') + ');');
   const steps = [...f.steps].sort((a, b) => a.order - b.order);
   steps.forEach(st => {
@@ -1283,7 +1324,7 @@ class App extends Component {
       // service_code is required and unique within the application: take the first free two-digit code
       const used = new Set(cfg.flows.filter(x => x.application === code).map(x => x.serviceCode));
       let n = 1; while (n < 100 && used.has(String(n).padStart(2, '0'))) n++;
-      cfg.flows.push({ code: 'NEW_FLOW_' + k, name: 'New flow', method: 'GET', path: '/v1/new-' + k, reqSchema: '', respSchema: '', reqHandler: '', respHandler: '', errorHandler: '', successStatus: '200', timeout: '', audit: 'INHERIT', enabled: true, steps: [], response: [], responses: [], application: code, serviceCode: n < 100 ? String(n).padStart(2, '0') : '' });
+      cfg.flows.push({ code: 'NEW_FLOW_' + k, name: 'New flow', method: 'GET', path: '/v1/new-' + k, reqSchema: '', respSchema: '', reqHandler: '', respHandler: '', errorHandler: '', successStatus: '200', timeout: '', audit: 'INHERIT', enabled: true, steps: [], response: [], responses: [], application: code, serviceCode: n < 100 ? String(n).padStart(2, '0') : '', rv: rvIn(null) });
       setTimeout(() => this.setState({ cur: cfg.flows.length - 1, screen: 'flow', tab: 'pipeline', sel: { kind: 'flow' }, scope: 'resp' }), 0);
     });
   }
@@ -2262,6 +2303,12 @@ class App extends Component {
     const checks = part => { const m = f.validation || 'BOTH'; return m === 'BOTH' || m === part; };
     const schemaChip = (code, checked) => (checked ? 'schema ' : 'unchecked schema ') + code;
     if (f.reqSchema) inChips.push(chip(schemaChip(f.reqSchema, checks('REQUEST')), C.in, fl => { fl.reqSchema = ''; }));
+    if (f.rv && (f.rv.checks.length || f.rv.byField)) {
+      const by = f.rv.byField ? 'schema by ' + f.rv.byField.replace(/^\$\.request\.(body\.)?/, '') : '';
+      const n = f.rv.checks.length ? f.rv.checks.length + (f.rv.checks.length === 1 ? ' check' : ' checks') : '';
+      const label = (f.rv.order === 'SCHEMA_FIRST' ? [by, n] : [n, by]).filter(Boolean).join(' → ');
+      inChips.push(chip(label, C.in, fl => { fl.rv = rvIn(null); }));
+    }
     if (f.reqHandler) inChips.push(chip(f.reqHandler, C.java, fl => { fl.reqHandler = ''; }));
 
     const orders = [...new Set(f.steps.map(x => x.order))].sort((a, b) => a - b);
@@ -2598,6 +2645,72 @@ class App extends Component {
   }
 
   /** The cases of a condition step: when (expression) → then (route), with a label; first true wins. */
+  /** Inbound → Request validation (gw_flow.request_validation): checks in order, their order against the schema, schema by field. */
+  renderRequestValidation(f) {
+    const rv = f.rv || rvIn(null);
+    const R = fn => this.mut(fl => { fl.rv = fl.rv || rvIn(null); fn(fl.rv); });
+    const box = 'border:1px solid #E4E1D8;border-radius:6px;padding:0 7px;background:#FAF9F6;min-width:0;height:28px;font:11.5px ' + MONO;
+    let sample = null; try { sample = this.sampleText(f) ? JSON.parse(this.sampleText(f)) : synthSample(f, this.state.cfg.lookups); } catch (e) { /* invalid edited sample */ }
+    const listId = 'rv-fields-' + f.code;
+    const fields = leafPaths(sample, []).filter(p => /^\$\.request\.(body|headers|query|path)\./.test(p) && !p.includes('[*]'));
+    const lookups = Object.keys(this.state.cfg.lookups);
+    const schemas = this.schemaCodes();
+    const label = t => html`<span style=${`font:10px ${MONO};color:#9A9CA2`}>${t}</span>`;
+    const head = (t, sub) => html`<span style="display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:500">${t}<span style=${`font:10.5px ${MONO};color:#9A9CA2;font-weight:400`}>${sub}</span></span>`;
+    const inp = (value, onSet, ph, extra) => html`<input class="inp" value=${value} placeholder=${ph || ''} spellcheck="false" onInput=${e => { const v = e.currentTarget.value; onSet(v); }} style=${box + ';' + (extra || 'width:100%')}/>`;
+    const C2 = (n, fn) => R(x => fn(x.checks[n]));
+    const plain = arr => arr.map(v => ({ v, l: v }));
+    const withCurrent = (opts, v) => (v && !opts.some(o => o.v === v) ? [...opts, { v, l: v + ' (unknown)' }] : opts);
+    if (rv.raw) return html`<div style="display:flex;flex-direction:column;gap:6px">${head('Request validation', 'request_validation')}<span style="font-size:11px;color:oklch(0.5 0.18 25);line-height:1.4">The stored value is not valid JSON, so it is kept as it is. Fix it in the database (or clear it) to edit it here.</span></div>`;
+    return html`
+      <div style="display:flex;flex-direction:column;gap:7px">
+        ${head('Request validation', 'request_validation')}
+        <datalist id=${listId}>${fields.map(p => html`<option value=${p}></option>`)}</datalist>
+        <select class="inp" value=${rv.order} onChange=${e => { const v = e.currentTarget.value; R(x => { x.order = v; }); }} style=${inputStyle(30, 11.5)}>
+          <option value="CHECKS_FIRST">Checks first, then the schema</option>
+          <option value="SCHEMA_FIRST">Schema first, then the checks</option>
+        </select>
+        ${rv.checks.map((c, n) => html`
+          <div style=${`display:flex;flex-direction:column;gap:5px;padding:8px;border:1px solid #E4E1D8;border-left:3px solid ${C.in};border-radius:7px;background:#fff`}>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style=${`font:600 10px ${MONO};color:${C.in}`}>${n + 1}</span>
+              <select class="inp" value=${c.check} onChange=${e => { const v = e.currentTarget.value; C2(n, x => { x.check = v; }); }} style=${box + ';flex:1;padding:0 4px;font-weight:600'}>
+                ${RV_KINDS.map(k => html`<option value=${k}>${k}</option>`)}
+              </select>
+              <button class="ro-hide" title="Move up (checked earlier)" disabled=${n === 0} onClick=${() => R(x => { x.checks.splice(n - 1, 0, x.checks.splice(n, 1)[0]); })} style="border:0;background:none;cursor:pointer;color:#6A6D75">↑</button>
+              <button class="ro-hide" title="Move down" disabled=${n === rv.checks.length - 1} onClick=${() => R(x => { x.checks.splice(n + 1, 0, x.checks.splice(n, 1)[0]); })} style="border:0;background:none;cursor:pointer;color:#6A6D75">↓</button>
+              <button class="del" title="Delete check" onClick=${() => this.ask('Delete check ' + (n + 1) + '?', 'This check is removed from ' + f.code + '. Nothing changes in the database until Save & reload.', () => R(x => { x.checks.splice(n, 1); }))} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:14px">×</button>
+            </div>
+            ${c.check !== 'EXPR' && html`<input class="inp" list=${listId} value=${c.field} placeholder="$.request.body.purpose" spellcheck="false" onInput=${e => { const v = e.currentTarget.value; C2(n, x => { x.field = v; }); }} style=${box + ';width:100%'}/>`}
+            ${c.check === 'ENUM' && html`${label('ALLOWED VALUES · comma separated')}${inp(c.values, v => C2(n, x => { x.values = v; }), 'new, modify, delete')}`}
+            ${c.check === 'LOOKUP' && html`${label('ALLOWED VALUES · the keys of a lookup')}<select class="inp" value=${c.lookup} onChange=${e => { const v = e.currentTarget.value; C2(n, x => { x.lookup = v; }); }} style=${inputStyle(30, 11.5)}>${[{ v: '', l: '— choose a lookup' }, ...withCurrent(plain(lookups), c.lookup)].map(o => html`<option value=${o.v}>${o.l}</option>`)}</select>`}
+            ${c.check === 'PATTERN' && html`${label('REGULAR EXPRESSION · the whole value')}${inp(c.pattern, v => C2(n, x => { x.pattern = v; }), '[0-9]{10}')}`}
+            ${(c.check === 'LENGTH' || c.check === 'RANGE') && html`${label(c.check === 'LENGTH' ? 'LENGTH · characters, or items of a list' : 'RANGE · a number or numeric text')}<div style="display:flex;gap:6px">${inp(c.min, v => C2(n, x => { x.min = v; }), 'min', 'flex:1')}${inp(c.max, v => C2(n, x => { x.max = v; }), 'max', 'flex:1')}</div>`}
+            ${c.check === 'EXPR' && html`${label('MUST BE TRUE')}<textarea class="inp" rows="2" spellcheck="false" value=${c.expr} placeholder="\${request.body.endDate} >= \${request.body.startDate}" onInput=${e => { const v = e.currentTarget.value; C2(n, x => { x.expr = v; }); }} style=${`border:1px solid #E4E1D8;border-radius:6px;padding:5px 7px;background:#FAF9F6;width:100%;font:11.5px/1.45 ${MONO};resize:vertical`}></textarea>`}
+            ${label('IF IT FAILS')}
+            ${inp(c.message, v => C2(n, x => { x.message = v; }), 'message (empty = a standard one)')}
+            <div style="display:flex;gap:6px;align-items:center">
+              ${inp(c.code, v => C2(n, x => { x.code = v; }), 'code, e.g. PURPOSE_INVALID', 'flex:1')}
+              ${c.check !== 'REQUIRED' && c.check !== 'EXPR' && html`<label title="A missing or null field passes this check" style="display:flex;align-items:center;gap:4px;font-size:11px;color:#6A6D75;white-space:nowrap"><input type="checkbox" checked=${c.optional} onChange=${() => C2(n, x => { x.optional = !x.optional; })}/>optional</label>`}
+            </div>
+          </div>`)}
+        <button class="ro-hide" onClick=${() => R(x => { x.checks.push({ id: uid('v'), field: '', check: 'ENUM', values: '', lookup: '', pattern: '', min: '', max: '', expr: '', message: '', code: '', optional: false }); })} style="align-self:flex-start;border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">+ Check</button>
+        <div style="display:flex;flex-direction:column;gap:5px;margin-top:4px">
+          ${head('Schema by field', 'schemaBy')}
+          <input class="inp" list=${listId} value=${rv.byField} placeholder="$.request.body.purpose" spellcheck="false" onInput=${e => { const v = e.currentTarget.value; R(x => { x.byField = v; }); }} style=${box + ';width:100%'}/>
+          ${rv.by.map((b, n) => html`
+            <div style="display:flex;gap:6px;align-items:center">
+              ${inp(b.value, v => R(x => { x.by[n].value = v; }), 'value, e.g. new', 'width:38%')}
+              <span style="color:#ADA99E">→</span>
+              <select class="inp" value=${b.schema} onChange=${e => { const v = e.currentTarget.value; R(x => { x.by[n].schema = v; }); }} style=${box + ';flex:1;padding:0 4px'}>${[{ v: '', l: '— schema' }, ...withCurrent(plain(schemas), b.schema)].map(o => html`<option value=${o.v}>${o.l}</option>`)}</select>
+              <button class="del" title="Remove" onClick=${() => R(x => { x.by.splice(n, 1); })} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:14px">×</button>
+            </div>`)}
+          <button class="ro-hide" onClick=${() => R(x => { x.by.push({ id: uid('b'), value: '', schema: '' }); })} style="align-self:flex-start;border:1px dashed #C9C6BC;background:none;border-radius:5px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:#6A6D75">+ Value</button>
+        </div>
+        <span style="font-size:11px;color:#9A9CA2;line-height:1.45">Checks run top to bottom; the first that fails answers 400 GW-400-VALIDATION through the flow's error handler (its message in details, plus field and code; SNAP: 400xx02 when missing, else 400xx01). A missing field fails every check unless optional. Schema by field: the value picks the request schema; other values use Request schema above, or fail without one. Only the first schema error is reported.</span>
+      </div>`;
+  }
+
   renderCases(st, f) {
     const C2 = fn => this.mut(fl => { fn(fl.steps.find(x => x.id === st.id).cases); });
     const opts = [{ v: '', l: '— choose where to go' }, { v: 'END', l: 'END · stop here, send the response' }, { v: 'FAIL', l: 'FAIL · end with 422 GW-422-BUSINESS' }, ...this.routeTargets(f, st)];
@@ -2849,7 +2962,8 @@ class App extends Component {
       insp = { kind: 'Inbound', color: C.in, title: f.method + ' ' + f.path, table: 'gw_flow', fields: [
         fld('Method', 'http_method', f.method, 'select', (fl, v) => { fl.method = v; }, { options: plain(METHODS) }),
         fld('Path', 'path_pattern', f.path, 'text', (fl, v) => { fl.path = v; }, { hint: 'Relative to ' + cat.apiBasePath + '. {name} → $.request.path.name' }),
-        fld('Request schema', 'request_schema_code', f.reqSchema, 'select', (fl, v) => { fl.reqSchema = v; }, { options: withCurrent(none(this.schemaCodes()), f.reqSchema), hint: flowValidates(f, 'REQUEST') ? 'Invalid body → 400' : 'Not checked (schema validation ' + f.validation + '): used for mapping and docs', actions: this.schemaActions(f.reqSchema, () => this.sampleOf(f).request?.body, f.code + '_REQUEST', (fl, c) => { fl.reqSchema = c; }) }),
+        fld('Request schema', 'request_schema_code', f.reqSchema, 'select', (fl, v) => { fl.reqSchema = v; }, { options: withCurrent(none(this.schemaCodes()), f.reqSchema), hint: f.rv && f.rv.byField ? 'Used for the values Schema by field (below) does not list' + (f.reqSchema ? '' : '; without it they fail (400)') : flowValidates(f, 'REQUEST') ? 'Invalid body → 400' : 'Not checked (schema validation ' + f.validation + '): used for mapping and docs', actions: this.schemaActions(f.reqSchema, () => this.sampleOf(f).request?.body, f.code + '_REQUEST', (fl, c) => { fl.reqSchema = c; }) }),
+        { kind: 'rv', f },
         fld('Request handler', 'request_handler', f.reqHandler, 'select', (fl, v) => { fl.reqHandler = v; }, { options: withCurrent(none(cat.messageHandlers), f.reqHandler), hint: 'MessageHandler. May short-circuit with its own response.' })
       ] };
     } else if (sel.kind === 'out') {
@@ -2903,7 +3017,7 @@ class App extends Component {
           <div style=${`margin-top:3px;font:11px ${MONO};color:#9A9CA2`}>${insp.table}</div>
         </div>
         <div style="padding:14px 16px 28px;display:flex;flex-direction:column;gap:13px">
-          ${insp.fields.map(fd => fd.kind === 'cases' ? this.renderCases(fd.st, fd.f) : fd.kind === 'params' ? this.renderSqlParams(fd.st, fd.f, toMap) : fd.kind === 'keyvars' ? this.renderKeyVars(fd.st, fd.f, toMap) : fd.kind === 'slots' ? this.renderTemplateSlots(fd.st, fd.f) : html`
+          ${insp.fields.map(fd => fd.kind === 'rv' ? this.renderRequestValidation(fd.f) : fd.kind === 'cases' ? this.renderCases(fd.st, fd.f) : fd.kind === 'params' ? this.renderSqlParams(fd.st, fd.f, toMap) : fd.kind === 'keyvars' ? this.renderKeyVars(fd.st, fd.f, toMap) : fd.kind === 'slots' ? this.renderTemplateSlots(fd.st, fd.f) : html`
             <label style="display:flex;flex-direction:column;gap:5px">
               <span style="display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:500">${fd.label}<span style=${`font:10.5px ${MONO};color:#9A9CA2;font-weight:400`}>${fd.col}</span></span>
               ${fd.kind === 'text' && html`<input class="inp" value=${fd.value} onInput=${onSet(fd)} style=${inputStyle()}/>`}

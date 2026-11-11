@@ -9,7 +9,8 @@ import tools.jackson.databind.node.ObjectNode;
  * Standard error response used when a flow has no {@code error_handler}, when no flow matched,
  * and as the fallback for custom error handlers.
  *
- * <pre>{ "errorCode", "errorMessage", "correlationId", "step"?, "details"? }</pre>
+ * <pre>{ "errorCode", "errorMessage", "correlationId", "step"?, "details"?, "field"?, "validationCode"? }</pre>
+ * ({@code field} / {@code validationCode}: a failed request check, GW-400-VALIDATION.)
  */
 @Component(DefaultErrorHandler.BEAN_NAME)
 public class DefaultErrorHandler implements ErrorHandler {
@@ -36,6 +37,12 @@ public class DefaultErrorHandler implements ErrorHandler {
         if (!error.details().isEmpty()) {
             ArrayNode details = body.putArray("details");
             error.details().forEach(details::add);
+        }
+        if (error.validation() != null) {
+            body.put("field", error.validation().field());
+            if (error.validation().code() != null) {
+                body.put("validationCode", error.validation().code());
+            }
         }
         return body;
     }

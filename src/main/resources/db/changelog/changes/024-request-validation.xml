@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Checks on the inbound request, run before or after the request schema, and the request schema picked by the
+        value of a field. JSON:
+          {"order": "CHECKS_FIRST" | "SCHEMA_FIRST",
+           "checks": [{"field": "$.request.body.purpose", "check": "ENUM", "values": ["new", "modify", "delete"],
+                       "message": "...", "code": "..."}],
+           "schemaBy": {"field": "$.request.body.purpose", "schemas": {"new": "REQ_NEW", "modify": "REQ_MODIFY"}}}
+        The first failing check (or schema error) answers GW-400-VALIDATION / GW-400-SCHEMA through the error handler.
+    -->
+    <changeSet id="024-gw-flow-request-validation" author="json-gateway">
+        <addColumn tableName="${tbl.flow}">
+            <column name="request_validation" type="clob"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

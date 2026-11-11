@@ -170,7 +170,19 @@ public final class OpenApiGenerator {
         } else if (!NO_BODY.contains(flow.method())) {
             ObjectNode body = op.putObject("requestBody");
             JsonNode schema = flow.requestSchema() != null ? ref(flow.requestSchema(), schemas) : inputs.body;
-            body.put("required", flow.requestSchema() != null || inputs.body.has("required"));
+            // request_validation schemaBy: the body is one of the picked schemas (or the flow's own)
+            List<CompiledSchema> picked = flow.requestValidation() == null ? List.of() : flow.requestValidation().schemas();
+            if (!picked.isEmpty()) {
+                ObjectNode oneOf = JsonNodeFactory.instance.objectNode();
+                ArrayNode options = oneOf.putArray("oneOf");
+                new java.util.LinkedHashSet<>(picked).forEach(x -> options.add(ref(x, schemas)));
+                if (flow.requestSchema() != null && !picked.contains(flow.requestSchema())) {
+                    options.add(ref(flow.requestSchema(), schemas));
+                }
+                oneOf.put("description", "The schema is picked by " + flow.requestValidation().schemaBy().field());
+                schema = oneOf;
+            }
+            body.put("required", flow.requestSchema() != null || !picked.isEmpty() || inputs.body.has("required"));
             body.putObject("content").putObject(JSON).set("schema", schema);
         }
 

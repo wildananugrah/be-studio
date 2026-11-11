@@ -75,7 +75,8 @@ public record StudioConfig(
 
     /**
      * {@code gw_flow} plus its steps and its {@code FLOW_RESPONSE} rules; {@code application} is its group and
-     * {@code serviceCode} its SNAP service code.
+     * {@code serviceCode} its SNAP service code; {@code requestValidation} the JSON of {@code gw_flow.request_validation}
+     * (request checks, their order against the schema, the schema picked by a field), null when not set.
      */
     public record Flow(
             String code,
@@ -96,7 +97,17 @@ public record StudioConfig(
             String application,
             List<Response> responses,
             String schemaValidation,
-            String serviceCode) {
+            String serviceCode,
+            tools.jackson.databind.JsonNode requestValidation) {
+
+        public Flow(String code, String name, String method, String path, String requestSchema, String responseSchema,
+                String requestHandler, String responseHandler, String errorHandler, Integer successStatus,
+                Integer timeoutMs, String auditMode, Boolean enabled, List<Step> steps, List<Rule> response,
+                String application, List<Response> responses, String schemaValidation, String serviceCode) {
+            this(code, name, method, path, requestSchema, responseSchema, requestHandler, responseHandler, errorHandler,
+                    successStatus, timeoutMs, auditMode, enabled, steps, response, application, responses,
+                    schemaValidation, serviceCode, null);
+        }
 
         public Flow(String code, String name, String method, String path, String requestSchema, String responseSchema,
                 String requestHandler, String responseHandler, String errorHandler, Integer successStatus,
