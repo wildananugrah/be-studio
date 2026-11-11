@@ -1,5 +1,6 @@
 package com.mhamzah.gateway.config;
 
+import com.mhamzah.gateway.mapping.ErrorMap;
 import com.mhamzah.gateway.mapping.LookupTable;
 import java.time.Instant;
 import java.util.Comparator;
@@ -13,6 +14,8 @@ import org.springframework.web.util.pattern.PathPattern;
 /**
  * Immutable snapshot of all compiled configuration. Replaced as a whole on reload. {@code applications} and
  * {@code flowApplications} (flow code to application code) group the flows, e.g. in the API documentation.
+ * {@code lookupErrorMaps}: the error map attached to a lookup table by its {@value ErrorMap#LOOKUP_KEY} row, by
+ * lookup code (e.g. {@code SNAP_ERR_<target system>}).
  */
 public record FlowRegistry(
         List<FlowDefinition> flows,
@@ -20,7 +23,8 @@ public record FlowRegistry(
         Map<String, ResolvedTarget> targetSystems,
         Instant loadedAt,
         List<Application> applications,
-        Map<String, String> flowApplications) {
+        Map<String, String> flowApplications,
+        Map<String, ErrorMap.Fields> lookupErrorMaps) {
 
     public FlowRegistry {
         flows = List.copyOf(flows);
@@ -28,11 +32,18 @@ public record FlowRegistry(
         targetSystems = Map.copyOf(targetSystems);
         applications = applications == null ? List.of() : List.copyOf(applications);
         flowApplications = flowApplications == null ? Map.of() : Map.copyOf(flowApplications);
+        lookupErrorMaps = lookupErrorMaps == null ? Map.of() : Map.copyOf(lookupErrorMaps);
     }
 
     public FlowRegistry(List<FlowDefinition> flows, Map<String, LookupTable> lookups,
             Map<String, ResolvedTarget> targetSystems, Instant loadedAt) {
         this(flows, lookups, targetSystems, loadedAt, List.of(), Map.of());
+    }
+
+    public FlowRegistry(List<FlowDefinition> flows, Map<String, LookupTable> lookups,
+            Map<String, ResolvedTarget> targetSystems, Instant loadedAt, List<Application> applications,
+            Map<String, String> flowApplications) {
+        this(flows, lookups, targetSystems, loadedAt, applications, flowApplications, Map.of());
     }
 
     /** A {@code gw_application}: the group a flow belongs to. */

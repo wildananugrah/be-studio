@@ -30,6 +30,11 @@ public final class SnapCodes {
     public static final String DOWNSTREAM_PREFIX = "SNAP_ERR_";
     /** Row of a downstream lookup that says where that system puts its error code. */
     public static final String CODE_PATH_KEY = "@codePath";
+    /**
+     * Row of a downstream lookup that attaches an error map: its fields go into {@code additionalInfo} of that
+     * system's errors. Like {@link #CODE_PATH_KEY}, it is never taken as an error code (those are looked up by key).
+     */
+    public static final String ERROR_MAP_KEY = com.mhamzah.gateway.mapping.ErrorMap.LOOKUP_KEY;
 
     private static final Logger log = LoggerFactory.getLogger(SnapCodes.class);
     private static final Pattern KEY = Pattern.compile("([1-5][0-9]{2})\\.([0-9A-Za-z]{2})");

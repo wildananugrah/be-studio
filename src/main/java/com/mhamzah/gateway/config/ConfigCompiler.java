@@ -151,6 +151,7 @@ public class ConfigCompiler {
             schemas = compileSchemas(rows.schemas());
             lookups = buildLookups(rows.lookups());
             errorMaps = buildErrorMaps(rows.errorMaps());
+            Map<String, ErrorMap.Fields> lookupErrorMaps = buildLookupErrorMaps();
             targets = resolveTargets();
             storages = resolveStorages();
             // TRANSFORM and CONDITION mark steps that call nothing: nothing else may take those names
@@ -194,7 +195,7 @@ public class ConfigCompiler {
                     flowApplications.put(f.code(), f.applicationCode());
                 }
             });
-            return new FlowRegistry(flows, lookups, targets, Instant.now(), applications, flowApplications);
+            return new FlowRegistry(flows, lookups, targets, Instant.now(), applications, flowApplications, lookupErrorMaps);
         }
 
         /** application.yml targets, replaced by enabled gw_target_system rows of the same code (database wins). */
@@ -528,7 +529,6 @@ public class ConfigCompiler {
             if (r.errorMapOutput() == null || r.errorMapOutput().isBlank()) {
                 errors.add(where + ": error_map_output (the field to take from the matching entry) is required");
             }
-            List<ErrorMap.Condition> conditions = new ArrayList<>();
             tools.jackson.databind.JsonNode json = null;
             try {
                 json = r.errorMapWhere() == null || r.errorMapWhere().isBlank() ? null : JsonValues.MAPPER.readTree(r.errorMapWhere());
@@ -536,16 +536,37 @@ public class ConfigCompiler {
                 errors.add(where + ": error_map_where is not valid JSON");
                 return null;
             }
-            if (json == null || !json.isArray() || json.isEmpty()) {
-                errors.add(where + ": error_map_where needs at least one condition [{\"field\": ..., \"source\" or \"value\": ..., \"match\": \"equals\" | \"template\"}]");
+            List<ErrorMap.Condition> conditions = errorMapConditions(json, where, "error_map_where", CONTEXT_ROOTS,
+                    "$.request, $.steps, $.correlationId or $.error");
+            if (conditions == null) {
                 return null;
             }
+            int index = r.errorMapIndex() == null ? 0 : r.errorMapIndex();
+            if (index < 0) {
+                errors.add(where + ": error_map_index must be 0 or more (0 = the best match)");
+                return null;
+            }
+            return map == null ? null : new ErrorMap.Lookup(map, conditions, r.errorMapOutput(), r.errorMapFill(), index);
+        }
+
+        /**
+         * The conditions of an error map lookup: at least one, each with a {@code field}, exactly one of
+         * {@code source} (a path under {@code roots}) / {@code value}, and {@code match} equals or template. Null (with
+         * errors) when there are none.
+         */
+        private List<ErrorMap.Condition> errorMapConditions(tools.jackson.databind.JsonNode json, String where,
+                String column, Set<String> roots, String rootsText) {
+            if (json == null || !json.isArray() || json.isEmpty()) {
+                errors.add(where + ": " + column + " needs at least one condition [{\"field\": ..., \"source\" or \"value\": ..., \"match\": \"equals\" | \"template\"}]");
+                return null;
+            }
+            List<ErrorMap.Condition> conditions = new ArrayList<>();
             for (tools.jackson.databind.JsonNode c : json) {
                 String field = c.path("field").asString("");
                 boolean hasSource = c.hasNonNull("source") && !c.get("source").asString("").isBlank();
                 boolean hasValue = c.has("value") && !c.get("value").isNull();
                 if (field.isBlank()) {
-                    errors.add(where + ": every error_map_where condition needs a field");
+                    errors.add(where + ": every " + column + " condition needs a field");
                     continue;
                 }
                 if (hasSource == hasValue) {
@@ -554,9 +575,9 @@ public class ConfigCompiler {
                 }
                 JsonPath source = null;
                 if (hasSource) {
-                    source = path(c.get("source").asString(), where, "error_map_where '" + field + "'");
-                    if (source != null && !CONTEXT_ROOTS.contains(source.firstField())) {
-                        errors.add(where + ": condition on '" + field + "' must read $.request, $.steps, $.correlationId or $.error");
+                    source = path(c.get("source").asString(), where, column + " '" + field + "'");
+                    if (source != null && !roots.contains(source.firstField())) {
+                        errors.add(where + ": condition on '" + field + "' must read " + rootsText);
                     } else if (source != null && source.wildcardCount() > 0) {
                         errors.add(where + ": condition on '" + field + "' cannot read a [*] path");
                     }
@@ -568,12 +589,49 @@ public class ConfigCompiler {
                 }
                 conditions.add(new ErrorMap.Condition(field, source, hasValue ? c.get("value") : null, match.equals("template")));
             }
-            int index = r.errorMapIndex() == null ? 0 : r.errorMapIndex();
-            if (index < 0) {
-                errors.add(where + ": error_map_index must be 0 or more (0 = the best match)");
-                return null;
-            }
-            return map == null ? null : new ErrorMap.Lookup(map, conditions, r.errorMapOutput(), r.errorMapFill(), index);
+            return conditions;
+        }
+
+        /**
+         * The error maps attached to lookup tables by an {@value ErrorMap#LOOKUP_KEY} row, by lookup code. The row's
+         * value: {@code {"map": ..., "fields": {"<output name>": "<entry field>", ...}, "where": [conditions],
+         * "fill": false, "index": 0}}; the conditions read the failed call ({@code $.status}, {@code $.headers},
+         * {@code $.body}).
+         */
+        private Map<String, ErrorMap.Fields> buildLookupErrorMaps() {
+            Map<String, ErrorMap.Fields> out = new HashMap<>();
+            lookups.forEach((code, table) -> {
+                tools.jackson.databind.JsonNode row = table.entries().get(ErrorMap.LOOKUP_KEY);
+                if (row == null) {
+                    return;
+                }
+                String where = "lookup '" + code + "' " + ErrorMap.LOOKUP_KEY;
+                if (!row.isObject()) {
+                    errors.add(where + ": must be a JSON object {\"map\": ..., \"fields\": {...}, \"where\": [...]}");
+                    return;
+                }
+                String mapCode = row.path("map").asString("");
+                ErrorMap map = errorMaps.get(mapCode);
+                if (map == null) {
+                    errors.add(where + ": map '" + mapCode + "' is not an error map");
+                }
+                Map<String, String> fields = new LinkedHashMap<>();
+                row.path("fields").properties().forEach(e -> fields.put(e.getKey(), e.getValue().asString("")));
+                if (fields.isEmpty() || fields.values().stream().anyMatch(String::isBlank)) {
+                    errors.add(where + ": fields needs at least one {\"<name in the output>\": \"<field of the entry>\"}");
+                }
+                List<ErrorMap.Condition> conditions = errorMapConditions(row.get("where"), where, "where",
+                        Set.of("status", "headers", "body"), "the failed call: $.status, $.headers or $.body");
+                int index = row.path("index").asInt(0);
+                if (index < 0) {
+                    errors.add(where + ": index must be 0 or more (0 = the best match)");
+                }
+                if (map != null && conditions != null && index >= 0 && !fields.isEmpty()) {
+                    out.put(code, new ErrorMap.Fields(
+                            new ErrorMap.Lookup(map, conditions, null, row.path("fill").asBoolean(false), index), fields));
+                }
+            });
+            return out;
         }
 
         private void checkFlowCodes() {

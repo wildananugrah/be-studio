@@ -476,14 +476,14 @@ A list of errors as one JSON array of objects, with any fields, e.g. one entry p
 | `description` | Free text (Studio) |
 | `entries` | The JSON array; every element must be an object |
 
-A rule with `error_map_code` gets its value from the map: of the **first** entry whose fields equal every condition in `error_map_where`, the field `error_map_output`. A condition compares an entry field with a context value (`source`, e.g. `$.steps.backbone.body.errorCode` or, in an error response, `$.error.downstream.body.errorCode`) or with a constant (`value`). Values are compared as text, so `409` matches `"409"`. When no entry matches (or a `source` is missing), the value is missing and the rule's `default_value` applies; lookup, converter, field handler and `required` then work as for any rule. Several entries may share a code (e.g. one per message); match on more fields when the output differs between them.
+A rule with `error_map_code` gets its value from the map: of the **first** entry whose fields equal every condition in `error_map_where`, the field `error_map_output`. A condition compares an entry field with a context value (`source`, e.g. `$.steps.backbone.body.errorCode`; a failed step keeps its call there too, so error responses read it the same way) or with a constant (`value`). Values are compared as text, so `409` matches `"409"`. When no entry matches (or a `source` is missing), the value is missing and the rule's `default_value` applies; lookup, converter, field handler and `required` then work as for any rule. Several entries may share a code (e.g. one per message); match on more fields when the output differs between them.
 
 **Template conditions.** A condition with `"match": "template"` treats the entry's field as a template: its text must match literally (characters such as `(`, `.` or `?` are plain text), and each `{name}` in it matches any text. Use it for messages that contain values, e.g. the entry `"message": "Aplikasi {applicationNo} tidak dalam status DRAFT."` matches the backend's `Aplikasi LC-2026-0042 tidak dalam status DRAFT.`. Several entries can match: they are ordered by their fixed template text, most first (so a specific message comes before a catch-all such as `{workflow message}`), then by their order in the map, and `error_map_index` picks one (`0`, the default, is the best match; without template conditions the order is simply the map's). Spaces around the value and the template are ignored. With `error_map_fill`, the placeholders in the output get the captured values: `"messageEn": "Application {applicationNo} is not in DRAFT status."` becomes `Application LC-2026-0042 is not in DRAFT status.` (placeholders that captured nothing stay as they are).
 
 ```json
-[{"field": "httpStatus", "source": "$.error.downstream.status"},
- {"field": "errorCode",  "source": "$.error.downstream.body.errorCode"},
- {"field": "message",    "source": "$.error.downstream.body.message", "match": "template"}]
+[{"field": "httpStatus", "source": "$.steps.backbone.status"},
+ {"field": "errorCode",  "source": "$.steps.backbone.body.errorCode"},
+ {"field": "message",    "source": "$.steps.backbone.body.message", "match": "template"}]
 ```
 
 **Debugging.** Every error map lookup is logged at INFO with the call's correlation ID, so it shows under **Logs** in Studio's audit trail (and in the log output): the condition values read, how many entries matched, which index was taken (and its position in the map) and the output, or why there was none:
@@ -494,12 +494,14 @@ error map TRADE for mapping rule 3 (error map TRADE -> $.messageEn): where httpS
 
 Values longer than 200 characters are cut.
 
+**Once for all flows of a backend.** With `snapErrorHandler`, the row `@errorMap` of `SNAP_ERR_<target system>` uses a map for every flow that calls that backend, with no rule in the flows ([§4.19](#419-snap-responses-bank-indonesia)).
+
 In Studio: **Error maps** (paste the JSON; it shows the entries, the fields found and which flows use it); in a flow's **Mapping**, drag a map from **ERROR MAPS** onto a rule or use **+ Error map rule**, then pick the conditions (a field, `=`, a `$.` path or a constant) and the field to **take**.
 
 ```sql
 INSERT INTO gw_mapping_rule (flow_id, phase, seq, target_type, target_path, default_value, error_map_code, error_map_where, error_map_output)
 SELECT id, 'FLOW_RESPONSE', 2, 'BODY', '$.message', 'Your request cannot be processed right now.', 'BG_ERRORS',
-       '[{"field": "errorCode", "source": "$.error.downstream.body.errorCode"}]', 'generalMessage'
+       '[{"field": "errorCode", "source": "$.steps.backbone.body.errorCode"}]', 'generalMessage'
 FROM gw_flow WHERE code = 'BG_PRESIGN_UPLOAD_DOCUMENT';
 ```
 
@@ -1502,12 +1504,30 @@ A flow answers in the SNAP format with two bean names and some rows:
 | Lookup | Rows |
 |---|---|
 | `SNAP_RESPONSE_CODE` | The SNAP catalog: `source_value` `403.14` (status, dot, case), `target_value` the message (`Insufficient Funds`) or `{"message": "..."}`. Messages may hold `{field name}` and `[reason]`, filled per error. The codes the gateway itself uses are built in, so a missing row never breaks a response. |
-| `SNAP_ERR_<target system>` | A downstream's own codes to SNAP codes, e.g. `SNAP_ERR_CORE_BANKING`: `51` → `403.14`, `14` → `404.11`, `HTTP_404` → `404.01`, `*` → `500.02`. The row `@codePath` lists where the code is in the failed call (default `["$.body.errorCode", "$.body.code", "$.body.responseCode"]`); numbers and text match the same row. Keys are tried in order: `<status>:<code>`, `<code>`, `HTTP_<status>`, `*`. |
+| `SNAP_ERR_<target system>` | A downstream's own codes to SNAP codes, e.g. `SNAP_ERR_CORE_BANKING`: `51` → `403.14`, `14` → `404.11`, `HTTP_404` → `404.01`, `*` → `500.02`. The row `@codePath` lists where the code is in the failed call (default `["$.body.errorCode", "$.body.code", "$.body.responseCode"]`); numbers and text match the same row. Keys are tried in order: `<status>:<code>`, `<code>`, `HTTP_<status>`, `*`. The row `@errorMap` adds fields from an error map to `additionalInfo` (below). |
 | `SNAP_GATEWAY_ERROR` | The gateway's own failures by error type (`REQUEST_SCHEMA_INVALID`, `DOWNSTREAM_TIMEOUT`, …), with built-in defaults |
 
 A row's value is a SNAP code (`"403.14"`) or an object: `{"snap": "403.14", "message": "...", "reason": "...", "messagePath": "$.body.message", "httpStatus": 200}`. `message` replaces the catalog text, `reason` fills `[reason]`, `messagePath` copies the text from the failed call (`{status, headers, body}`; the downstream's own message is only ever copied this way), and `httpStatus` sends another HTTP status than the SNAP code's (`responseCode` keeps the SNAP one).
 
 **`additionalInfo`** is optional: add a named response called `additionalInfo` (Studio: **+ Response**) and give it BODY rules. It is sent, on success and on error, only when its rules produce at least one field; on an error they can read `$.error.*` and the failed call at `$.steps.<step>.*`.
+
+**An error map for every flow of a backend.** The row `@errorMap` of `SNAP_ERR_<target system>` adds fields from an error map ([§3.5a](#35a-gw_error_map)) to `additionalInfo` of that backend's errors (HTTP and business errors), in every flow that calls it, without rules in the flows. Its value:
+
+```json
+{"map": "BG_OUTWARD_ERRORS",
+ "fields": {"errorMessage": "messageEn", "messageKey": "messageKey"},
+ "fill": true, "index": 0,
+ "where": [{"field": "httpStatus", "source": "$.status"},
+           {"field": "errorCode",  "source": "$.body.errorCode", "match": "template"},
+           {"field": "message",    "source": "$.body.message",   "match": "template"}]}
+```
+
+`where` works as `error_map_where`, but reads the failed call (`$.status`, `$.headers`, `$.body`), so it doesn't depend on the step's name. `fields` names what goes into `additionalInfo` (`errorMessage`) and which field of the matched entry it takes (`messageEn`); all of them come from the same entry, and a field the entry doesn't have is left out. `fill` and `index` work as `error_map_fill` / `error_map_index`. No match: nothing is added. A flow's own `additionalInfo` rules still apply, and their keys win. Each lookup is logged like a rule's (`error map BG_OUTWARD_ERRORS for SNAP_ERR_<target>: where …`), and mistakes in the row are reported on reload.
+
+```sql
+INSERT INTO gw_lookup_entry (lookup_code, source_value, target_value) VALUES ('SNAP_ERR_BNI_SERVICE_BG_OUTWARD', '@errorMap',
+  '{"map":"BG_OUTWARD_ERRORS","fields":{"errorMessage":"messageEn"},"fill":true,"where":[{"field":"httpStatus","source":"$.status"},{"field":"errorCode","source":"$.body.errorCode","match":"template"},{"field":"message","source":"$.body.message","match":"template"}]}');
+```
 
 A status that cannot carry a body (204, 205, 304, 1xx) is sent as `gateway.snap.no-body-status` (200), with `responseCode` still telling the original (`204G000`).
 
@@ -1529,12 +1549,16 @@ Backends answer errors with their own codes and messages, often in another langu
 
    | WHERE | | value |
    |---|---|---|
-   | `httpStatus` | = | `$.error.downstream.status` |
-   | `errorCode` | = | `$.error.downstream.body.errorCode` |
-   | `message` | matches template | `$.error.downstream.body.message` |
+   | `httpStatus` | = | `$.steps.backbone.status` |
+   | `errorCode` | = | `$.steps.backbone.body.errorCode` |
+   | `message` | matches template | `$.steps.backbone.body.message` |
 
    **TAKE** `messageEn`, tick **fill {placeholders}**, and give the rule a **default** such as `"Your request cannot be processed right now."`.
 4. The backend's `409 {"errorCode": "INVALID_STATE", "message": "Aplikasi LC-2026-0042 tidak dalam status DRAFT."}` now reaches the client as `Application LC-2026-0042 is not in DRAFT status.`
+
+`backbone` is the step that called the backend; a failed step keeps its call (`status`, `headers`, `body`) at `$.steps.<step>`.
+
+**With `snapErrorHandler`, configure it once per backend instead:** the row `@errorMap` of `SNAP_ERR_<target system>` ([§4.19](#419-snap-responses-bank-indonesia)) puts the message into `additionalInfo` of every flow calling that backend, and its conditions read the failed call directly (`$.status`, `$.body.errorCode`, `$.body.message`), whatever the step is called.
 
 Tips:
 - Match on **codes**, and use a template only for the message: the backend fills in values (`{applicationNo}`), so the text never equals the list exactly.
