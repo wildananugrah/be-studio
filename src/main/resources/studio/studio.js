@@ -3098,7 +3098,7 @@ class App extends Component {
       if (!x.emWhere || !x.emWhere.length) x.emWhere = [{ field: fields.find(k => /^errorcode$/i.test(k)) || fields[0] || '', input: '' }];
       if (!x.emOut || !fields.includes(x.emOut)) x.emOut = fields.find(k => /^generalmessage$/i.test(k)) || fields.find(k => /message/i.test(k)) || '';
     };
-    const types = scopeStep ? (isSql(scopeStep) ? ['BODY'] : isTransform(scopeStep) ? ['BODY', 'COPY'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes.filter(t => t !== 'STATUS' && t !== 'FILE')) : respSel && isInfoResp(respSel) ? ['BODY', 'COPY'] : ['BODY', 'HEADER', 'STATUS', 'FILE', 'COPY'];
+    const types = scopeStep ? (isSql(scopeStep) ? ['BODY'] : isTransform(scopeStep) ? ['BODY', 'COPY', 'REMOVE'] : isStore(scopeStep) ? ['BODY', 'PATH'] : cat.targetTypes.filter(t => t !== 'STATUS' && t !== 'FILE')) : respSel && isInfoResp(respSel) ? ['BODY', 'COPY', 'REMOVE'] : ['BODY', 'HEADER', 'STATUS', 'FILE', 'COPY', 'REMOVE'];
     /** Pass-through: the COPY rule of this scope that copies the context field at path, if any. */
     const copyOf = path => rules.find(r => r.type === 'COPY' && r.source === path);
     /** The rule (1-based number) that remaps a copied field: one that reads the field or a parent of it. */
@@ -3111,6 +3111,7 @@ class App extends Component {
       const x = pv && pv.rules && pv.rules[i];
       if (!x) return { t: '', c: '#9A9CA2' };
       if (x.error && r.type === 'COPY' && x.error.startsWith('not copied')) return { t: x.error, c: '#9A9CA2' };
+      if (r.type === 'REMOVE') return { t: x.error && !x.error.startsWith('removed') ? 'error · ' + x.error : 'removed after the other rules', c: x.error && !x.error.startsWith('removed') ? 'oklch(0.55 0.18 25)' : '#9A9CA2' };
       if (x.error) return { t: 'error · ' + x.error, c: 'oklch(0.55 0.18 25)' };
       if (x.written) return { t: '→ ' + JSON.stringify(x.value), c: 'oklch(0.48 0.11 160)' };
       return r.required ? { t: 'missing (required)', c: 'oklch(0.55 0.18 25)' } : { t: r.em ? 'skipped · no matching entry, no default' : 'skipped · source missing', c: '#9A9CA2' };
@@ -3125,6 +3126,9 @@ class App extends Component {
     }));
     const nzBorder = newZone.active ? C.in : '#C9C6BC'; const nzBg = newZone.over ? 'oklch(0.56 0.13 255 / 0.1)' : newZone.active ? 'oklch(0.56 0.13 255 / 0.04)' : 'transparent';
     const addConst = () => this.mut(fl => { listOf(fl).push({ id: uid('r'), type: 'BODY', target: '$.field', source: '', constant: '', def: '', lookup: '', conv: '', fh: '', required: false }); });
+    /** A REMOVE rule for target (a body path $.x or a header name), unless one exists; runs after the other rules. */
+    const addRemove = target => this.mut(fl => { const list = listOf(fl); if (!list.some(r => r.type === 'REMOVE' && r.target === target)) list.push({ id: uid('r'), type: 'REMOVE', target, source: '', constant: '', def: '', lookup: '', conv: '', fh: '', required: false }); });
+    const canRemove = types.includes('REMOVE');
     const addMapRule = () => this.mut(fl => { const r = { id: uid('r'), type: 'BODY', target: '$.message', source: '', constant: '', def: '', lookup: '', conv: '', fh: '', required: false }; useMap(r, s.cfg.errorMaps[0].code); listOf(fl).push(r); });
     const dragChip = (label, payload, style) => html`<div class="pal" draggable="true" onDragStart=${this.ds(payload)} onDragEnd=${this.dragEnd} style=${`padding:4px 7px;border-radius:5px;font:11px ${MONO};cursor:grab;${style}`}>${label}</div>`;
 
@@ -3173,6 +3177,15 @@ class App extends Component {
       body = out ? pretty(out.body) : '';
       note = 'Built by the server from FLOW_RESPONSE rules using the sample context. A STATUS rule sets the HTTP status (e.g. ← $.steps.<step>.status to pass the backend\'s through). A failed step gets the error response of ' + (f.errorHandler || 'defaultErrorHandler') + ', unless its next_on_failure routes to a named response (RESPOND:<name>), whose rules map the failure like this.';
     }
+    // REMOVE rules: headers they drop are not sent (also a target system's defaults); fields and headers to pick from
+    const removedH = new Set(rules.filter(r => r.type === 'REMOVE' && r.target && !r.target.startsWith('$')).map(r => r.target.toLowerCase()));
+    headers = headers.filter(h => h.n === 'X-Correlation-Id' || !removedH.has(String(h.n).toLowerCase()));
+    const outPaths = (v, base, acc) => {
+      if (Array.isArray(v)) { const els = v.filter(x => x && typeof x === 'object' && !Array.isArray(x)); if (els.length) outPaths(Object.assign({}, ...els), base + '[*]', acc); }
+      else if (v && typeof v === 'object') Object.keys(v).forEach(k => { const p = base + (/^[A-Za-z0-9_-]+$/.test(k) ? '.' + k : "['" + k + "']"); acc.push(p); outPaths(v[k], p, acc); });
+      return acc;
+    };
+    const removable = canRemove && out ? [...outPaths(out.body, '$', []).slice(0, 80), ...headers.map(h => h.n).filter(n => n !== 'X-Correlation-Id' && n !== '…')] : [];
     const pvErrs = sampleErr ? ['sample context is not valid JSON: ' + sampleErr] : pv ? (pv.errors || []) : [];
     const sampleValue = stored !== undefined ? stored : (sample ? pretty(sample) : '');
 
@@ -3236,16 +3249,16 @@ class App extends Component {
 
           <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;max-width:880px">
             ${rules.map((r, i) => {
-              const z = this.zone('rule-' + r.id, ruleAccept, d => (d.kind === 'conv' && !this.ro ? this.openConv({ id: r.id, conv: d.v, fromDrop: true }) : null, updRule(r.id, x => { if (d.kind === 'src' && x.em) { const w = (x.emWhere || []).find(c => !c.input); if (w) w.input = d.path; else x.emWhere = [...(x.emWhere || []), { field: '', input: d.path }]; } else if (d.kind === 'src') { x.source = d.path; x.constant = ''; if (x.type === 'COPY') x.target = copyTarget(d.path) || x.target; } if (x.type === 'COPY') return; if (d.kind === 'em') useMap(x, d.v); if (d.kind === 'conv') x.conv = d.v; if (d.kind === 'lookup') x.lookup = d.v; if (d.kind === 'fh') x.fh = d.v; })));
+              const z = this.zone('rule-' + r.id, ruleAccept, d => (d.kind === 'conv' && !this.ro ? this.openConv({ id: r.id, conv: d.v, fromDrop: true }) : null, updRule(r.id, x => { if (d.kind === 'src' && x.em) { const w = (x.emWhere || []).find(c => !c.input); if (w) w.input = d.path; else x.emWhere = [...(x.emWhere || []), { field: '', input: d.path }]; } else if (d.kind === 'src' && x.type !== 'REMOVE') { x.source = d.path; x.constant = ''; if (x.type === 'COPY') x.target = copyTarget(d.path) || x.target; } if (x.type === 'COPY' || x.type === 'REMOVE') return; if (d.kind === 'em') useMap(x, d.v); if (d.kind === 'conv') x.conv = d.v; if (d.kind === 'lookup') x.lookup = d.v; if (d.kind === 'fh') x.fh = d.v; })));
               const res = resText(r, i); const set = k => e => { const v = e.currentTarget.value; updRule(r.id, x => { x[k] = v; }); };
               return html`
               <div ...${zoneProps(z)} style="position:relative;background:#fff;border:1px solid #E4E1D8;border-radius:9px;padding:9px 10px;display:flex;flex-direction:column;gap:7px">
                 <div style="display:flex;align-items:center;gap:8px">
                   <span style=${`width:18px;text-align:right;font:11px ${MONO};color:#9A9CA2`}>${i + 1}</span>
-                  <select value=${r.type} onChange=${e => { const v = e.currentTarget.value; updRule(r.id, x => { x.type = v; if (v === 'STATUS') { x.target = 'status'; return; } if (v === 'FILE') { x.target = 'file'; return; } if (v === 'COPY') { x.target = copyTarget(x.source) || '$.field'; x.constant = ''; x.def = ''; x.conv = ''; x.lookup = ''; x.fh = ''; x.em = ''; x.emWhere = []; x.emOut = ''; return; } if (v !== 'BODY' && x.target.startsWith('$.')) x.target = x.target.slice(2); if (v === 'BODY' && !x.target.startsWith('$')) x.target = '$.' + x.target; }); }} style=${`height:28px;border:1px solid #E4E1D8;border-radius:5px;background:#FAF9F6;font:600 10.5px ${MONO};padding:0 4px`}>
+                  <select value=${r.type} onChange=${e => { const v = e.currentTarget.value; updRule(r.id, x => { x.type = v; if (v === 'STATUS') { x.target = 'status'; return; } if (v === 'FILE') { x.target = 'file'; return; } if (v === 'REMOVE') { if (!x.target || x.target === 'status' || x.target === 'file') x.target = '$.field'; x.source = ''; x.constant = ''; x.def = ''; x.conv = ''; x.lookup = ''; x.fh = ''; x.em = ''; x.emWhere = []; x.emOut = ''; x.required = false; return; } if (v === 'COPY') { x.target = copyTarget(x.source) || '$.field'; x.constant = ''; x.def = ''; x.conv = ''; x.lookup = ''; x.fh = ''; x.em = ''; x.emWhere = []; x.emOut = ''; return; } if (v !== 'BODY' && x.target.startsWith('$.')) x.target = x.target.slice(2); if (v === 'BODY' && !x.target.startsWith('$')) x.target = '$.' + x.target; }); }} style=${`height:28px;border:1px solid #E4E1D8;border-radius:5px;background:#FAF9F6;font:600 10.5px ${MONO};padding:0 4px`}>
                     ${withType(types, r.type).map(o => html`<option value=${o}>${o}</option>`)}
                   </select>
-                  <input class="inp" value=${r.type === 'STATUS' ? 'HTTP status (100-599)' : r.type === 'FILE' ? 'the file of the step (source $.steps.<step>)' : r.type === 'COPY' ? (copyTarget(r.source) || 'drop a body field: copied to the same place') : r.target} readOnly=${r.type === 'STATUS' || r.type === 'FILE' || r.type === 'COPY'} title=${r.type === 'FILE' ? 'Sends the file a step with body_codec fileCodec downloaded, with its Content-Type; BODY rules and the response handler do not apply' : r.type === 'STATUS' ? 'Sets the HTTP status of this response, e.g. from $.steps.<step>.status; wins over the fixed status' : r.type === 'COPY' ? 'Pass-through: copies the field unchanged to the same place in this body. Written before the other rules; a rule that reads the field (or a parent of it) remaps it, and then it is not copied' : ''} onInput=${set('target')} style=${`flex:1;min-width:120px;height:28px;border:1px solid #E4E1D8;border-radius:5px;padding:0 8px;font:12px ${MONO};background:${r.type === 'STATUS' || r.type === 'FILE' || r.type === 'COPY' ? '#FAF9F6' : '#fff'};color:${r.type === 'STATUS' || r.type === 'FILE' || r.type === 'COPY' ? '#6A6D75' : 'inherit'}`}/>
+                  <input class="inp" value=${r.type === 'STATUS' ? 'HTTP status (100-599)' : r.type === 'FILE' ? 'the file of the step (source $.steps.<step>)' : r.type === 'COPY' ? (copyTarget(r.source) || 'drop a body field: copied to the same place') : r.target} readOnly=${r.type === 'STATUS' || r.type === 'FILE' || r.type === 'COPY'} title=${r.type === 'FILE' ? 'Sends the file a step with body_codec fileCodec downloaded, with its Content-Type; BODY rules and the response handler do not apply' : r.type === 'STATUS' ? 'Sets the HTTP status of this response, e.g. from $.steps.<step>.status; wins over the fixed status' : r.type === 'REMOVE' ? 'Removed after every other rule: $.field (or $.items[*].field) in the body, or a header name (no $). On a step request a header REMOVE also drops the target system default header.' : r.type === 'COPY' ? 'Pass-through: copies the field unchanged to the same place in this body. Written before the other rules; a rule that reads the field (or a parent of it) remaps it, and then it is not copied' : ''} onInput=${set('target')} style=${`flex:1;min-width:120px;height:28px;border:1px solid #E4E1D8;border-radius:5px;padding:0 8px;font:12px ${MONO};background:${r.type === 'STATUS' || r.type === 'FILE' || r.type === 'COPY' ? '#FAF9F6' : '#fff'};color:${r.type === 'STATUS' || r.type === 'FILE' || r.type === 'COPY' ? '#6A6D75' : 'inherit'}`}/>
                   <span style="color:#ADA99E">←</span>
                   ${r.em ? html`
                     <div style=${`flex:1.25;min-width:0;height:28px;display:flex;align-items:center;gap:6px;padding:0 4px 0 9px;border-radius:5px;background:oklch(0.96 0.025 25);font:11.5px ${MONO};color:oklch(0.42 0.13 25)`}>
@@ -3256,15 +3269,15 @@ class App extends Component {
                       <span class="hscroll" style="flex:1;min-width:0" title=${r.source}>${r.source}</span>
                       <button onClick=${() => updRule(r.id, x => { x.source = ''; })} style="border:0;background:none;color:oklch(0.5 0.08 255);cursor:pointer;font-size:13px;padding:0 3px">×</button>
                     </div>` : html`
-                    <input class="inp" value=${r.constant} onInput=${set('constant')} readOnly=${r.type === 'COPY'} placeholder=${r.type === 'COPY' ? 'drop a body field to pass through' : 'constant, or drop a field'} style=${`flex:1.25;min-width:0;height:28px;border:1px dashed #C9C6BC;border-radius:5px;padding:0 9px;font:11.5px ${MONO};background:#FAF9F6`}/>`}
+                    ${r.type === 'REMOVE' ? html`<div style=${`flex:1.25;min-width:0;height:28px;display:flex;align-items:center;padding:0 9px;border-radius:5px;background:oklch(0.96 0.02 25);font:11.5px ${MONO};color:oklch(0.45 0.12 25)`}>${String(r.target || '').startsWith('$') ? 'remove this body field' : 'remove this header'} · runs last</div>` : html`<input class="inp" value=${r.constant} onInput=${set('constant')} readOnly=${r.type === 'COPY'} placeholder=${r.type === 'COPY' ? 'drop a body field to pass through' : 'constant, or drop a field'} style=${`flex:1.25;min-width:0;height:28px;border:1px dashed #C9C6BC;border-radius:5px;padding:0 9px;font:11.5px ${MONO};background:#FAF9F6`}/>`}`}
                 </div>
                 ${r.em && this.renderErrorMapRule(r, updRule)}
                 <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-left:26px">
                   ${r.lookup && html`<span style=${`display:flex;align-items:center;gap:4px;padding:2px 3px 2px 7px;border-radius:5px;background:oklch(0.96 0.03 160);font:11px ${MONO};color:oklch(0.38 0.1 160)`}>lookup ${r.lookup}<button onClick=${() => updRule(r.id, x => { x.lookup = ''; })} style="border:0;background:none;color:inherit;cursor:pointer;padding:0 3px">×</button></span>`}
                   ${r.conv && html`<span style=${`display:flex;flex:0 1 auto;max-width:100%;min-width:0;align-items:center;gap:2px;padding:2px 3px;border-radius:5px;background:${s.convEdit && s.convEdit.id === r.id ? 'oklch(0.9 0.06 300)' : 'oklch(0.95 0.03 300)'};font:11px ${MONO};color:oklch(0.4 0.13 300)`}><button class="hscroll" title=${'Edit converter · ' + r.conv} onClick=${() => this.openConv(r)} style=${`border:0;background:transparent;font:11px ${MONO};color:inherit;cursor:pointer;padding:0 4px;max-width:340px`}>${convLabel(r.conv)} ✎</button><button class="ro-hide" onClick=${() => updRule(r.id, x => { x.conv = ''; })} style="border:0;background:none;color:inherit;cursor:pointer;padding:0 3px">×</button></span>`}
                   ${r.fh && html`<span style=${`display:flex;align-items:center;gap:4px;padding:2px 3px 2px 7px;border-radius:5px;background:#F6EDD5;font:11px ${MONO};color:#7A5B12`}>${r.fh}<button onClick=${() => updRule(r.id, x => { x.fh = ''; })} style="border:0;background:none;color:inherit;cursor:pointer;padding:0 3px">×</button></span>`}
-                  ${r.type !== 'COPY' && html`<input class="inp" value=${r.def} onInput=${set('def')} placeholder="default" style=${`width:104px;height:24px;border:1px solid #EFEDE6;border-radius:5px;padding:0 7px;font:11px ${MONO};background:#FAF9F6`}/>`}
-                  <button onClick=${() => updRule(r.id, x => { x.required = !x.required; })} style=${`height:24px;border:1px solid ${r.required ? '#17181C' : '#E4E1D8'};background:${r.required ? '#17181C' : '#fff'};color:${r.required ? '#fff' : '#9A9CA2'};border-radius:5px;padding:0 8px;font:11px ${MONO};cursor:pointer`}>required</button>
+                  ${r.type !== 'COPY' && r.type !== 'REMOVE' && html`<input class="inp" value=${r.def} onInput=${set('def')} placeholder="default" style=${`width:104px;height:24px;border:1px solid #EFEDE6;border-radius:5px;padding:0 7px;font:11px ${MONO};background:#FAF9F6`}/>`}
+                  ${r.type !== 'REMOVE' && html`<button onClick=${() => updRule(r.id, x => { x.required = !x.required; })} style=${`height:24px;border:1px solid ${r.required ? '#17181C' : '#E4E1D8'};background:${r.required ? '#17181C' : '#fff'};color:${r.required ? '#fff' : '#9A9CA2'};border-radius:5px;padding:0 8px;font:11px ${MONO};cursor:pointer`}>required</button>`}
                   <span style="flex:1"></span>
                   <span class="hscroll" title=${res.t} style=${`font:11px ${MONO};color:${res.c};max-width:300px`}>${res.t}</span>
                   <button class="del" onClick=${() => this.ask(`Delete rule ${i + 1}?`, `${r.type} ${r.target || '(no target)'} ← ${r.em ? 'error map ' + r.em : r.source || (r.constant ? "'" + r.constant + "'" : '(nothing)')}. Nothing changes in the database until Save & reload.`, () => updRule(r.id, (x, list, idx) => { list.splice(idx, 1); }))} style="border:0;background:none;color:#ADA99E;cursor:pointer;font-size:14px;padding:0 4px">×</button>
@@ -3278,6 +3291,7 @@ class App extends Component {
               <span>Drop a context field here to add a rule</span>
               <span style="display:flex;gap:6px">
                 ${(s.cfg.errorMaps || []).length > 0 && html`<button class="ro-hide" onClick=${addMapRule} title=${'A rule whose value comes from an error map (' + s.cfg.errorMaps[0].code + '; drop another map on it to switch)'} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:500">+ Error map rule</button>`}
+                ${canRemove && html`<button class="ro-hide" onClick=${() => addRemove('$.field')} title="Remove a body field ($.x, $.items[*].x) or a header (its name) from what the other rules built; runs after them all. Or pick one under the live preview." style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:500">+ Remove rule</button>`}
                 <button class="ro-hide" onClick=${addConst} style="border:1px solid #E4E1D8;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:500">+ Constant rule</button>
               </span>
             </div>
@@ -3291,6 +3305,16 @@ class App extends Component {
             ${headers.map(h => html`<div style=${`font:11.5px/1.5 ${MONO};word-break:break-all`}><span style="color:#8E9097">${h.n}:</span> ${h.v}</div>`)}
           </div>
           <pre class="code-dark" style=${`margin:14px 0 0;padding:12px;border-radius:7px;background:#22242A;font:11.5px/1.55 ${MONO};white-space:pre-wrap;word-break:break-all;color:#E9E7E1;min-height:40px`}>${body ? hl(body, bodyLang) : (pv ? '' : 'running…')}</pre>
+          ${removable.length > 0 && html`
+            <details class="ro-hide" style="margin-top:10px">
+              <summary style=${`cursor:pointer;font:600 10px ${MONO};letter-spacing:.08em;color:#8E9097`}>REMOVE A FIELD OR HEADER</summary>
+              <div style="margin-top:6px;display:flex;flex-direction:column;gap:2px;max-height:260px;overflow:auto">
+                ${removable.map(p => html`<div style=${`display:flex;align-items:center;gap:8px;font:11px/1.5 ${MONO};color:#C9CBD1`}>
+                  <span class="hscroll" style="flex:1;min-width:0" title=${p}>${p.startsWith('$') ? p : 'header ' + p}</span>
+                  <button onClick=${() => addRemove(p)} title=${'Add a REMOVE rule for ' + p} style="flex:none;border:1px solid #3A3C43;background:none;color:oklch(0.75 0.14 25);border-radius:4px;padding:0 6px;cursor:pointer;font:10.5px inherit">remove</button>
+                </div>`)}
+              </div>
+            </details>`}
           ${pvErrs.length > 0 && html`<div style="margin-top:12px;display:flex;flex-direction:column;gap:6px">${pvErrs.map(e => html`<div style=${`font:11px/1.45 ${MONO};color:oklch(0.75 0.14 25)`}>${e}</div>`)}</div>`}
           <div style="margin-top:16px;font-size:11.5px;color:#8E9097;line-height:1.5">${note}</div>
           <details style="margin-top:18px" open=${stored !== undefined}>

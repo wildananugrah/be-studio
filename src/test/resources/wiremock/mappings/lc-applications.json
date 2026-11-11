@@ -1,7 +1,7 @@
 {
   "mappings": [
     {
-      "request": { "method": "GET", "url": "/core/lc/applications" },
+      "request": { "method": "GET", "url": "/core/lc/applications", "headers": { "X-Channel-Id": { "absent": true } } },
       "response": {
         "status": 200,
         "headers": { "Content-Type": "application/json" },

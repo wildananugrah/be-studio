@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Dev data: REMOVE rules on LC_APPLICATIONS (117). They run after every other rule:
+          FLOW_RESPONSE  REMOVE $.data[*].bniReferenceNo, $.data[*].actionable   (from every copied item)
+          STEP_REQUEST   REMOVE X-Channel-Id   (the CORE_BANKING default header is not sent to /core/lc/applications)
+    -->
+    <changeSet id="119-demo-remove" author="json-gateway" context="dev">
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'LC_APPLICATIONS')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="9"/>
+            <column name="target_type" value="REMOVE"/><column name="target_path" value="$.data[*].bniReferenceNo"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'LC_APPLICATIONS')"/>
+            <column name="phase" value="FLOW_RESPONSE"/><column name="seq" valueNumeric="10"/>
+            <column name="target_type" value="REMOVE"/><column name="target_path" value="$.data[*].actionable"/>
+        </insert>
+        <insert tableName="${tbl.mapping_rule}">
+            <column name="flow_id" valueComputed="(SELECT id FROM ${tbl.flow} WHERE code = 'LC_APPLICATIONS')"/>
+            <column name="step_id" valueComputed="(SELECT s.id FROM ${tbl.flow_step} s JOIN ${tbl.flow} f ON f.id = s.flow_id WHERE f.code = 'LC_APPLICATIONS' AND s.name = 'lcList')"/>
+            <column name="phase" value="STEP_REQUEST"/><column name="seq" valueNumeric="1"/>
+            <column name="target_type" value="REMOVE"/><column name="target_path" value="X-Channel-Id"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

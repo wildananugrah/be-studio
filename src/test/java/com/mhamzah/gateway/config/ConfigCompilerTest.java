@@ -265,6 +265,32 @@ class ConfigCompilerTest {
     }
 
     @Test
+    void removeRulesNameABodyFieldOrAHeader() {
+        var flow = rows.flow("A", "POST", "/x");
+        var step = rows.step(flow, "s", 1);
+        rows.rule(flow.id(), null, "FLOW_RESPONSE", "REMOVE", "$.data[*].secret", null, null);
+        rows.rule(flow.id(), null, "FLOW_RESPONSE", "REMOVE", "X-Internal", null, null);
+        rows.rule(flow.id(), step.id(), "STEP_REQUEST", "REMOVE", "X-Channel-Id", null, null);
+
+        FlowDefinition f = compiler.compile(rows.build()).flows().getFirst();
+
+        assertThat(f.responseRules().get(0).targetPath()).hasToString("$.data[*].secret");
+        assertThat(f.responseRules().get(1).targetName()).isEqualTo("X-Internal");
+        assertThat(f.allSteps().getFirst().requestRules().getFirst().targetName()).isEqualTo("X-Channel-Id");
+    }
+
+    @Test
+    void removeRulesAreValidated() {
+        var flow = rows.flow("A", "POST", "/x");
+        rows.rule(flow.id(), null, "FLOW_RESPONSE", "REMOVE", "$", null, null);
+        rows.rule(flow.id(), null, "FLOW_RESPONSE", "REMOVE", "$.a", "$.request.body.a", null);
+        rows.rule(flow.id(), null, "FLOW_RESPONSE", "REMOVE", "bad header", null, null);
+        rows.rule(flow.id(), null, "FLOW_RESPONSE", "REMOVE", "$.a[", null, null);
+        assertInvalid("cannot remove the whole body", "a REMOVE rule only names what to remove",
+                "'bad header' is not a header name", "target_path");
+    }
+
+    @Test
     void reportsAllErrorsAtOnce() {
         rows.flow("A", "FETCH", "/x");
         rows.flow("B", "GET", "/y", f -> f.withSchemas("NOPE", null));

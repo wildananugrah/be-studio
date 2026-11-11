@@ -760,11 +760,12 @@ public class ConfigCompiler {
                         continue;
                     }
                     CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.HEADER, TargetType.STATUS,
-                            TargetType.FILE, TargetType.COPY), FLOW_RESPONSE);
+                            TargetType.FILE, TargetType.COPY, TargetType.REMOVE), FLOW_RESPONSE);
                     if (r.responseName() != null && !namedRules.containsKey(r.responseName())) {
                         errors.add(rw + ": response '" + r.responseName() + "' is not a response of this flow");
                     } else if (rule != null && FlowDefinition.ADDITIONAL_INFO_RESPONSE.equals(r.responseName())
-                            && rule.targetType() != TargetType.BODY && rule.targetType() != TargetType.COPY) {
+                            && rule.targetType() != TargetType.BODY && rule.targetType() != TargetType.COPY
+                            && !(rule.targetType() == TargetType.REMOVE && rule.targetPath() != null)) {
                         errors.add(rw + ": the response '" + FlowDefinition.ADDITIONAL_INFO_RESPONSE
                                 + "' builds additionalInfo of SNAP responses and takes BODY and COPY rules only");
                     } else if (rule != null && rule.targetType() == TargetType.FILE && !fileRule(rule, r, rw, fileRules)) {
@@ -979,7 +980,7 @@ public class ConfigCompiler {
             for (RuleRow r : ruleRows) {
                 String rw = "mapping rule " + r.id() + " of " + where;
                 CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.HEADER, TargetType.QUERY, TargetType.PATH,
-                        TargetType.COPY), STEP_REQUEST);
+                        TargetType.COPY, TargetType.REMOVE), STEP_REQUEST);
                 if (rule != null) {
                     rule.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), null, rw));
                     rules.add(rule);
@@ -1172,8 +1173,12 @@ public class ConfigCompiler {
             List<CompiledRule> rules = new ArrayList<>();
             for (RuleRow r : ruleRows) {
                 String rw = "mapping rule " + r.id() + " of " + where;
-                CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.COPY),
+                CompiledRule rule = rule(r, rw, Set.of(TargetType.BODY, TargetType.COPY, TargetType.REMOVE),
                         "a transform step (its rules build its result)");
+                if (rule != null && rule.targetType() == TargetType.REMOVE && rule.targetPath() == null) {
+                    errors.add(rw + ": a transform step builds a body only: REMOVE takes a body path ($.field)");
+                    continue;
+                }
                 if (rule != null) {
                     rule.references().forEach(p -> checkStepRefs(p, orders, s.stepOrder(), null, rw));
                     rules.add(rule);
@@ -1254,6 +1259,13 @@ public class ConfigCompiler {
                 target = path(r.targetPath(), where, "target_path");
             } else if (targetType == TargetType.COPY) {
                 target = copyTarget(r, where);
+            } else if (targetType == TargetType.REMOVE) {
+                target = removeTarget(r, where);
+                if (errors.size() > before) {
+                    return null;
+                }
+                return new CompiledRule(r.id(), r.seq(), targetType, target, target == null ? r.targetPath().trim() : null,
+                        null, null, null, null, null, null, null, false);
             } else if (targetType != null && targetType != TargetType.STATUS && targetType != TargetType.FILE
                     && (r.targetPath() == null || r.targetPath().isBlank())) {
                 errors.add(where + ": target_path must be a " + targetType + " name");
@@ -1311,6 +1323,35 @@ public class ConfigCompiler {
                     targetType == TargetType.BODY || targetType == TargetType.COPY ? null : r.targetPath(), source,
                     JsonValues.parseLiteral(r.constantValue()), JsonValues.parseLiteral(r.defaultValue()),
                     converter, lookup, fieldHandler, r.fieldHandler(), r.required(), errorMap);
+        }
+
+        /**
+         * A REMOVE rule: target_path {@code $.a.b} (a body field, [*] allowed) gives the path; a plain name is a header
+         * (null path). Nothing else may be set: it reads no value.
+         */
+        private JsonPath removeTarget(RuleRow r, String where) {
+            String t = r.targetPath() == null ? "" : r.targetPath().trim();
+            if (r.sourcePath() != null || r.constantValue() != null || r.defaultValue() != null || r.converter() != null
+                    || r.lookupCode() != null || r.fieldHandler() != null || r.required()
+                    || (r.errorMapCode() != null && !r.errorMapCode().isBlank())) {
+                errors.add(where + ": a REMOVE rule only names what to remove (target_path): no source_path, constant_value,"
+                        + " default_value, converter, lookup_code, field_handler, error_map_code or required");
+            }
+            if (t.isEmpty()) {
+                errors.add(where + ": a REMOVE rule needs target_path: a body field ($.a.b, $.items[*].x) or a header name");
+                return null;
+            }
+            if (!t.startsWith("$")) {
+                if (!t.matches("[!#$%&'*+.^_`|~0-9A-Za-z-]+")) {
+                    errors.add(where + ": target_path '" + t + "' is not a header name (or start it with $ for a body field)");
+                }
+                return null;
+            }
+            JsonPath p = path(t, where, "target_path");
+            if (p != null && p.isRoot()) {
+                errors.add(where + ": a REMOVE rule cannot remove the whole body ($); name a field");
+            }
+            return p;
         }
 
         /**

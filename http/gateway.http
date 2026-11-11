@@ -553,3 +553,33 @@ POST {{baseUrl}}/api/v1/lc/requests
 Content-Type: application/json
 
 {"purpose": "new2"}
+
+###############################################################################
+# Pass-through and REMOVE (docs/CONFIGURATION-GUIDE.md §4.3a, §4.3b)
+###############################################################################
+
+### LC_APPLICATIONS: every top-level field copied, applicationNo renamed to referenceNumber, bniReferenceNo and actionable
+### removed from every item (REMOVE), and the call to the core sent without X-Channel-Id → 200
+### {"responseCode":"200E000",…,"data":[{"lcNumber":"ELJPU07631S26-ADV001","status":"PENDING_APPROVAL",…,"openEventCount":1,"referenceNumber":"ELJPU07631S26"},…],"meta":{…},"partnerReferenceNo":"REF-VALERIE"}
+GET {{baseUrl}}/api/v1/lc/applications
+
+### ACCOUNT_DETAIL: acctName and detail.openDate passed through, detail.branch renamed to detail.cabang → 200
+### {"acctName":"BUDI SANTOSO","detail":{"openDate":"20200101","cabang":"JKT01"},"account":{"number":"1001"}}
+GET {{baseUrl}}/api/v1/accounts/1001/detail
+
+### ---------------------------------------------------------------------------------------------------------------
+### REMOVE sample: LC_LIST_SLIM from docs/examples/remove-fields.sql
+###   docker compose exec -T postgres psql -U gateway -d gateway < docs/examples/remove-fields.sql
+###   make reload
+### The whole answer of the core is copied, then REMOVE rules drop bniReferenceNo, actionable and submittedDate from
+### every item, meta.totalPages and partnerReferenceNo; the call to the core goes without X-Channel-Id.
+### ---------------------------------------------------------------------------------------------------------------
+
+### → 200, header X-Total-Items: 58
+### {"responseCode":"200E000","responseMessage":"Successful","code":200,"message":"Success",
+###  "data":[{"applicationNo":"ELJPU07631S26","lcNumber":"ELJPU07631S26-ADV001","status":"PENDING_APPROVAL",
+###           "currentEvent":"LC_TRANSFER","amount":"IDR 1,000,000.00","applicantName":"PT JAYA ABADI",
+###           "createdDate":"2026-11-06T15:30:19","beneficiaryName":"BRANTAS ABIPRAYA, PT","expiryDate":"2026-12-26",
+###           "openEventCount":1}, …],
+###  "meta":{"page":1,"size":50,"totalItems":58}}
+GET {{baseUrl}}/api/v2/lc/applications

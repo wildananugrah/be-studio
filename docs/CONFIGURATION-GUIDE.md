@@ -335,8 +335,8 @@ scripts/flow-changelog.sh export TRADE_CALLBACK,OTHER_FLOW                      
 | `step_id` | for `STEP_REQUEST` | Step whose request this builds. Must be NULL for `FLOW_RESPONSE`. |
 | `phase` | ✔ | `STEP_REQUEST` (what a step sends) or `FLOW_RESPONSE` (what the client receives) |
 | `seq` | ✔ | Order of application within the step/response. A later rule writing the same target overwrites. |
-| `target_type` | default `BODY` | `BODY`, `HEADER`, `QUERY`, `PATH`, `STATUS`, `COPY`. `FLOW_RESPONSE` allows only `BODY`, `HEADER`, `STATUS` (the HTTP status, [§4.11d](#411d-pass-the-backends-http-status-through-success-and-failure)), `FILE` and `COPY`; steps don't allow `STATUS`. `COPY` passes a field through unchanged ([§4.3a](#43a-pass-chosen-fields-through-copy)); HTTP calls, transforms and responses allow it, database and file steps don't. |
-| `target_path` | ✔ | `BODY`: a path like `$.a.b`. `COPY`: where the field is inside its body (`$.steps.x.body.a.b` → `$.a.b`). Otherwise the plain header / query parameter / path variable name. |
+| `target_type` | default `BODY` | `BODY`, `HEADER`, `QUERY`, `PATH`, `STATUS`, `COPY`. `FLOW_RESPONSE` allows only `BODY`, `HEADER`, `STATUS` (the HTTP status, [§4.11d](#411d-pass-the-backends-http-status-through-success-and-failure)), `FILE` and `COPY`; steps don't allow `STATUS`. `COPY` passes a field through unchanged ([§4.3a](#43a-pass-chosen-fields-through-copy)); `REMOVE` deletes a field or header after the other rules ([§4.3b](#43b-remove-fields-and-headers-remove)). HTTP calls, transforms and responses allow both, database and file steps don't. |
+| `target_path` | ✔ | `BODY`: a path like `$.a.b`. `COPY`: where the field is inside its body (`$.steps.x.body.a.b` → `$.a.b`). `REMOVE`: a body field (`$.a.b`, `$.items[*].x`) or a header name. Otherwise the plain header / query parameter / path variable name. |
 | `source_path` | one of | Where the value comes from ([§3.3.1](#331-what-a-rule-can-read)) |
 | `constant_value` | one of | A fixed value ([§3.3.3](#333-literal-values)) |
 | `default_value` | | Used when the source is missing or null |
@@ -786,6 +786,33 @@ SELECT id, 'FLOW_RESPONSE', 1, 'COPY', '$.acctName', '$.steps.account.body.acctN
 ```
 
 The Studio preview marks an overridden copy `not copied: mapping rule … maps this field`. To send the **whole** body and change a few fields, use [§4.3](#43-copy-everything-then-adjust) instead.
+
+### 4.3b Remove fields and headers (`REMOVE`)
+
+A `REMOVE` rule deletes something from what the other rules built. It is the counterpart of `COPY`: copy a whole object or list, then drop what the client (or the backend) must not get.
+
+- `target_path` is a **body field** (`$.meta.totalPages`, or `$.data[*].bniReferenceNo` for every item of a list) or a **header name** (`X-Internal`, matched without case). No source, constant, converter or default.
+- It runs **after every other rule, whatever its `seq`**, so it removes the field whichever rule wrote it: a `COPY`, a `BODY` rule, or a whole-body copy (`$`).
+- Removing something that is not there does nothing.
+- On a **step request**, a header `REMOVE` also drops the target system's default header (`gw_target_system_header`), so that backend never gets it. On a **file response** it can drop `Content-Disposition` or `Content-Type`. `X-Correlation-Id` is always sent; a codec's `Content-Type` / `Accept` are added again.
+- A transform step and the SNAP `additionalInfo` response take body paths only.
+
+`LC_APPLICATIONS` (dev demo) copies the whole `data` list, then:
+
+| target_type | target_path | phase | |
+|---|---|---|---|
+| `REMOVE` | `$.data[*].bniReferenceNo` | `FLOW_RESPONSE` | left out of every item |
+| `REMOVE` | `$.data[*].actionable` | `FLOW_RESPONSE` | left out of every item |
+| `REMOVE` | `X-Channel-Id` | `STEP_REQUEST` (step `lcList`) | the CORE_BANKING default header is not sent |
+
+```sql
+INSERT INTO gw_mapping_rule (flow_id, phase, seq, target_type, target_path)
+SELECT id, 'FLOW_RESPONSE', 9, 'REMOVE', '$.data[*].bniReferenceNo' FROM gw_flow WHERE code = 'LC_APPLICATIONS';
+```
+
+In Studio: **+ Remove rule** under the rules, `REMOVE` in the type list, or open **REMOVE A FIELD OR HEADER** under the live preview and click **remove** next to a field or header.
+
+**Sample.** [`examples/remove-fields.sql`](examples/remove-fields.sql) adds `LC_LIST_SLIM` (`GET /api/v2/lc/applications`): the whole answer of the core copied with `$`, five fields removed (one of them by a REMOVE placed before the copy, to show it still runs last), and the target system's `X-Channel-Id` kept away from the core. The request and the response it gets are under "REMOVE sample" in [`http/gateway.http`](../http/gateway.http).
 
 ### 4.4 Move values between headers, path, query and body
 
@@ -1786,6 +1813,9 @@ Reload (and startup) report every problem at once. The common ones:
 | `a COPY rule takes source_path $.steps.<step>.body.<field> or $.request.body.<field>` | A copy keeps the field's place in a body, so it must come from one | Pick a body field, or use a `BODY` rule |
 | `a COPY rule writes the field to the same place: target_path must be $.x` | `target_path` differs from where the field is in its body | Set it to the path shown, or use a `BODY` rule to move it |
 | `a COPY rule copies the value as it is` | A converter, lookup, default, constant, error map or handler on a `COPY` rule | Use a `BODY` rule to change the value |
+| `a REMOVE rule only names what to remove` | A source, constant, converter, default, lookup, handler, error map or `required` on a `REMOVE` rule | Keep only `target_path` |
+| `a REMOVE rule cannot remove the whole body ($)` | `target_path` is `$` | Name a field (`$.x`), or don't write the body |
+| `'…' is not a header name (or start it with $ for a body field)` | A `REMOVE` target that is neither a `$.` path nor a header name | Fix the name |
 | `target_type COPY is not allowed` | Database and file storage steps take named parameters, not a body | Use `BODY` rules there |
 | `Invalid HTTP status for STATUS` (500 `GW-500-MAPPING`) | A `STATUS` rule gave something other than a whole number from 100 to 599 | Check its source, lookup or constant |
 | `target has N [*] but source has M` | Array shapes don't match | Use the same number of `[*]`, or none in the target |
