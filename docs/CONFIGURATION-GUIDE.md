@@ -740,6 +740,8 @@ What the client gets (default error handler):
 
 With `error_handler = RESPOND:<response>` ([§4.11e](#411e-map-the-error-response-error_handler-respond)), the response's rules read `$.error.validation.field`, `.path`, `.check`, `.code` and `.missing` (plus `$.error.details[0]`, the message). `snapErrorHandler` answers `400xx02` (Invalid Mandatory Field) when the field is missing and `400xx01` (Invalid Field Format) otherwise, naming the field. In Studio: Pipeline → **Inbound** → Request validation. The OpenAPI document shows the request body as `oneOf` the picked schemas. Demo: `LC_REQUEST`, `POST /api/v1/lc/requests`.
 
+**Samples.** [`examples/request-validation.sql`](examples/request-validation.sql) adds two flows to any database: `LC_SUBMIT` (this purpose example) and `LC_AMEND` (every kind of check, `SCHEMA_FIRST`, and an error response `RESPOND:invalid` built from `$.error.validation`). The matching requests, with the response each one gets, are under "Request validation" in [`http/gateway.http`](../http/gateway.http).
+
 ### 4.2 Rename, nest and flatten fields
 
 | target_path | source_path |

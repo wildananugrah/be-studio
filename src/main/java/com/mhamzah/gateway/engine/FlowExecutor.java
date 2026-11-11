@@ -411,8 +411,10 @@ public class FlowExecutor implements AutoCloseable {
         if (error.validation() != null) {
             ObjectNode v = e.putObject("validation");
             GatewayError.Validation val = error.validation();
-            v.put("field", val.field());
-            v.put("path", val.path());
+            if (val.field() != null) { // an EXPR check is about no single field
+                v.put("field", val.field());
+                v.put("path", val.path());
+            }
             v.put("check", val.check());
             if (val.code() != null) {
                 v.put("code", val.code());

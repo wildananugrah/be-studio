@@ -39,7 +39,9 @@ public class DefaultErrorHandler implements ErrorHandler {
             error.details().forEach(details::add);
         }
         if (error.validation() != null) {
-            body.put("field", error.validation().field());
+            if (error.validation().field() != null) {
+                body.put("field", error.validation().field());
+            }
             if (error.validation().code() != null) {
                 body.put("validationCode", error.validation().code());
             }

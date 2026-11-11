@@ -202,6 +202,7 @@ class RequestValidationTest {
         assertThat(detail(post(ok.replace("700", "\"5000\""), channel))).isEqualTo("amount must be a number from 1 to 1000");
         assertThat(detail(post(ok.replace("}", ", \"note\": \"long\"}"), channel))).isEqualTo("note must be at most 3 characters long");
         assertThat(detail(post(ok.replace("IDR", "USD"), channel))).isEqualTo("USD amounts must be below 500");
+        assertThat(post(ok.replace("IDR", "USD"), channel).body().has("field")).as("an EXPR check names no field").isFalse();
         // text compared with a number: the check fails (400), not the gateway (500)
         assertThat(detail(post(ok.replace("700", "\"700\"").replace("IDR", "USD"), channel))).isEqualTo("USD amounts must be below 500");
     }
