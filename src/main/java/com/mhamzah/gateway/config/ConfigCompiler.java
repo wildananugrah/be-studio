@@ -91,6 +91,8 @@ public class ConfigCompiler {
     private final FileStores fileStores;
     private Pattern serviceCodePattern = Pattern.compile(DEFAULT_SERVICE_CODE_PATTERN);
     private boolean allowInsecureTls = true;
+    private int patternMaxInput = com.mhamzah.gateway.validation.BoundedPattern.DEFAULT_MAX_INPUT;
+    private Duration patternTimeout = com.mhamzah.gateway.validation.BoundedPattern.DEFAULT_TIMEOUT;
 
     /**
      * @param configTargets target systems from application.yml ({@code gateway.target-systems}); database rows win
@@ -119,6 +121,16 @@ public class ConfigCompiler {
     /** False ({@code gateway.tls.allow-insecure}) makes {@code tls_mode INSECURE} a configuration error. */
     public ConfigCompiler allowInsecureTls(boolean value) {
         this.allowInsecureTls = value;
+        return this;
+    }
+
+    /** Limits of PATTERN request checks ({@code gateway.validation.pattern-max-input} / {@code pattern-timeout}). */
+    public ConfigCompiler patternLimits(int maxInput, Duration timeout) {
+        if (maxInput <= 0 || timeout == null || timeout.isNegative() || timeout.isZero()) {
+            throw new IllegalArgumentException("gateway.validation.pattern-max-input and pattern-timeout must be positive");
+        }
+        this.patternMaxInput = maxInput;
+        this.patternTimeout = timeout;
         return this;
     }
 
@@ -815,7 +827,7 @@ public class ConfigCompiler {
                         + "', which builds additionalInfo of SNAP responses");
             }
             RequestValidation requestValidation = RequestValidation.compile(f.requestValidation(), where,
-                    schemas::get, lookups::get, errors);
+                    schemas::get, lookups::get, patternMaxInput, patternTimeout, errors);
             if (method == null || pattern == null) {
                 return null;
             }

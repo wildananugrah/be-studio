@@ -23,7 +23,8 @@ public record GatewayProperties(
         @DefaultValue Files files,
         Map<String, FileStorage> storages,
         @DefaultValue Snap snap,
-        @DefaultValue TlsPolicy tls) {
+        @DefaultValue TlsPolicy tls,
+        @DefaultValue Validation validation) {
 
     public GatewayProperties {
         targetSystems = targetSystems == null ? Map.of() : Map.copyOf(targetSystems);
@@ -48,6 +49,14 @@ public record GatewayProperties(
      * Studio save that uses it is refused.
      */
     public record TlsPolicy(@DefaultValue("true") boolean allowInsecure) {}
+
+    /**
+     * Limits of PATTERN request checks ({@code gw_flow.request_validation}), against patterns that backtrack badly:
+     * longer values fail without being matched, and a match running longer than {@code patternTimeout} is stopped
+     * (the check fails).
+     */
+    public record Validation(@DefaultValue("4096") int patternMaxInput,
+            @DefaultValue("50ms") java.time.Duration patternTimeout) {}
 
     public record Snap(@DefaultValue("[0-9]{2}([0-9]{2})?") String serviceCodePattern,
             @DefaultValue("200") int noBodyStatus) {}

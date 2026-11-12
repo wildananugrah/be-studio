@@ -9,6 +9,7 @@ import com.mhamzah.gateway.mapping.JsonValues;
 import com.mhamzah.gateway.mapping.LookupTable;
 import com.mhamzah.gateway.schema.CompiledSchema;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -18,6 +19,8 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -34,7 +37,8 @@ import tools.jackson.databind.JsonNode;
  * }</pre>
  *
  * Checks: REQUIRED, ENUM ({@code values}), LOOKUP ({@code lookup}: the keys of a {@code gw_lookup_entry} table),
- * PATTERN ({@code pattern}, the whole text), LENGTH ({@code min} / {@code max} characters, or items of an array),
+ * PATTERN ({@code pattern}, the whole text; limited by {@code gateway.validation.pattern-max-input} characters and
+ * {@code pattern-timeout}, see {@link BoundedPattern}), LENGTH ({@code min} / {@code max} characters, or items of an array),
  * RANGE ({@code min} / {@code max}, a number or numeric text) and EXPR ({@code expr}, an expression that must be true;
  * no field). A missing or null field fails every check unless the check is {@code "optional": true}. A check fails with
  * its {@code message} (or a standard one) and its optional {@code code}.
@@ -43,6 +47,8 @@ import tools.jackson.databind.JsonNode;
  * {@code request_schema_code}, and without one the request fails (GW-400-VALIDATION).
  */
 public final class RequestValidation {
+
+    private static final Logger log = LoggerFactory.getLogger(RequestValidation.class);
 
     public enum Order { CHECKS_FIRST, SCHEMA_FIRST }
 
@@ -53,7 +59,7 @@ public final class RequestValidation {
 
     /** One compiled check. */
     public record Check(Kind kind, JsonPath field, boolean optional, List<String> values, LookupTable lookup,
-            Pattern pattern, BigDecimal min, BigDecimal max, Condition expr, String message, String code) {}
+            BoundedPattern pattern, BigDecimal min, BigDecimal max, Condition expr, String message, String code) {}
 
     /** The schema picked by the value of {@code field}. */
     public record SchemaBy(JsonPath field, Map<String, CompiledSchema> schemas) {}
@@ -138,8 +144,17 @@ public final class RequestValidation {
             case ENUM -> text != null && c.values().contains(text) ? null : name + " must be one of " + c.values();
             case LOOKUP -> text != null && c.lookup().entries().containsKey(text) ? null
                     : name + " must be one of " + new java.util.TreeSet<>(c.lookup().entries().keySet());
-            case PATTERN -> text != null && c.pattern().matcher(text).matches() ? null
-                    : name + " does not match " + c.pattern().pattern();
+            case PATTERN -> text == null ? name + " does not match " + c.pattern().pattern().pattern()
+                    : switch (c.pattern().matches(text)) {
+                        case MATCH -> null;
+                        case NO_MATCH -> name + " does not match " + c.pattern().pattern().pattern();
+                        case TOO_LONG -> name + " is too long to check (at most " + c.pattern().maxInput() + " characters)";
+                        case TIMEOUT -> {
+                            log.warn("PATTERN check on {} stopped after {} ms ({} characters): simplify the pattern {}",
+                                    name, c.pattern().timeout().toMillis(), text.length(), c.pattern().pattern().pattern());
+                            yield name + " could not be checked against its pattern";
+                        }
+                    };
             case LENGTH -> {
                 Integer n = value.isArray() ? Integer.valueOf(value.size()) : text != null ? Integer.valueOf(text.length()) : null;
                 yield n != null && within(BigDecimal.valueOf(n), c) ? null : name + " must be " + bounds(c, " characters long");
@@ -210,6 +225,16 @@ public final class RequestValidation {
      */
     public static RequestValidation compile(String text, String where, Function<String, CompiledSchema> schemas,
             Function<String, LookupTable> lookups, List<String> errors) {
+        return compile(text, where, schemas, lookups, BoundedPattern.DEFAULT_MAX_INPUT, BoundedPattern.DEFAULT_TIMEOUT,
+                errors);
+    }
+
+    /**
+     * @param patternMaxInput PATTERN checks do not match longer values (they fail)
+     * @param patternTimeout a PATTERN match that takes longer is stopped (the check fails)
+     */
+    public static RequestValidation compile(String text, String where, Function<String, CompiledSchema> schemas,
+            Function<String, LookupTable> lookups, int patternMaxInput, Duration patternTimeout, List<String> errors) {
         if (text == null || text.isBlank()) {
             return null;
         }
@@ -248,7 +273,7 @@ public final class RequestValidation {
             } else {
                 int n = 0;
                 for (JsonNode c : list) {
-                    Check check = check(c, w + " check " + (++n), lookups, errors);
+                    Check check = check(c, w + " check " + (++n), lookups, patternMaxInput, patternTimeout, errors);
                     if (check != null) {
                         checks.add(check);
                     }
@@ -263,7 +288,8 @@ public final class RequestValidation {
         return errors.size() > before ? null : new RequestValidation(order, checks, schemaBy);
     }
 
-    private static Check check(JsonNode c, String w, Function<String, LookupTable> lookups, List<String> errors) {
+    private static Check check(JsonNode c, String w, Function<String, LookupTable> lookups, int patternMaxInput,
+            Duration patternTimeout, List<String> errors) {
         if (!c.isObject()) {
             errors.add(w + " must be an object {field, check, ...}");
             return null;
@@ -287,7 +313,7 @@ public final class RequestValidation {
         }
         List<String> values = List.of();
         LookupTable lookup = null;
-        Pattern pattern = null;
+        BoundedPattern pattern = null;
         BigDecimal min = null;
         BigDecimal max = null;
         Condition expr = null;
@@ -312,7 +338,7 @@ public final class RequestValidation {
             case PATTERN -> {
                 String p = text(c, "pattern");
                 try {
-                    pattern = p == null ? null : Pattern.compile(p);
+                    pattern = p == null ? null : new BoundedPattern(Pattern.compile(p), patternMaxInput, patternTimeout);
                 } catch (PatternSyntaxException e) {
                     errors.add(label + ": pattern is not a valid regular expression: " + e.getDescription());
                 }

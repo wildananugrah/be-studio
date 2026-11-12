@@ -60,6 +60,12 @@ gateway:
   # Set GATEWAY_TLS_ALLOW_INSECURE=false in production: a target system using it then stops the configuration loading.
   tls:
     allow-insecure: ${GATEWAY_TLS_ALLOW_INSECURE:true}
+  # PATTERN checks of gw_flow.request_validation: longer values fail without being matched, and a match running longer
+  # than the timeout is stopped (the check fails and a warning names the pattern), so a pattern that backtracks badly
+  # cannot hold request threads.
+  validation:
+    pattern-max-input: ${GATEWAY_VALIDATION_PATTERN_MAX_INPUT:4096}
+    pattern-timeout: ${GATEWAY_VALIDATION_PATTERN_TIMEOUT:50ms}
   snap:
     # two characters, each a digit or an upper-case letter: 00-99 and 0A-ZZ (1,296 codes per application)
     service-code-pattern: ${GATEWAY_SNAP_SERVICE_CODE_PATTERN:[0-9A-Z]{2}[a-z]?}
