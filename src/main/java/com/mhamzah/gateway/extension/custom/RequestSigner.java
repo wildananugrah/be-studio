@@ -23,7 +23,8 @@ import org.springframework.stereotype.Component;
  *   X-Signature: Base64( HMAC-SHA256( secret, timestamp + ":" + body ) )
  * </pre>
  * Use it on a step: {@code gw_flow_step.request_handler = 'requestSigner'}.
- * Secret: {@code custom.request-signer.secret} (set it from an environment variable; never commit real secrets).
+ * Secret: {@code custom.request-signer.secret} (set it from an environment variable; never commit real secrets). It has
+ * no default outside the dev profile: a call through this handler fails while it is blank.
  */
 @Component("requestSigner")
 public class RequestSigner implements MessageHandler {
@@ -32,18 +33,21 @@ public class RequestSigner implements MessageHandler {
     private final Clock clock;
 
     @Autowired
-    public RequestSigner(@Value("${custom.request-signer.secret:dev-signing-secret}") String secret) {
+    public RequestSigner(@Value("${custom.request-signer.secret:}") String secret) {
         this(secret, Clock.systemUTC());
     }
 
     /** For tests: a fixed clock makes the signature predictable. */
     RequestSigner(String secret, Clock clock) {
-        this.secret = secret.getBytes(StandardCharsets.UTF_8);
+        this.secret = secret == null ? new byte[0] : secret.getBytes(StandardCharsets.UTF_8);
         this.clock = clock;
     }
 
     @Override
     public GatewayResponse handle(MessageView message, ExecutionContext ctx) {
+        if (secret.length == 0) {
+            throw new IllegalStateException("requestSigner: custom.request-signer.secret is not set (REQUEST_SIGNER_SECRET)");
+        }
         String timestamp = Instant.now(clock).truncatedTo(ChronoUnit.SECONDS).toString();
         String body = message.body() == null ? "" : message.body().toString(); // compact JSON, exactly as sent
         message.headers().put("X-Timestamp", timestamp);

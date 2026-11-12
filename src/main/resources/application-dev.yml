@@ -25,3 +25,11 @@ gateway:
   # The demo downstream systems CORE_BANKING and NOTIFICATION are rows in gw_target_system
   # (db/changelog/changes/101-dev-demo-target-systems.xml). Their base_url is
   # ${CORE_BANKING_URL:http://localhost:8089} / ${NOTIFICATION_URL:http://localhost:8089}.
+
+# Dev-only credentials of the example custom classes (application.yml has no defaults: set the variables elsewhere)
+custom:
+  request-signer:
+    secret: ${REQUEST_SIGNER_SECRET:dev-signing-secret}
+  partner-soap:
+    username: ${PARTNER_SOAP_USERNAME:dev-user}
+    password: ${PARTNER_SOAP_PASSWORD:dev-password}

@@ -20,7 +20,8 @@ import tools.jackson.databind.node.ObjectNode;
  *   &lt;/soapenv:Header>
  * </pre>
  * Use it on a target system: {@code gw_target_system.body_codec = 'partnerSoapCodec'}.
- * Credentials: {@code custom.partner-soap.username} / {@code .password} (set them from environment variables).
+ * Credentials: {@code custom.partner-soap.username} / {@code .password} (set them from environment variables). They have
+ * no default outside the dev profile: a call through this codec fails while either is blank.
  * The SOAP header is not part of the audited JSON body, so the password never reaches the audit tables.
  */
 @Component("partnerSoapCodec")
@@ -33,8 +34,8 @@ public class PartnerSoapCodec extends SoapCodec {
     private final String username;
     private final String password;
 
-    public PartnerSoapCodec(@Value("${custom.partner-soap.username:dev-user}") String username,
-            @Value("${custom.partner-soap.password:dev-password}") String password) {
+    public PartnerSoapCodec(@Value("${custom.partner-soap.username:}") String username,
+            @Value("${custom.partner-soap.password:}") String password) {
         super(Version.SOAP_1_1);
         this.username = username;
         this.password = password;
@@ -42,6 +43,10 @@ public class PartnerSoapCodec extends SoapCodec {
 
     @Override
     protected JsonNode header(ExecutionContext ctx) {
+        if (blank(username) || blank(password)) {
+            throw new IllegalStateException("partnerSoapCodec: custom.partner-soap.username / password are not set"
+                    + " (PARTNER_SOAP_USERNAME / PARTNER_SOAP_PASSWORD)");
+        }
         ObjectNode header = object();
         ObjectNode security = header.putObject("wsse:Security");
         security.put("@xmlns:wsse", WSSE);
@@ -51,5 +56,9 @@ public class PartnerSoapCodec extends SoapCodec {
         pwd.put("@Type", PASSWORD_TEXT);
         pwd.put("#text", password);
         return header;
+    }
+
+    private static boolean blank(String s) {
+        return s == null || s.isBlank();
     }
 }
