@@ -195,10 +195,11 @@ custom:
   channel-guard:
     allowed: ${GATEWAY_CHANNEL_GUARD_ALLOWED:MOBILE,ATM,WEB}
   request-signer:
-    secret: ${REQUEST_SIGNER_SECRET:dev-signing-secret} # set REQUEST_SIGNER_SECRET outside dev
+    secret: ${REQUEST_SIGNER_SECRET:} # required when the requestSigner handler is used (dev value: application-dev.yml)
   partner-soap:
-    username: ${PARTNER_SOAP_USERNAME:dev-user}
-    password: ${PARTNER_SOAP_PASSWORD:dev-password} # set PARTNER_SOAP_PASSWORD outside dev
+    # required when the partnerSoapCodec is used (dev values: application-dev.yml); no default credentials here
+    username: ${PARTNER_SOAP_USERNAME:}
+    password: ${PARTNER_SOAP_PASSWORD:}
 
 logging:
   pattern:

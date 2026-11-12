@@ -125,6 +125,14 @@ class CustomHandlersTest {
             new RequestSigner("other-secret", clock).handle(b, ctx(Map.of()));
             assertThat(a.headers().get("X-Signature")).isNotEqualTo(b.headers().get("X-Signature"));
         }
+
+        @Test
+        void refusesToSignWithoutASecret() {
+            MessageView message = new MessageView(Map.of(), F.objectNode());
+            assertThatThrownBy(() -> new RequestSigner("", clock).handle(message, ctx(Map.of())))
+                    .isInstanceOf(IllegalStateException.class).hasMessageContaining("REQUEST_SIGNER_SECRET");
+            assertThat(message.headers()).doesNotContainKey("X-Signature");
+        }
     }
 
     @Nested
@@ -205,5 +213,24 @@ class CustomHandlersTest {
 
             assertThat(j.toString()).isEqualTo("{\"Pong\":\"ok\"}");
         }
+
+        @Test
+        void refusesToSendWithoutCredentials() {
+            for (PartnerSoapCodec c : java.util.List.of(new PartnerSoapCodec("gw-user", ""), new PartnerSoapCodec("", "pw"))) {
+                assertThatThrownBy(() -> c.encode(MAPPER.readTree("{\"Ping\":null}"), new java.util.TreeMap<>(), ctx(Map.of())))
+                        .isInstanceOf(IllegalStateException.class).hasMessageContaining("PARTNER_SOAP_PASSWORD");
+            }
+        }
+    }
+
+    /** application.yml (every profile) holds no credential of the example classes: dev values live in application-dev.yml. */
+    @Test
+    void baseConfigurationHasNoDefaultCredentials() {
+        var yaml = new org.springframework.beans.factory.config.YamlPropertiesFactoryBean();
+        yaml.setResources(new org.springframework.core.io.ClassPathResource("application.yml"));
+        java.util.Properties p = yaml.getObject();
+        assertThat(p.getProperty("custom.request-signer.secret")).isEqualTo("${REQUEST_SIGNER_SECRET:}");
+        assertThat(p.getProperty("custom.partner-soap.username")).isEqualTo("${PARTNER_SOAP_USERNAME:}");
+        assertThat(p.getProperty("custom.partner-soap.password")).isEqualTo("${PARTNER_SOAP_PASSWORD:}");
     }
 }
