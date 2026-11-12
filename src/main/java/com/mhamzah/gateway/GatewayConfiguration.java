@@ -68,7 +68,8 @@ public class GatewayConfiguration {
         return new ConfigCompiler(lookup, properties.targetSystems(), environment::resolveRequiredPlaceholders,
                 Duration.ofMillis(properties.defaultFlowTimeoutMs()), Duration.ofMillis(properties.defaultStepTimeoutMs()),
                 sqlDatasources, fileStores).serviceCodePattern(properties.snap().serviceCodePattern())
-                .allowInsecureTls(properties.tls().allowInsecure());
+                .allowInsecureTls(properties.tls().allowInsecure())
+                .patternLimits(properties.validation().patternMaxInput(), properties.validation().patternTimeout());
     }
 
     /** Built-in body codecs, referenced by bean name from gw_target_system.body_codec / gw_flow_step.body_codec. */

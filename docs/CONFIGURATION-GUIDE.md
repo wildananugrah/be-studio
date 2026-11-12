@@ -728,6 +728,7 @@ VALUES ('PAYMENT', 'Payment', 'POST', '/v1/payments', 'PAYMENT_REQUEST', 201);
 | `EXPR` | `expr: "${request.body.endDate} >= ${request.body.startDate}"` (no `field`) | the expression is true; it can read only `${request…}`. Values that cannot be compared fail the check (400), not the gateway |
 
   A missing or `null` field fails every check unless the check has `"optional": true`.
+- **`PATTERN` limits** (against patterns that backtrack badly, e.g. `(.*a){12}b`, which could otherwise hold a request thread for minutes): a value longer than `gateway.validation.pattern-max-input` (default 4096 characters, env `GATEWAY_VALIDATION_PATTERN_MAX_INPUT`) fails without being matched ("x is too long to check …"), and a match running longer than `gateway.validation.pattern-timeout` (default `50ms`, env `GATEWAY_VALIDATION_PATTERN_TIMEOUT`) is stopped: the check fails ("x could not be checked against its pattern") and a warning names the pattern, so it can be simplified.
 - **`schemaBy`**: the field's value picks the schema. A value it doesn't list uses `request_schema_code`; without one the request fails with `GW-400-VALIDATION` ("purpose must be one of [...]"). `schema_validation` `NONE` / `RESPONSE` turns the schema check off, not the checks.
 - **One error only.** Checks stop at the first failure, and a schema reports only its first error.
 

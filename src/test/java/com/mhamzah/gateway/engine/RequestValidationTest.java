@@ -25,6 +25,8 @@ class RequestValidationTest {
     private final FakeDownstream downstream = new FakeDownstream();
     private final FlowExecutor executor = new FlowExecutor(downstream, new MappingEngine(), new DefaultErrorHandler());
     private final Rows rows = new Rows();
+    private int patternMaxInput = com.mhamzah.gateway.validation.BoundedPattern.DEFAULT_MAX_INPUT;
+    private Duration patternTimeout = com.mhamzah.gateway.validation.BoundedPattern.DEFAULT_TIMEOUT;
 
     /** purpose must be new / modify / delete; new → REQ_NEW (name, amount), modify → REQ_MODIFY (id, name). */
     private static final String PURPOSE = """
@@ -65,7 +67,8 @@ class RequestValidationTest {
                     }
                 },
                 Map.of("CORE", new GatewayProperties.TargetSystem("http://core", 1000, 2000, Map.of(), null)),
-                UnaryOperator.identity(), Duration.ofSeconds(5), Duration.ofSeconds(2));
+                UnaryOperator.identity(), Duration.ofSeconds(5), Duration.ofSeconds(2))
+                .patternLimits(patternMaxInput, patternTimeout);
         return compiler.compile(rows.build());
     }
 
@@ -252,5 +255,31 @@ class RequestValidationTest {
                 .anySatisfy(m -> assertThat(m).contains("set min, max or both"))
                 .anySatisfy(m -> assertThat(m).contains("expr can only read the request"))
                 .anySatisfy(m -> assertThat(m).contains("value 'new' references unknown schema 'GHOST'")));
+    }
+
+    @Test
+    void aPatternThatBacktracksBadlyIsStoppedInsteadOfHoldingTheThread() {
+        // (.*a){12}b on 40 times "a" backtracks for seconds to minutes (measured: more than 3 s on Java 25)
+        flow(f -> f.withRequestValidation("""
+                {"checks": [{"field": "$.request.body.code", "check": "PATTERN", "pattern": "(.*a){12}b"}]}"""));
+        long start = System.nanoTime();
+
+        String message = detail(post("{\"code\": \"" + "a".repeat(40) + "\"}"));
+
+        assertThat(message).isEqualTo("code could not be checked against its pattern");
+        assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofSeconds(5));
+        assertThat(post("{\"code\": \"" + "a".repeat(12) + "b\"}").status()).as("a normal value still matches").isEqualTo(200);
+    }
+
+    @Test
+    void valuesLongerThanTheLimitAreNotMatched() {
+        patternMaxInput = 8;
+        patternTimeout = Duration.ofMillis(200);
+        flow(f -> f.withRequestValidation("""
+                {"checks": [{"field": "$.request.body.code", "check": "PATTERN", "pattern": "[0-9]+",
+                             "code": "CODE_FORMAT"}]}"""));
+
+        assertThat(post("{\"code\": \"12345678\"}").status()).isEqualTo(200);
+        assertThat(detail(post("{\"code\": \"123456789\"}"))).isEqualTo("code is too long to check (at most 8 characters)");
     }
 }
